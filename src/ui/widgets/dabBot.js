@@ -75,7 +75,12 @@
     savePos();
   }
   minB.addEventListener('click',e=>{e.stopPropagation();setMin(!bot.classList.contains('minimised'));});
-  head.addEventListener('dblclick',()=>setMin(!bot.classList.contains('minimised')));
+  // Double-click anywhere on the bot (header, body, or the collapsed pill) toggles it, except on form controls
+  bot.addEventListener('dblclick',e=>{
+    if(e.target.closest('input,select,textarea,button,a,label,option,.dab-min'))return;
+    const sel=window.getSelection&&window.getSelection();if(sel)sel.removeAllRanges();
+    setMin(!bot.classList.contains('minimised'));
+  });
 
   /* ── drag (mouse) ─────────────────────────────────────────── */
   let dragging=false,ox=0,oy=0;

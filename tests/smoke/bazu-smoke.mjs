@@ -50,6 +50,14 @@ const smokePage = `<!doctype html><html><head><meta charset="utf-8"></head><body
   check(engine.state.ladder.afterLoss === 3 && engine.state.ladder.resetEvery === 5 && engine.state.curStake === engine.state.stake, "stake ladder accepts user values");
   engine.setLadder({ afterWin: 1, afterLoss: 1, resetEvery: 5 });
   check(!!doc.getElementById("bzLadWin") && !!doc.getElementById("bzLadLoss") && !!doc.getElementById("bzLadN"), "ladder inputs are present");
+  const dab = doc.getElementById("dabBot"), dbl = (el) => el.dispatchEvent(new app.MouseEvent("dblclick", { bubbles: true }));
+  const was = dab.classList.contains("minimised");
+  dbl(doc.getElementById("dabHead"));
+  check(dab.classList.contains("minimised") !== was, "double-click on the Deriv Auto Bot header toggles it");
+  dbl(doc.getElementById("dabBot"));
+  check(dab.classList.contains("minimised") === was, "double-click on the bot collapses/expands it again");
+  const sel = doc.querySelector("#dabBody select, #dabBody input");
+  if (sel) { dbl(sel); check(dab.classList.contains("minimised") === was, "double-click on a form control does not toggle"); }
   check(app.__errs.length === 0, "no JavaScript or console errors: " + app.__errs.join(" | "));
   out.textContent = "BAZU_SMOKE_PASS " + checks.length + " checks: " + checks.join("; ");
 })().catch((e) => { document.getElementById("r").textContent = "BAZU_SMOKE_FAIL " + (e && e.stack || e); });
