@@ -251,7 +251,6 @@ export class Ldpe {
     const st = this.state(sym);
     for (const f of st.pending) { f.status = "unscorable"; f.reason = "feed discontinuity"; this._resolve(st, f); }
     st.pending = [];
-    st.lastEpoch = null;
     st.discSeqs.push(st.seq + 1);
     if (st.discSeqs.length > 200) st.discSeqs.shift();
   }
