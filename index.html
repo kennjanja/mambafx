@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Ctext y=%2726%27 font-size=%2726%27%3E%F0%9F%91%91%3C/text%3E%3C/svg%3E">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Deriv Synthetic Indices — Volatility, Step & Jump Tick Tracker</title>
+<title>MAMBAFX</title>
 <style>
 :root{
   --bg:#0a0e17;--panel:#121826;--line:#1f2937;--text:#e8edf4;--muted:#6b7689;
@@ -570,7 +570,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
   <header>
     <div class="title-block">
       <div class="eyebrow">Deriv · Synthetic Indices · live tick feed</div>
-      <h1><span id="titleMarket" class="v">Volatility 100</span> Tick Tracker</h1>
+      <h1>MAMBAFX <span id="titleMarket" class="v">Volatility 100</span></h1>
     </div>
     <div class="controls">
       <div class="market-pick">
@@ -4075,7 +4075,9 @@ function connect(){
     }
   }, 8000);
 
+  let _opened = false;
   ws.onopen = () => {
+    _opened = true;
     if (_connectTimeout){ clearTimeout(_connectTimeout); _connectTimeout = null; }
     setConn("live");
     console.log("[deriv ws] connected via", url);
@@ -4088,6 +4090,7 @@ function connect(){
       _tickSubscriptionSymbol = SYMBOL;
       ws.send(JSON.stringify({ forget_all: "ticks" }));
       ws.send(JSON.stringify({ ticks: SYMBOL, subscribe: 1 }));
+      seedTickHistory(ws, SYMBOL);
     }
   };
   ws.onmessage = ev => {
@@ -4106,8 +4109,24 @@ function connect(){
         _tickSubscriptionSymbol = _symFields(discovered).sym;
         ws.send(JSON.stringify({ forget_all: "ticks" }));
         ws.send(JSON.stringify({ ticks: _tickSubscriptionSymbol, subscribe: 1 }));
+        seedTickHistory(ws, _tickSubscriptionSymbol);
       } else {
-        console.warn("[deriv ws] could not find a match for", SYMBOL, "in active_symbols — see raw list above to adjust matching");
+        console.warn("[deriv ws] could not find a match for", SYMBOL, "in active_symbols — falling back to raw symbol");
+        _tickSubscriptionSymbol = SYMBOL;
+        ws.send(JSON.stringify({ forget_all: "ticks" }));
+        ws.send(JSON.stringify({ ticks: SYMBOL, subscribe: 1 }));
+        seedTickHistory(ws, SYMBOL);
+      }
+      return;
+    }
+    if (msg.msg_type === "history" && msg.req_id === _tickHistReqId && msg.history){
+      const pr = msg.history.prices || [];
+      if (!ticks.length && pr.length){
+        let prev = null;
+        pr.forEach(p => { p = Number(p); ticks.push({ price: p, dir: prev === null ? 0 : p > prev ? 1 : p < prev ? -1 : 0 }); prev = p; });
+        while (ticks.length > MAX_POINTS) ticks.shift();
+        if (lastPrice === null) lastPrice = prev;
+        drawChart();
       }
       return;
     }
@@ -4123,9 +4142,14 @@ function connect(){
   ws.onclose = () => {
     if (_connectTimeout){ clearTimeout(_connectTimeout); _connectTimeout = null; }
     console.log("[deriv ws] closed:", url);
+    if (!_opened) _endpointIdx++;   // never opened — rotate to the next endpoint
     setConn("dead");
     scheduleReconnect();
   };
+}
+const _tickHistReqId = 7771;
+function seedTickHistory(sock, sym){
+  try { sock.send(JSON.stringify({ ticks_history: sym, end: "latest", count: 120, style: "ticks", req_id: _tickHistReqId })); } catch(_){}
 }
 function scheduleReconnect(){
   if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -26463,7 +26487,9 @@ function connectTfWs(){
   try { tfWs = new WebSocket(url); }
   catch(e){ tfReconnect = setTimeout(connectTfWs, 3000); return; }
 
+  let tfOpened = false;
   tfWs.onopen = () => {
+    tfOpened = true;
     requestAllTimeframes();
     if (tfPing) clearInterval(tfPing);
     tfPing = setInterval(() => { if (tfWs.readyState === WebSocket.OPEN) tfWs.send(JSON.stringify({ ping: 1 })); }, 20000);
@@ -26510,6 +26536,7 @@ function connectTfWs(){
   tfWs.onerror = () => {};
   tfWs.onclose = () => {
     if (tfPing) clearInterval(tfPing);
+    if (!tfOpened) _endpointIdx++;   // endpoint unreachable — try the next one
     if (candlesPageReady){ if (tfReconnect) clearTimeout(tfReconnect); tfReconnect = setTimeout(connectTfWs, 3000); }
   };
 }
@@ -26528,6 +26555,13 @@ function requestAllTimeframes(){
       style: "candles", granularity: tf.g, subscribe: 1, req_id: reqId
     }));
   });
+  // watchdog: re-request any timeframe that is still empty after 8s
+  if (window._tfWatch) clearTimeout(window._tfWatch);
+  window._tfWatch = setTimeout(() => {
+    if (!tfWs || tfWs.readyState !== WebSocket.OPEN) return;
+    const missing = TIMEFRAMES.some(tf => !(tfData[tf.g] && tfData[tf.g].length));
+    if (missing) requestAllTimeframes();
+  }, 8000);
 }
 
 // Draw a single timeframe's candles into its SVG
