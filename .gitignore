@@ -8,3 +8,4 @@ discovery_log.json
 *.log
 .env
 .env.*
+.wrangler/
