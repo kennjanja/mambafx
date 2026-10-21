@@ -22,8 +22,114 @@ export const DEFAULTS = Object.freeze({
   bufferMax: 10000,
   gapFactor: 3,            // gap flagged above gapFactor * median interval
   maxHorizon: 10,
-  modules: { dirichlet: true, freqShort: true, freqLong: true, decayed: true, trans1: true, trans2: true },
+  modules: { dirichlet: true, freqShort: true, freqLong: true, decayed: true, trans1: true, trans2: true, gap: true, streak: true },
+  gapBuckets: 16,          // ticks-since-last-seen, capped
+  runBuckets: 6,           // same-digit run length, capped
+  gapPrior: 20,            // pseudo-observations pulling gap cells toward 0.1
+  calMin: 300,             // scored forecasts required before calibration is used
+  calRefit: 50,            // refit cadence (scored forecasts)
+  calMax: 2000,
+  breakWindow: 200,        // structural-break test: recent window vs the window before it
+  breakRef: 800,
+  breakP: 1e-4,            // per-test significance (many looks => conservative)
+  breakClear: 1e-3,
+  breakEvery: 10,
+  breakCooldown: 100,      // ticks of trading ineligibility after a break is flagged
+  miMinSamples: 500,       // mutual-information safeguard (5 observations per contingency cell)
 });
+
+// ---------- statistics ----------
+// Regularized upper incomplete gamma Q(a,x) (Numerical Recipes), used for chi-square p-values.
+export function chi2sf(x, df) {
+  if (!(df > 0) || !(x >= 0)) return 1;
+  const a = df / 2, xx = x / 2;
+  if (xx === 0) return 1;
+  const gln = lgamma(a);
+  if (xx < a + 1) {
+    let ap = a, sum = 1 / a, del = sum;
+    for (let n = 0; n < 500; n++) { ap++; del *= xx / ap; sum += del; if (Math.abs(del) < Math.abs(sum) * 1e-14) break; }
+    return Math.min(1, Math.max(0, 1 - sum * Math.exp(-xx + a * Math.log(xx) - gln)));
+  }
+  let b = xx + 1 - a, c = 1 / 1e-300, d = 1 / b, h = d;
+  for (let i = 1; i < 500; i++) {
+    const an = -i * (i - a); b += 2;
+    d = an * d + b; if (Math.abs(d) < 1e-300) d = 1e-300;
+    c = b + an / c; if (Math.abs(c) < 1e-300) c = 1e-300;
+    d = 1 / d; const del = d * c; h *= del;
+    if (Math.abs(del - 1) < 1e-14) break;
+  }
+  return Math.min(1, Math.max(0, Math.exp(-xx + a * Math.log(xx) - gln) * h));
+}
+function lgamma(z) {
+  const c = [76.18009172947146, -86.50532032941677, 24.01409824083091, -1.231739572450155, 0.1208650973866179e-2, -0.5395239384953e-5];
+  let y = z, x = z, tmp = x + 5.5; tmp -= (x + 0.5) * Math.log(tmp);
+  let ser = 1.000000000190015; for (const cj of c) ser += cj / ++y;
+  return -tmp + Math.log(2.5066282746310005 * ser / x);
+}
+
+// Two-sample chi-square homogeneity test of digit counts a vs b.
+export function homogeneityTest(a, b) {
+  const na = a.reduce((s, x) => s + x, 0), nb = b.reduce((s, x) => s + x, 0);
+  if (!na || !nb) return { chi2: 0, df: 0, p: 1 };
+  let chi2 = 0, cells = 0;
+  for (let d = 0; d < a.length; d++) {
+    const t = a[d] + b[d]; if (!t) continue;
+    cells++;
+    const ea = t * na / (na + nb), eb = t * nb / (na + nb);
+    chi2 += (a[d] - ea) ** 2 / ea + (b[d] - eb) ** 2 / eb;
+  }
+  const df = cells - 1;
+  return { chi2, df, p: df > 0 ? chi2sf(chi2, df) : 1 };
+}
+
+// Mutual information of a contingency table (nats->bits) with Miller-Madow bias correction
+// and a G-test p-value. Refuses to report below minSamples.
+export function mutualInformation(table, minSamples = 500) {
+  const R = table.length, C = table[0].length;
+  const rows = new Array(R).fill(0), cols = new Array(C).fill(0);
+  let N = 0;
+  for (let i = 0; i < R; i++) for (let j = 0; j < C; j++) { rows[i] += table[i][j]; cols[j] += table[i][j]; N += table[i][j]; }
+  if (N < minSamples) return { status: "insufficient", n: N, needed: minSamples };
+  let mi = 0;
+  for (let i = 0; i < R; i++) for (let j = 0; j < C; j++) {
+    const n = table[i][j]; if (n > 0) mi += (n / N) * Math.log((n * N) / (rows[i] * cols[j]));
+  }
+  const r = rows.filter(x => x > 0).length, c = cols.filter(x => x > 0).length, df = (r - 1) * (c - 1);
+  const p = df > 0 ? chi2sf(2 * N * mi, df) : 1;
+  const bits = (x) => x / Math.LN2;
+  const corrected = Math.max(0, mi - df / (2 * N));
+  return {
+    status: "ok", n: N, miBits: bits(mi), miBitsCorrected: bits(corrected), df, pValue: p,
+    interpretation: p < 0.01
+      ? "dependence between origin digit and digit at the horizon is statistically detectable (single test, uncorrected across horizons); this is not evidence of tradable edge"
+      : "no statistically detectable dependence; observed MI is consistent with sampling noise",
+  };
+}
+
+// Isotonic (PAV) calibration of probabilities from (p, outcome) pairs. Pure: callers pass only
+// forecasts whose outcomes were already known.
+export function fitIsotonic(pairs) {
+  const s = [...pairs].sort((a, b) => a[0] - b[0]);
+  const blocks = [];
+  for (const [p, y] of s) {
+    blocks.push({ w: 1, sy: y, sp: p });
+    while (blocks.length > 1) {
+      const b = blocks[blocks.length - 1], a = blocks[blocks.length - 2];
+      if (a.sy / a.w <= b.sy / b.w) break;
+      a.w += b.w; a.sy += b.sy; a.sp += b.sp; blocks.pop();
+    }
+  }
+  const xs = blocks.map(b => b.sp / b.w), ys = blocks.map(b => b.sy / b.w);
+  return (p) => {
+    if (!xs.length) return p;
+    if (p <= xs[0]) return ys[0];
+    if (p >= xs[xs.length - 1]) return ys[ys.length - 1];
+    let lo = 0, hi = xs.length - 1;
+    while (hi - lo > 1) { const m = (lo + hi) >> 1; if (xs[m] <= p) lo = m; else hi = m; }
+    const t = (p - xs[lo]) / (xs[hi] - xs[lo] || 1);
+    return ys[lo] + t * (ys[hi] - ys[lo]);
+  };
+}
 
 // ---------- exact digit extraction ----------
 // quote must be the raw quoted string; decimals is the symbol's true precision.
@@ -106,6 +212,14 @@ function newSymbolState(cfg) {
     scores: {},                      // per horizon
     forecasts: [],                   // bounded history of resolved forecasts
     forecastSeq: 0,
+    modelTicks: 0,                   // ticks folded into the models (warm-up basis)
+    lastSeen: new Array(10).fill(-1e9),
+    runDigit: -1, runLen: 0,
+    gapTab: Array.from({ length: H + 1 }, () => Array.from({ length: 10 }, () => ({ n: new Array(cfg.gapBuckets).fill(0), hit: new Array(cfg.gapBuckets).fill(0) }))),
+    streakTab: Array.from({ length: H + 1 }, () => new Map()),
+    discSeqs: [],                    // seq positions that follow a feed hole (gap/discontinuity)
+    hold: null,                      // ticks queued while waiting for a history backfill
+    brk: { active: false, atSeq: null, count: 0, until: 0, lastP: null, lastChecked: 0 },
   };
 }
 
@@ -127,7 +241,7 @@ export class Ldpe {
 
   warmup(sym) {
     const st = this.state(sym);
-    const remaining = Math.max(0, this.cfg.minTicks - st.seq);
+    const remaining = Math.max(0, this.cfg.minTicks - st.modelTicks);
     return { remaining, isWarmingUp: remaining > 0, complete: remaining === 0 };
   }
 
@@ -138,11 +252,56 @@ export class Ldpe {
     for (const f of st.pending) { f.status = "unscorable"; f.reason = "feed discontinuity"; this._resolve(st, f); }
     st.pending = [];
     st.lastEpoch = null;
+    st.discSeqs.push(st.seq + 1);
+    if (st.discSeqs.length > 200) st.discSeqs.shift();
+  }
+
+  // True when no feed hole lies between the two sequence positions.
+  contiguous(sym, fromSeq, toSeq) {
+    return !this.state(sym).discSeqs.some(s => s > fromSeq && s <= toSeq);
+  }
+
+  seqOfEpoch(sym, epoch) {
+    const t = this.state(sym).ticks;
+    for (let i = t.length - 1; i >= 0; i--) { if (t[i].epoch === epoch) return t[i].seq; if (t[i].epoch < epoch) break; }
+    return null;
+  }
+
+  // After a restart/reconnect: queue live ticks until history arrives, so pending forecasts
+  // can be scored on the true intermediate ticks instead of being dropped.
+  beginHold(sym) { const st = this.state(sym); if (!st.hold) st.hold = []; }
+  isHolding(sym) { return !!this.state(sym).hold; }
+
+  // history = [{epoch, quote, decimals}] ascending. Overlap with the last known tick proves
+  // there is no hole; without overlap the hole is recorded and pending forecasts are unscorable.
+  backfill(sym, history) {
+    const st = this.state(sym);
+    const held = st.hold || []; st.hold = null;
+    const all = [...history, ...held].filter(t => Number.isFinite(Number(t.epoch))).sort((a, b) => Number(a.epoch) - Number(b.epoch));
+    const seen = new Set(); const uniq = [];
+    for (const t of all) { const e = Number(t.epoch); if (!seen.has(e)) { seen.add(e); uniq.push(t); } }
+    const prev = st.lastEpoch;
+    const overlap = prev === null || uniq.some(t => Number(t.epoch) === prev);
+    if (!overlap) this.markDiscontinuity(sym);
+    let ingested = 0;
+    for (const t of uniq) {
+      if (prev !== null && Number(t.epoch) <= prev) continue;
+      if (this.ingest(sym, t).accepted) ingested++;
+    }
+    return { ingested, overlap };
+  }
+
+  // Backfill never arrived: record the hole, then process what was held.
+  releaseHold(sym) {
+    const st = this.state(sym);
+    if (!st.hold) return { ingested: 0, overlap: false };
+    return this.backfill(sym, []);
   }
 
   // Ingest one tick. tick = {epoch, quote (raw string), decimals, recv?}
   ingest(sym, tick) {
     const st = this.state(sym), cfg = this.cfg;
+    if (st.hold) { st.hold.push(tick); return { accepted: false, held: true, flags: {} }; }
     const epoch = Number(tick.epoch);
     const digit = extractDigit(tick.quote, tick.decimals);
     const flags = { duplicate: false, outOfOrder: false, precisionMismatch: false, gapSeconds: 0 };
@@ -159,6 +318,8 @@ export class Ldpe {
       const med = median(st.intervals);
       if (med > 0 && gap > cfg.gapFactor * med && st.intervals.length >= 20) {
         flags.gapSeconds = gap; st.quality.gaps++; st.quality.lastGapSeconds = gap;
+        st.discSeqs.push(st.seq + 1);
+        if (st.discSeqs.length > 200) st.discSeqs.shift();
       }
     }
     st.lastEpoch = epoch;
@@ -169,6 +330,7 @@ export class Ldpe {
 
     this._scoreDue(st, rec);       // 1) score forecasts whose own target is this tick
     this._updateCounts(st, rec);   // 2) only then fold the outcome into the models
+    this._breakCheck(st);
     st.stateVersion++;
     const forecast = this._forecast(sym, st, cfg.horizon); // 3) next forecast, prior info only
     return { accepted: true, digit, flags, forecast };
@@ -176,14 +338,27 @@ export class Ldpe {
 
   _updateCounts(st, rec) {
     const d = rec.digit, cfg = this.cfg, win = st.ticks, n = win.length;
+    st.modelTicks++;
     st.counts[d]++;
+    // gap / run state AFTER this tick (the tick's own digit has gap 0)
+    st.lastSeen[d] = rec.seq;
+    if (st.runDigit === d) st.runLen++; else { st.runDigit = d; st.runLen = 1; }
+    rec.gaps = st.lastSeen.map(s => Math.min(cfg.gapBuckets - 1, rec.seq - s));
+    rec.runB = Math.min(cfg.runBuckets, st.runLen) - 1;
     const decay = Math.pow(0.5, 1 / cfg.halfLife);
     for (let i = 0; i < 10; i++) st.decayed[i] *= decay;
     st.decayed[d] += 1;
     for (let h = 1; h <= cfg.maxHorizon; h++) {
       if (n - 1 - h < 0) break;
-      const from = win[n - 1 - h].digit;
+      const origin = win[n - 1 - h], from = origin.digit;
       st.trans1[h][from][d]++;
+      if (origin.gaps) {
+        for (let g = 0; g < 10; g++) { const c = st.gapTab[h][g], b = origin.gaps[g]; c.n[b]++; if (g === d) c.hit[b]++; }
+        const key = from * cfg.runBuckets + origin.runB;
+        let srow = st.streakTab[h].get(key);
+        if (!srow) { srow = new Array(10).fill(0); st.streakTab[h].set(key, srow); }
+        srow[d]++;
+      }
       if (n - 2 - h >= 0) {
         const key = win[n - 2 - h].digit + "," + from;
         let row = st.trans2[h].get(key);
@@ -191,6 +366,45 @@ export class Ldpe {
         row[d]++;
       }
     }
+  }
+
+  // Structural break: recent window vs the window immediately before it (chi-square homogeneity).
+  _breakCheck(st) {
+    const cfg = this.cfg, b = st.brk, n = st.ticks.length;
+    if (st.seq - b.lastChecked < cfg.breakEvery || n < cfg.breakWindow + cfg.breakRef) return;
+    b.lastChecked = st.seq;
+    const cnt = (from, to) => { const c = new Array(10).fill(0); for (let i = from; i < to; i++) c[st.ticks[i].digit]++; return c; };
+    const rec = cnt(n - cfg.breakWindow, n), ref = cnt(n - cfg.breakWindow - cfg.breakRef, n - cfg.breakWindow);
+    const t = homogeneityTest(rec, ref);
+    b.lastP = t.p;
+    if (!b.active && t.p < cfg.breakP) {
+      b.active = true; b.atSeq = st.seq; b.count++; b.until = st.seq + cfg.breakCooldown;
+      // documented effect: forget half of the accumulated module evidence so weights re-adapt
+      for (const hs of Object.values(st.scores)) for (const m of Object.keys(hs.S)) hs.S[m] *= 0.5;
+    } else if (b.active && t.p >= cfg.breakClear && st.seq >= b.until) {
+      b.active = false;
+    } else if (b.active && t.p < cfg.breakP) {
+      b.until = Math.max(b.until, st.seq + cfg.breakCooldown); // still drifting
+    }
+  }
+
+  breakStatus(sym) {
+    const b = this.state(sym).brk;
+    return { active: b.active, atSeq: b.atSeq, count: b.count, lastP: b.lastP };
+  }
+
+  mutualInfo(sym, h = this.cfg.horizon) {
+    return { horizon: h, ...mutualInformation(this.state(sym).trans1[h], this.cfg.miMinSamples) };
+  }
+
+  calibrationStatus(sym, h = this.cfg.horizon) {
+    const hs = this._hs(this.state(sym), h), cal = hs.cal;
+    const e = cal.eval;
+    return {
+      ready: !!cal.map, scored: cal.data.length, needed: this.cfg.calMin,
+      fittedOn: cal.fittedOn,
+      outOfSample: e.n ? { n: e.n, logLossCalibrated: e.llCal / e.n, logLossRaw: e.llRaw / e.n } : null,
+    };
   }
 
   _dirichlet(counts, alpha) {
@@ -214,15 +428,47 @@ export class Ldpe {
       const row = st.trans2[h].get(win[n - 2].digit + "," + win[n - 1].digit) || new Array(10).fill(0);
       out.trans2 = this._dirichlet(row, a);
     }
+    if (cfg.modules.gap && n >= 10 && win[n - 1].gaps) {
+      const last = win[n - 1];
+      const raw = [];
+      for (let d = 0; d < 10; d++) {
+        const c = st.gapTab[h][d], b = last.gaps[d];
+        raw.push((c.hit[b] + cfg.gapPrior * 0.1) / (c.n[b] + cfg.gapPrior));
+      }
+      out.gap = normalize(raw);
+    }
+    if (cfg.modules.streak && n >= 10 && win[n - 1].gaps) {
+      const last = win[n - 1];
+      out.streak = this._dirichlet(st.streakTab[h].get(last.digit * cfg.runBuckets + last.runB) || new Array(10).fill(0), a);
+    }
     for (const k of Object.keys(out)) if (!validVector(out[k], 1e-9)) delete out[k]; // invalid output excluded
     return out;
   }
 
   _hs(st, h) {
     if (!st.scores[h]) {
-      st.scores[h] = { S: {}, evaluated: {}, ens: { n: 0, ll: 0, br: 0, top1: 0, llUni: 0 }, losses: [], uniLosses: [] };
+      st.scores[h] = {
+        S: {}, evaluated: {}, ens: { n: 0, ll: 0, br: 0, top1: 0, llUni: 0 }, losses: [], uniLosses: [],
+        cal: { data: [], map: null, fittedOn: 0, sinceFit: 0, eval: { n: 0, llCal: 0, llRaw: 0 } },
+      };
     }
     return st.scores[h];
+  }
+
+  // Calibration is fitted only from forecasts that have already been scored.
+  _calibrate(hs, v) {
+    const map = hs.cal.map; if (!map) return null;
+    const c = normalize(v.map(p => Math.max(1e-6, map(p))));
+    return c && validVector(c, 1e-9) ? c : null;
+  }
+
+  _maybeRefitCalibration(hs) {
+    const cfg = this.cfg, cal = hs.cal;
+    if (cal.data.length < cfg.calMin) return;
+    if (cal.map && cal.sinceFit < cfg.calRefit) return;
+    const pairs = [];
+    for (const { v, d } of cal.data) for (let i = 0; i < 10; i++) pairs.push([v[i], i === d ? 1 : 0]);
+    cal.map = fitIsotonic(pairs); cal.fittedOn = cal.data.length; cal.sinceFit = 0;
   }
 
   _weights(st, h, names) {
@@ -253,7 +499,9 @@ export class Ldpe {
       lambda = Math.min(1, Math.max(0, (mU - mL) / cfg.shrinkMargin));
     }
     const finalV = ensV.map(p => lambda * p + (1 - lambda) * 0.1);
-    const src = cfg.triggerSource === "shrunk" ? finalV : ensV;
+    const calV = this._calibrate(hs, ensV);
+    const calStatus = calV ? `calibrated (fit on ${hs.cal.fittedOn} scored forecasts)` : `uncalibrated (${hs.cal.data.length}/${cfg.calMin} scored forecasts needed)`;
+    const src = cfg.triggerSource === "shrunk" ? finalV : cfg.triggerSource === "calibrated" ? (calV || ensV) : ensV;
     const ranked = [...src.keys()].sort((a, b) => src[b] - src[a] || a - b); // ties -> lowest digit
     const top = ranked[0];
     const wu = this.warmup(sym);
@@ -262,6 +510,8 @@ export class Ldpe {
     let decision = "SKIP", reason = null;
     if (!wu.complete) reason = "warming up";
     else if (!dq.ok) reason = "data quality";
+    else if (st.brk.active) reason = "structural break";
+    else if (cfg.triggerSource === "calibrated" && !calV) reason = "calibration unavailable";
     else if (src[top] < cfg.minProbability) reason = "below minProbability";
     else decision = "TRADE";
     const f = {
@@ -271,10 +521,11 @@ export class Ldpe {
       madeAtEpoch: st.lastEpoch, stateVersion: st.stateVersion,
       predictedDigit: top, probability: src[top],
       alternatives: ranked.slice(1, 4).map(d => ({ digit: d, p: src[d] })),
-      vectors: { uniform: mods.uniform, ensemble: ensV, final: finalV, modules: mods },
+      vectors: { uniform: mods.uniform, ensemble: ensV, final: finalV, calibrated: calV, modules: mods },
       weights: w, lambda, triggerSource: cfg.triggerSource, minProbability: cfg.minProbability,
-      decision, reason, warmup: wu, dataQuality: dq, effectiveSamples: st.seq,
-      calibrationStatus: "uncalibrated", ensembleUncertainty: "unavailable",
+      decision, reason, warmup: wu, dataQuality: dq, effectiveSamples: st.modelTicks,
+      structuralBreak: st.brk.active,
+      calibrationStatus: calStatus, ensembleUncertainty: "unavailable",
       disagreement: jsDivergence(names.map(m => mods[m])),
       status: "pending", realized: null, hit: null,
     };
@@ -297,6 +548,12 @@ export class Ldpe {
       e.top1 += f.predictedDigit === d ? 1 : 0; e.llUni += LN10;
       hs.losses.push(Le); hs.uniLosses.push(LN10);
       if (hs.losses.length > cfg.lossWindow) { hs.losses.shift(); hs.uniLosses.shift(); }
+      // calibration data and its out-of-sample check: the forecast's calibrated vector (if any) was
+      // produced before this outcome existed; the outcome joins the fit set only now.
+      if (f.vectors.calibrated) { hs.cal.eval.n++; hs.cal.eval.llCal += logLoss(f.vectors.calibrated, d); hs.cal.eval.llRaw += Le; }
+      hs.cal.data.push({ v: f.vectors.ensemble, d }); hs.cal.sinceFit++;
+      if (hs.cal.data.length > cfg.calMax) hs.cal.data.shift();
+      this._maybeRefitCalibration(hs);
       f.status = "scored"; f.realized = d; f.hit = f.predictedDigit === d;
       f.targetEpoch = rec.epoch; f.targetQuote = rec.quote;
       f.llEnsemble = Le; f.llUniform = LN10;
@@ -306,7 +563,7 @@ export class Ldpe {
   }
 
   _resolve(st, f) {
-    st.forecasts.push({ ...f, vectors: { ensemble: f.vectors.ensemble, final: f.vectors.final, uniform: f.vectors.uniform } });
+    st.forecasts.push({ ...f, vectors: { ensemble: f.vectors.ensemble, final: f.vectors.final, calibrated: f.vectors.calibrated, uniform: f.vectors.uniform } });
     if (st.forecasts.length > this.historyMax) st.forecasts.shift();
   }
 
