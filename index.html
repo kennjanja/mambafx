@@ -629,7 +629,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     <button id="navPredBot" onclick="showPage('predbot')">🤖 Prediction Bot</button>
     <button id="navOuBot" onclick="showPage('oubot')">⬆⬇ Only Ups/Downs Bot</button>
     <button id="navTracker" onclick="showPage('tracker')">🔢 Digit Tracker</button>
-    <button id="navDigits" onclick="showPage('digits')">🎲 Digits Bot</button>
+    <button id="navDigits" onclick="showPage('digits')">🎲 LDPE</button>
     <button id="navDiag" onclick="showPage('diag')">🩺 API Diagnostics</button>
     <button id="navCharts" onclick="showPage('charts')">📈 Indicator Charts</button>
     <button id="navAdxBot" onclick="showPage('adxbot')">📐 ADX Bot</button>
@@ -1222,8 +1222,33 @@ table.an-table tbody tr:last-child td{border-bottom:none}
   <!-- ============ PAGE 6: DIGITS / MATCHES BOT ============ -->
   <div id="page-digits" class="page">
 
+    <div class="dig-card" id="ldpeCard">
+      <h2>🎲 LDPE: Last-Digit Prediction Engine — <span id="digMarket">—</span></h2>
+      <div class="dig-sub">Forecasts the last digit of the tick on which a Matches contract settles, scores every forecast against its own target tick, and trades Demo or Real (whichever account is selected on the Trading Grid) when the configured trigger is met. Arm <b>Auto</b> below to execute. Crossing the trigger is an operational threshold, not proof of predictive advantage.</div>
+      <div id="ldpeFeed" class="cell-mut" style="margin-bottom:8px"></div>
+      <div id="ldpePred" style="margin-bottom:10px">Waiting for ticks…</div>
+      <div id="ldpeDist" style="margin-bottom:10px"></div>
+      <div id="ldpeMetrics" class="cell-mut" style="margin-bottom:10px"></div>
+      <div id="ldpeExec" class="cell-mut" style="margin-bottom:6px"></div>
+      <div id="ldpeExecStatus" class="cell-mut" style="margin-bottom:10px"></div>
+      <div class="gc-row" style="margin-bottom:10px">
+        <button class="gc-btn" id="ldpeKill" style="font-weight:800;background:var(--down)">⛔ KILL SWITCH</button>
+        <button class="gc-btn" id="ldpeResume">Resume</button>
+      </div>
+      <details><summary>Settings (persisted)</summary><div id="ldpeSettings" class="gc-row" style="flex-wrap:wrap"></div></details>
+      <details open><summary>Module scoreboard</summary>
+        <table class="sig-table"><thead><tr><th class="l">Module</th><th>Weight</th><th>Evaluated</th><th>Rel. score vs uniform</th></tr></thead><tbody id="ldpeBoard"></tbody></table>
+      </details>
+      <details open><summary>Forecast history (scored against own target tick)</summary>
+        <table class="sig-table"><thead><tr><th class="l">Forecast</th><th>Digit</th><th>p</th><th>Decision</th><th>Target #</th><th>Realized</th><th>Result</th><th>LL / uniform LL</th></tr></thead><tbody id="ldpeHist"></tbody></table>
+      </details>
+      <details><summary>Execution log (operations only — never used for learning)</summary>
+        <table class="sig-table"><thead><tr><th class="l">Time</th><th>Acct</th><th>Digit</th><th>Stake</th><th>Contract</th><th>Target #</th><th>Alignment</th><th>Result</th></tr></thead><tbody id="ldpeExecLog"></tbody></table>
+      </details>
+    </div>
+
     <div class="dig-card">
-      <h2>🎲 Digits prediction engine — <span id="digMarket">—</span></h2>
+      <h2>Digit statistics</h2>
       <div class="dig-sub">
         Tracks the <b>last digit</b> (0–9) of every tick price in real time. Uses frequency deviation, gap analysis, a Markov transition matrix and a chi-square uniformity test to build a composite prediction score for each digit. Click any digit to place a manual <b>Matches</b> trade, or arm auto-execution to fire when the prediction engine's confidence exceeds your threshold.
       </div>
@@ -4078,6 +4103,7 @@ function connect(){
   let _opened = false;
   ws.onopen = () => {
     _opened = true;
+    if (window.LDPE) { try { window.LDPE.discontinuity(SYMBOL); } catch(_){} }
     if (_connectTimeout){ clearTimeout(_connectTimeout); _connectTimeout = null; }
     setConn("live");
     console.log("[deriv ws] connected via", url);
@@ -4135,6 +4161,9 @@ function connect(){
       if (Number.isInteger(pip)) decimals = pip;
       else if (pip > 0 && pip < 1) decimals = Math.round(-Math.log10(pip));
       const epoch = msg.tick.epoch ? Number(msg.tick.epoch) : Math.floor(Date.now()/1000);
+      // JSON.parse drops trailing zeros; keep the raw quote literal for exact last-digit extraction
+      const _rq = /"quote"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*[,}]/.exec(ev.data);
+      window.__rawQuote = _rq ? _rq[1] : null;
       handleTick(Number(msg.tick.quote), epoch);
     }
   };
@@ -29068,8 +29097,10 @@ function gridUpdateContract(c){
   }
   if (c.payout != null) row.payout = Number(c.payout);
   if (c.profit != null) row.pnl = Number(c.profit);
+  if (row.source === "ldpe" && window.LDPE && !(c.is_sold || c.is_expired)) window.LDPE.onContract(row, c);
   if (c.is_sold || c.is_expired){
     row.status = (c.profit != null && c.profit >= 0) ? "won" : "lost";
+    if (row.source === "ldpe" && window.LDPE) window.LDPE.onContract(row, c);
     if (c.sell_price != null) row.payout = Number(c.sell_price);
     delete gridOpenContracts[id];
     const won = row.status === "won";
@@ -29902,6 +29933,20 @@ let digAutoLastAt = 0;              // tick index of last auto-trade
 let digTrades = [];                 // session trade ledger
 let digSelectedDigit = null;        // for manual
 
+// Read-only host surface for the LDPE module (classic-script `let` globals are
+// not visible to ES modules, so they are exposed through getters).
+window.__ldpeHost = {
+  get gridAuthed(){ return gridAuthed; },
+  get gridWs(){ return gridWs; },
+  get gridIsVirtual(){ return gridIsVirtual === true; },
+  get gridLoginId(){ return gridLoginId; },
+  get digAutoArmed(){ return digAutoArmed; },
+  get digTrades(){ return digTrades; },
+  get symbol(){ return SYMBOL; },
+  placeTrade: (d, s, o) => digPlaceTrade(d, s, o),
+  disarm: (r) => digDisarmAuto(r),
+};
+
 // ── core math ────────────────────────────────────────────────────────
 function digLastDigit(price){
   // Use the global `decimals` to preserve trailing zeros (e.g. 999.990 → "0" not "9")
@@ -29999,7 +30044,16 @@ function digOnTick(price, epoch){
   if (digRing.length > DIG_RING_MAX) digRing.shift();
   if (prevDigit !== null) digTransitions[prevDigit][d]++;
   if (digPageReady) digRender();
-  digCheckAuto();
+  if (window.LDPE){
+    // exact digit from the raw quote literal when its precision matches the symbol's; otherwise
+    // reconstruct at the symbol's true precision (JSON numbers carry no extra information)
+    const rq = window.__rawQuote;
+    const fracLen = rq && rq.includes(".") ? rq.split(".")[1].length : 0;
+    const raw = (rq && fracLen === decimals) ? rq : Number(price).toFixed(decimals);
+    window.LDPE.ingest(SYMBOL, raw, decimals, epoch);
+  } else {
+    digCheckAuto();
+  }
 }
 
 // ── rendering ────────────────────────────────────────────────────────
@@ -30007,6 +30061,7 @@ function digPageInit(){
   digPageReady = true;
   const mn = $("digMarket"); if (mn) mn.textContent = MARKETS[SYMBOL] || SYMBOL;
   digUpdateContractUI();
+  if (window.LDPE){ window.LDPE.buildPanel(); window.LDPE.render(); }
   // build manual buttons
   const btnsEl = $("digManualBtns");
   if (btnsEl && !btnsEl.childElementCount){
@@ -30204,23 +30259,26 @@ function digManualTrade(digit){
   digPlaceTrade(digit, "manual");
 }
 
-function digPlaceTrade(digit, source){
+function digPlaceTrade(digit, source, opts){
+  opts = opts || {};
   if (!gridWs || gridWs.readyState !== WebSocket.OPEN || !gridAuthed){
     if (source === "manual") alert("Connect on the Trading Grid page first.");
     return false;
   }
   const strat = digMultStrat(); digMult()._strat = strat;
-  const stake = Math.max(0.35, digMult().getNext(strat));
-  const duration = Math.max(1, parseInt($("digDuration").value || "5", 10));
+  let stake = Math.max(0.35, digMult().getNext(strat));
+  if (opts.maxStake) stake = Math.min(stake, opts.maxStake);
+  const duration = opts.duration || Math.max(1, parseInt($("digDuration").value || "5", 10));
   const proposalReqId = ++gridReqId;
-  const ct = $("digContractType") ? $("digContractType").value : "DIGITMATCH";
+  const ct = opts.contractType || ($("digContractType") ? $("digContractType").value : "DIGITMATCH");
+  const acctAtRequest = gridLoginId;   // verified again right before purchase
 
   // Build proposal — contract type determines whether barrier is needed
   const proposalMsg = {
     proposal: 1, req_id: proposalReqId,
     amount: stake, basis: "stake", contract_type: ct,
     currency: gridCurrency, duration, duration_unit: "t",
-    underlying_symbol: SYMBOL,
+    underlying_symbol: opts.symbol || SYMBOL,
   };
   // Matches/Differs/Over/Under need a barrier digit
   if (["DIGITMATCH","DIGITDIFF","DIGITOVER","DIGITUNDER"].includes(ct)){
@@ -30233,6 +30291,8 @@ function digPlaceTrade(digit, source){
   const row = {
     id: "pending-" + proposalReqId, digit, source, stake,
     contractType: ct,
+    symbol: opts.symbol || SYMBOL, k: duration, forecast: opts.forecast || null, forecastId: opts.forecast ? opts.forecast.id : null,
+    accountId: gridLoginId, isVirtual: gridIsVirtual,
     currency: gridCurrency, time: Math.floor(Date.now()/1000),
     entry: null, exit: null, exitDigit: null, payout: null, pnl: null, status: "pricing…",
   };
@@ -30254,6 +30314,12 @@ function digPlaceTrade(digit, source){
       return;
     }
     const buyReqId = ++gridReqId;
+    if (gridLoginId !== acctAtRequest || !gridAuthed){
+      // never buy on a different account than the one the proposal was priced for
+      row.status = "rejected: account changed before purchase";
+      digRenderTrades();
+      return;
+    }
     const buyMsg = { buy: proposal.id, price: proposal.ask_price, req_id: buyReqId };
     row.status = "buying…";
     digRenderTrades();
@@ -33110,6 +33176,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=22"></script>
+<script type="module" src="src/ldpe/bridge.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>
 <script type="module" src="src/trading/gridSetHelper.js"></script>
