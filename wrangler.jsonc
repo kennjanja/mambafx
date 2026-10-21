@@ -5,8 +5,8 @@
   "compatibility_date": "2026-06-20",
   "vars": {
     "REDIRECT_URI":   "https://mambafx-backend.kenkin1122.workers.dev/auth/callback",
-    "SPA_URL":        "https://kenkin1122-ctrl.github.io/mambafx/",
-    "ALLOWED_ORIGIN": "https://kenkin1122-ctrl.github.io"
+    "SPA_URL":        "https://kennjanja.github.io/mambafx/",
+    "ALLOWED_ORIGIN": "https://kennjanja.github.io"
   },
   "kv_namespaces": [
     {
