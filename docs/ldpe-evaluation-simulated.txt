@@ -1,0 +1,38 @@
+﻿SIMULATED DATA ONLY. ln(10) = 2.3026 uniform Brier = 0.9
+
+== null (seed 1) scored n=11999
+ overall       {"n":11999,"logLoss":2.3026,"logLossUniform":2.3026,"logLossEmpirical":2.3051,"brier":0.9,"brierUniform":0.9,"brierEmpirical":0.9005,"top1":0.098}
+ window 1      n=2999 ll=2.3026 (unif 2.3026, emp 2.3103) brier=0.9 top1=0.1014
+ window 2      n=2999 ll=2.3026 (unif 2.3026, emp 2.3035) brier=0.9 top1=0.0937
+ window 3      n=2999 ll=2.3026 (unif 2.3026, emp 2.3031) brier=0.9 top1=0.103
+ window 4      n=3002 ll=2.3026 (unif 2.3026, emp 2.3037) brier=0.9 top1=0.0939
+ calibration   [{"range":"0.10-0.15","n":11999,"meanPredicted":0.1,"observedHit":0.098}]
+ calib status  ready scored 2000 oos {"n":11699,"logLossCalibrated":2.323858292575866,"logLossRaw":2.303685178522056}
+ break alerts  none
+== null (seed 2) scored n=11999
+ overall       {"n":11999,"logLoss":2.3026,"logLossUniform":2.3026,"logLossEmpirical":2.305,"brier":0.9,"brierUniform":0.9,"brierEmpirical":0.9005,"top1":0.0985}
+ window 1      n=2999 ll=2.3028 (unif 2.3026, emp 2.3105) brier=0.9 top1=0.091
+ window 2      n=2999 ll=2.3026 (unif 2.3026, emp 2.3033) brier=0.9 top1=0.099
+ window 3      n=2999 ll=2.3026 (unif 2.3026, emp 2.3027) brier=0.9 top1=0.1057
+ window 4      n=3002 ll=2.3026 (unif 2.3026, emp 2.3034) brier=0.9 top1=0.0983
+ calibration   [{"range":"0.10-0.15","n":11997,"meanPredicted":0.1001,"observedHit":0.0985},{"range":"0.15-0.20","n":2,"meanPredicted":0.1774,"observedHit":0}]
+ calib status  ready scored 2000 oos {"n":11699,"logLossCalibrated":2.311839217791777,"logLossRaw":2.303345659823537}
+ break alerts  none
+== planted-gap (seed 3) scored n=11999
+ overall       {"n":11999,"logLoss":1.97,"logLossUniform":2.3026,"logLossEmpirical":2.3032,"brier":0.8035,"brierUniform":0.9,"brierEmpirical":0.9001,"top1":0.452}
+ window 1      n=2999 ll=2.0248 (unif 2.3026, emp 2.309) brier=0.8223 top1=0.4091
+ window 2      n=2999 ll=1.9661 (unif 2.3026, emp 2.3016) brier=0.8022 top1=0.4662
+ window 3      n=2999 ll=1.9379 (unif 2.3026, emp 2.3012) brier=0.7927 top1=0.4712
+ window 4      n=3002 ll=1.9514 (unif 2.3026, emp 2.3009) brier=0.7967 top1=0.4614
+ calibration   [{"range":"0.10-0.15","n":1542,"meanPredicted":0.1222,"observedHit":0.1453},{"range":"0.15-0.20","n":1953,"meanPredicted":0.1805,"observedHit":0.4409},{"range":"0.20-0.25","n":3818,"meanPredicted":0.2261,"observedHit":0.4775},{"range":"0.25-0.30","n":2933,"meanPredicted":0.2729,"observedHit":0.5353},{"range":"0.30-0.35","n":1753,"meanPredicted":0.3214,"observedHit":0.5391}]
+ calib status  ready scored 2000 oos {"n":11699,"logLossCalibrated":1.8495900162021903,"logLossRaw":1.9639835988961962}
+ break alerts  none
+== shift (seed 4) scored n=11999
+ overall       {"n":11999,"logLoss":2.0981,"logLossUniform":2.3026,"logLossEmpirical":2.1729,"brier":0.8314,"brierUniform":0.9,"brierEmpirical":0.8631,"top1":0.28}
+ window 1      n=2999 ll=2.3026 (unif 2.3026, emp 2.3089) brier=0.9 top1=0.095
+ window 2      n=2999 ll=2.3026 (unif 2.3026, emp 2.3044) brier=0.9 top1=0.102
+ window 3      n=2999 ll=1.8958 (unif 2.3026, emp 2.1004) brier=0.7643 top1=0.4685
+ window 4      n=3002 ll=1.8918 (unif 2.3026, emp 1.9781) brier=0.7616 top1=0.4544
+ calibration   [{"range":"0.10-0.15","n":6091,"meanPredicted":0.1002,"observedHit":0.1041},{"range":"0.15-0.20","n":9,"meanPredicted":0.1693,"observedHit":0.3333},{"range":"0.20-0.25","n":8,"meanPredicted":0.2274,"observedHit":0.5},{"range":"0.25-0.30","n":154,"meanPredicted":0.2845,"observedHit":0.5065},{"range":"0.30-0.35","n":5737,"meanPredicted":0.4166,"observedHit":0.4603}]
+ calib status  ready scored 2000 oos {"n":11699,"logLossCalibrated":2.111157215074171,"logLossRaw":2.0928832330841156}
+ break alerts at ticks 6069 | before ll 2.3026 n 6069 | after ll 1.8889 n 5930

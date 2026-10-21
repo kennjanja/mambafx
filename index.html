@@ -1229,11 +1229,15 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       <div id="ldpePred" style="margin-bottom:10px">Waiting for ticks…</div>
       <div id="ldpeDist" style="margin-bottom:10px"></div>
       <div id="ldpeMetrics" class="cell-mut" style="margin-bottom:10px"></div>
+      <div id="ldpeDiag" class="cell-mut" style="margin-bottom:10px"></div>
       <div id="ldpeExec" class="cell-mut" style="margin-bottom:6px"></div>
+      <div id="ldpeAlign" class="cell-mut" style="margin-bottom:6px"></div>
       <div id="ldpeExecStatus" class="cell-mut" style="margin-bottom:10px"></div>
       <div class="gc-row" style="margin-bottom:10px">
         <button class="gc-btn" id="ldpeKill" style="font-weight:800;background:var(--down)">⛔ KILL SWITCH</button>
         <button class="gc-btn" id="ldpeResume">Resume</button>
+        <button class="gc-btn" id="ldpeProbe" title="Demo account only. Buys small Matches contracts to measure how settlement lines up with the forecast target tick.">Run Demo settlement probe</button>
+        <button class="gc-btn" id="ldpeProbeStop">Stop probe</button>
       </div>
       <details><summary>Settings (persisted)</summary><div id="ldpeSettings" class="gc-row" style="flex-wrap:wrap"></div></details>
       <details open><summary>Module scoreboard</summary>
@@ -1241,6 +1245,9 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       </details>
       <details open><summary>Forecast history (scored against own target tick)</summary>
         <table class="sig-table"><thead><tr><th class="l">Forecast</th><th>Digit</th><th>p</th><th>Decision</th><th>Target #</th><th>Realized</th><th>Result</th><th>LL / uniform LL</th></tr></thead><tbody id="ldpeHist"></tbody></table>
+      </details>
+      <details open><summary>Settlement alignment evidence (actual contract entry/exit ticks)</summary>
+        <table class="sig-table"><thead><tr><th class="l">Contract</th><th>Acct</th><th>Forecast seq</th><th>Expected target</th><th>Entry seq</th><th>Exit seq</th><th>Entry delay</th><th>Offset</th><th class="l">Status</th></tr></thead><tbody id="ldpeAlignRows"></tbody></table>
       </details>
       <details><summary>Execution log (operations only — never used for learning)</summary>
         <table class="sig-table"><thead><tr><th class="l">Time</th><th>Acct</th><th>Digit</th><th>Stake</th><th>Contract</th><th>Target #</th><th>Alignment</th><th>Result</th></tr></thead><tbody id="ldpeExecLog"></tbody></table>
@@ -4103,7 +4110,6 @@ function connect(){
   let _opened = false;
   ws.onopen = () => {
     _opened = true;
-    if (window.LDPE) { try { window.LDPE.discontinuity(SYMBOL); } catch(_){} }
     if (_connectTimeout){ clearTimeout(_connectTimeout); _connectTimeout = null; }
     setConn("live");
     console.log("[deriv ws] connected via", url);
@@ -4145,6 +4151,16 @@ function connect(){
       }
       return;
     }
+    if (msg.msg_type === "history" && msg.req_id === _ldpeHistReqId && msg.history){
+      // LDPE backfill: reconcile pending forecasts with the true intermediate ticks (overlap proves no hole)
+      if (window.LDPE){
+        try {
+          const dec = Number.isInteger(msg.pip_size) ? msg.pip_size : (msg.pip_size > 0 && msg.pip_size < 1 ? Math.round(-Math.log10(msg.pip_size)) : decimals);
+          window.LDPE.backfill(SYMBOL, msg.history.prices || [], msg.history.times || [], dec);
+        } catch(e){ console.warn("[ldpe] backfill failed", e); }
+      }
+      return;
+    }
     if (msg.msg_type === "history" && msg.req_id === _tickHistReqId && msg.history){
       const pr = msg.history.prices || [];
       if (!ticks.length && pr.length){
@@ -4177,8 +4193,14 @@ function connect(){
   };
 }
 const _tickHistReqId = 7771;
+const _ldpeHistReqId = 7772;
 function seedTickHistory(sock, sym){
   try { sock.send(JSON.stringify({ ticks_history: sym, end: "latest", count: 120, style: "ticks", req_id: _tickHistReqId })); } catch(_){}
+  // LDPE: hold live ticks until a longer history arrives, so persisted pending forecasts are scored on real ticks
+  if (window.LDPE){
+    try { window.LDPE.beginHold(SYMBOL, 6000); } catch(_){}
+    try { sock.send(JSON.stringify({ ticks_history: sym, end: "latest", count: 1000, style: "ticks", req_id: _ldpeHistReqId })); } catch(_){}
+  }
 }
 function scheduleReconnect(){
   if (reconnectTimer) clearTimeout(reconnectTimer);
@@ -28718,6 +28740,7 @@ async function gridConnect(){
   gridWs.onerror = () => {};
   gridWs.onclose = ev => {
     gridConnecting = false; gridAuthed = false;
+    if (window.LDPE) { try { window.LDPE.onDisconnect(); } catch(_){} }
     if (gridPing){ clearInterval(gridPing); gridPing = null; }
     gridConnState("off");
     if (window.__mfxDebug) window.__mfxDebug.setConnectionStatus('closed');
@@ -29077,6 +29100,8 @@ function diagFullBuyTrace(){
 }
 
 function gridUpdateContract(c){
+  // LDPE orders settle exactly once inside the executor (idempotent); other contracts are ignored by it.
+  if (window.LDPE) { try { window.LDPE.onContractUpdate(c); } catch(e){ console.warn("[ldpe] contract update failed", e); } }
   const id = String(c.contract_id);
   let row = gridOpenContracts[id]
     || gridTrades.find(t => t.id === id)
@@ -29097,10 +29122,8 @@ function gridUpdateContract(c){
   }
   if (c.payout != null) row.payout = Number(c.payout);
   if (c.profit != null) row.pnl = Number(c.profit);
-  if (row.source === "ldpe" && window.LDPE && !(c.is_sold || c.is_expired)) window.LDPE.onContract(row, c);
   if (c.is_sold || c.is_expired){
     row.status = (c.profit != null && c.profit >= 0) ? "won" : "lost";
-    if (row.source === "ldpe" && window.LDPE) window.LDPE.onContract(row, c);
     if (c.sell_price != null) row.payout = Number(c.sell_price);
     delete gridOpenContracts[id];
     const won = row.status === "won";
@@ -29940,10 +29963,15 @@ window.__ldpeHost = {
   get gridWs(){ return gridWs; },
   get gridIsVirtual(){ return gridIsVirtual === true; },
   get gridLoginId(){ return gridLoginId; },
+  get gridCurrency(){ return gridCurrency; },
+  get openContracts(){ return gridOpenContracts; },
+  nextReqId: () => ++gridReqId,
+  awaitReq: (id, cb) => { gridPending[id] = cb; },
+  renderTrades: () => { try { digRenderTrades(); } catch(_){} },
   get digAutoArmed(){ return digAutoArmed; },
   get digTrades(){ return digTrades; },
   get symbol(){ return SYMBOL; },
-  placeTrade: (d, s, o) => digPlaceTrade(d, s, o),
+  placeTrade: () => false,   // LDPE orders go only through exec.js (LDPE.executor)
   disarm: (r) => digDisarmAuto(r),
 };
 
@@ -30261,6 +30289,11 @@ function digManualTrade(digit){
 
 function digPlaceTrade(digit, source, opts){
   opts = opts || {};
+  // LDPE orders must go through exec.js (guards, alignment gate, account lock); never through here.
+  if (source === "ldpe" || opts.forecast){
+    console.warn("[ldpe] digPlaceTrade refused: LDPE orders are only placed by the LDPE executor");
+    return false;
+  }
   if (!gridWs || gridWs.readyState !== WebSocket.OPEN || !gridAuthed){
     if (source === "manual") alert("Connect on the Trading Grid page first.");
     return false;
@@ -33176,7 +33209,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=22"></script>
-<script type="module" src="src/ldpe/bridge.js?v=1"></script>
+<script type="module" src="src/ldpe/bridge.js?v=2"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>
 <script type="module" src="src/trading/gridSetHelper.js"></script>
