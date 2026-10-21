@@ -64,7 +64,7 @@
         bot.style.top=Math.max(minY,parseFloat(s.y)||0)+'px';
         bot.style.bottom='auto';
       }
-      if(s.min) setMin(true);
+      /* always start collapsed; it only expands when the user double-clicks it */
     }catch(_){}
   }
 
@@ -403,6 +403,7 @@
 
   /* ── init ─────────────────────────────────────────────────── */
   loadPos();
+  setMin(true);
   setInterval(dabRefresh,300);
   dabRefresh();
   dabOnContractChange(); // set initial labels
