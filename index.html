@@ -28579,8 +28579,8 @@ async function gridConnect(){
 
   let wsUrl, wsToken;
   try {
-    const resp = await fetch(BACKEND_URL + "/ws/otp", {
-      method: "POST", credentials: "include",
+    const resp = await window.mfxAuthFetch("/ws/otp", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ account_id: acctId }),
     });
@@ -28712,7 +28712,8 @@ function gridWsSubscribeAndInit(acctId){
 // ── Logout: ask the backend to clear the session, then reset local UI ─
 async function gridLogout(){
   gridDisconnect();
-  try { await fetch(BACKEND_URL + "/logout", { method: "POST", credentials: "include" }); } catch(_){}
+  try { await window.mfxAuthFetch("/logout", { method: "POST" }); } catch(_){}
+  try { localStorage.removeItem("mfx_session_token"); } catch(_){}
   gridLoggedIn = false;
   gridAccounts = [];
   const pickBlock = $("gridAcctPickBlock"), loginBlock = $("gridLoginBlock");
@@ -32189,7 +32190,7 @@ async function acctRefreshSession(){
 
   // Check session via backend
   try {
-    const resp = await fetch(BACKEND_URL + '/me/session', { credentials: 'include' });
+    const resp = await window.mfxAuthFetch('/me/session');
     const body = await resp.json().catch(() => null);
     const loggedIn = !!(body && body.logged_in);
 

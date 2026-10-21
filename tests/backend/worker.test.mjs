@@ -101,7 +101,10 @@ test('callback: exchange sends verifier, sets secure cookie, token stays server-
   const calls = mockFetch(() => new Response(JSON.stringify({ access_token: SECRET_TOKEN, expires_in: 3600 })));
   const r = await call(env, `/auth/callback?code=abc&state=${state}`);
   assert.equal(r.status, 302);
-  assert.equal(r.headers.get('Location'), SPA);
+  const back = new URL(r.headers.get('Location'));
+  assert.equal(back.origin + back.pathname, SPA);
+  const hcode = back.searchParams.get('login_code');
+  assert.ok(hcode && !hcode.includes(SECRET_TOKEN));
   const body = new URLSearchParams(calls[0].init.body);
   assert.equal(calls[0].url, 'https://auth.deriv.com/oauth2/token');
   assert.equal(body.get('grant_type'), 'authorization_code');
@@ -132,6 +135,25 @@ test('callback: exchange failure and malformed response are safe', async () => {
   ({ state } = await startFlow(env));
   mockFetch(() => new Response('{}'));
   assert.equal(loginError(await call(env, `/auth/callback?code=abc&state=${state}`)), 'token_exchange_failed');
+});
+
+test('handoff code: exchange gives a Bearer session token once; Bearer works without cookie', async () => {
+  const env = mkEnv();
+  const { state } = await startFlow(env);
+  mockFetch(() => new Response(JSON.stringify({ access_token: SECRET_TOKEN, expires_in: 3600 })));
+  const cb = await call(env, `/auth/callback?code=abc&state=${state}`);
+  const code = new URL(cb.headers.get('Location')).searchParams.get('login_code');
+  const ex = () => call(env, '/auth/exchange', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code }) });
+  const r1 = await ex();
+  const text = await r1.text();
+  const token = JSON.parse(text).session_token;
+  assert.ok(token && !text.includes(SECRET_TOKEN));
+  assert.equal((await ex()).status, 400);
+  const h = { Authorization: 'Bearer ' + token };
+  assert.deepEqual(await (await call(env, '/me/session', { headers: h })).json(), { logged_in: true });
+  await call(env, '/logout', { method: 'POST', headers: h });
+  assert.deepEqual(await (await call(env, '/me/session', { headers: h })).json(), { logged_in: false });
+  assert.equal((await call(env, '/auth/exchange', { method: 'POST', body: '{"code":"../x"}' })).status, 400);
 });
 
 test('/me/session reflects login state and never leaks the token', async () => {

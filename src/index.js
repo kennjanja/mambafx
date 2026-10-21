@@ -26,7 +26,7 @@ function corsHeaders(env, request) {
     h["Access-Control-Allow-Origin"] = origin;
     h["Access-Control-Allow-Credentials"] = "true";
     h["Access-Control-Allow-Methods"] = "GET, POST, OPTIONS";
-    h["Access-Control-Allow-Headers"] = "Content-Type";
+    h["Access-Control-Allow-Headers"] = "Content-Type, Authorization";
     h["Access-Control-Max-Age"] = "600";
   }
   return h;
@@ -66,8 +66,16 @@ function configError(env) {
   return missing.length ? missing : null;
 }
 
+// Browsers that partition third-party cookies (Firefox, Safari) drop the cookie on
+// cross-site fetches, so the SPA also sends the opaque session id as a Bearer token.
+function sessionIdFrom(request) {
+  const auth = request.headers.get("Authorization") || "";
+  const m = /^Bearer\s+([A-Za-z0-9_-]{20,100})$/.exec(auth);
+  return m ? m[1] : getCookie(request, COOKIE);
+}
+
 async function loadSession(env, request) {
-  const id = getCookie(request, COOKIE);
+  const id = sessionIdFrom(request);
   if (!id || !/^[A-Za-z0-9_-]{20,100}$/.test(id)) return null;
   const raw = await env.SESSION.get("sess:" + id);
   if (!raw) return null;
@@ -142,7 +150,20 @@ async function authCallback(env, url) {
   await env.SESSION.put("sess:" + sid, JSON.stringify({ access_token: tok.access_token, created: Date.now() }), {
     expirationTtl: ttl,
   });
-  return redirect(env.SPA_URL, { "Set-Cookie": sessionCookie(sid, ttl) });
+  const handoff = randomId(24);
+  await env.SESSION.put("hand:" + handoff, sid, { expirationTtl: 60 });
+  return redirect(spaRedirect(env, { login_code: handoff }), { "Set-Cookie": sessionCookie(sid, ttl) });
+}
+
+async function authExchange(env, request) {
+  let body = null;
+  try { body = await request.json(); } catch { /* handled below */ }
+  const code = body && typeof body.code === "string" ? body.code : "";
+  if (!/^[A-Za-z0-9_-]{10,100}$/.test(code)) return json(env, request, { error: "bad_request", message: "Invalid code" }, 400);
+  const sid = await env.SESSION.get("hand:" + code);
+  if (!sid) return json(env, request, { error: "invalid_code", message: "Login code expired or already used" }, 400);
+  await env.SESSION.delete("hand:" + code);
+  return json(env, request, { session_token: sid });
 }
 
 async function meAccounts(env, request) {
@@ -201,7 +222,7 @@ async function wsOtp(env, request) {
 }
 
 async function logout(env, request) {
-  const id = getCookie(request, COOKIE);
+  const id = sessionIdFrom(request);
   if (id && /^[A-Za-z0-9_-]{20,100}$/.test(id)) await env.SESSION.delete("sess:" + id);
   return json(env, request, { ok: true }, 200, { "Set-Cookie": sessionCookie("", 0) });
 }
@@ -222,7 +243,7 @@ export default {
       return json(env, request, { ok: !missing, ...(missing ? { missing_config: missing } : {}) }, missing ? 503 : 200);
     }
 
-    const known = ["/auth/start", "/auth/callback", "/me/session", "/me/accounts", "/ws/otp", "/logout"];
+    const known = ["/auth/start", "/auth/callback", "/me/session", "/me/accounts", "/ws/otp", "/logout", "/auth/exchange"];
     if (!known.includes(path)) return json(env, request, { error: "not_found" }, 404);
 
     const missing = configError(env);
@@ -231,6 +252,7 @@ export default {
     try {
       if (path === "/auth/start" && method === "GET") return await authStart(env);
       if (path === "/auth/callback" && method === "GET") return await authCallback(env, url);
+      if (path === "/auth/exchange" && method === "POST") return await authExchange(env, request);
       if (path === "/me/session" && method === "GET") return json(env, request, { logged_in: !!(await loadSession(env, request)) });
       if (path === "/me/accounts" && method === "GET") return await meAccounts(env, request);
       if (path === "/ws/otp" && method === "POST") return await wsOtp(env, request);
