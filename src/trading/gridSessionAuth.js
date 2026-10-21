@@ -1,3 +1,31 @@
+const MFX_TOKEN_KEY = "mfx_session_token";
+
+// Adds the opaque session token (not the Deriv token) as a Bearer header, since
+// cross-site cookies are blocked by some browsers.
+function mfxAuthFetch(path, init){
+  const opts = Object.assign({ credentials: "include" }, init || {});
+  let t = null;
+  try { t = localStorage.getItem(MFX_TOKEN_KEY); } catch(_){}
+  if (t) opts.headers = Object.assign({}, opts.headers, { Authorization: "Bearer " + t });
+  return fetch(BACKEND_URL + path, opts);
+}
+
+async function mfxExchangeLoginCode(code){
+  try {
+    const resp = await fetch(BACKEND_URL + "/auth/exchange", {
+      method: "POST", credentials: "include",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+    });
+    const body = await resp.json().catch(()=>null);
+    if (resp.ok && body && body.session_token){
+      try { localStorage.setItem(MFX_TOKEN_KEY, body.session_token); } catch(_){}
+      return true;
+    }
+  } catch(_){}
+  return false;
+}
+
 function gridPageInit(){
   gridSet("gridMarketName", MARKETS[SYMBOL] || SYMBOL);
   renderSignalTable();
@@ -17,7 +45,7 @@ function gridStartLogin(){
 // ── Step 2: check session and load accounts ───────────────────────────
 async function gridCheckSession(){
   try {
-    const resp = await fetch(BACKEND_URL + "/me/session", { credentials: "include" });
+    const resp = await mfxAuthFetch("/me/session");
     const body = await resp.json().catch(()=>null);
     gridLoggedIn = !!(body && body.logged_in);
   } catch(e){
@@ -41,6 +69,16 @@ async function gridCheckSession(){
 // /auth/callback failed, then redirects here anyway so the error is visible.
 function gridHandleRedirectReturn(){
   const params = new URLSearchParams(window.location.search);
+  const loginCode = params.get("login_code");
+  if (loginCode){
+    try { window.history.replaceState({}, document.title, window.location.origin + window.location.pathname); } catch(_){}
+    showPage("grid");
+    mfxExchangeLoginCode(loginCode).then(ok => {
+      if (!ok) gridDiag("<b>Login failed.</b> login_code_exchange_failed", true);
+      gridCheckSessionWithRetry();
+    });
+    return;
+  }
   const err = params.get("login_error");
   const justLoggedIn = params.has("code") || document.referrer.includes("auth.deriv.com") || window.location.search.length === 0;
   if (err){
@@ -79,7 +117,7 @@ async function gridLoadAccounts(){
   gridSet("gridConnText", "fetching accounts…");
   let raw = [];
   try {
-    const resp = await fetch(BACKEND_URL + "/me/accounts", { credentials: "include" });
+    const resp = await mfxAuthFetch("/me/accounts");
     const body = await resp.json().catch(()=>null);
     if (!resp.ok) throw new Error((body && body.message) || `HTTP ${resp.status}`);
     if (body && body.error && body.error !== "no_accounts")
@@ -201,6 +239,7 @@ function gridSelectAccountFromPicker(){
 // =====================================================================
 window.gridPageInit = gridPageInit;
 window.gridStartLogin = gridStartLogin;
+window.mfxAuthFetch = mfxAuthFetch;
 window.gridHandleRedirectReturn = gridHandleRedirectReturn;
 window.gridLoadAccounts = gridLoadAccounts;
 window.gridMergeAccounts = gridMergeAccounts;
