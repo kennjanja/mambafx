@@ -51,6 +51,7 @@ const smokePage = `<!doctype html><html><head><meta charset="utf-8"></head><body
   engine.setLadder({ afterWin: 1, afterLoss: 1, resetEvery: 5 });
   check(!!doc.getElementById("bzLadWin") && !!doc.getElementById("bzLadLoss") && !!doc.getElementById("bzLadN"), "ladder inputs are present");
   const dab = doc.getElementById("dabBot"), dbl = (el) => el.dispatchEvent(new app.MouseEvent("dblclick", { bubbles: true }));
+  check(dab.classList.contains("minimised"), "Deriv Auto Bot starts collapsed before any login");
   const was = dab.classList.contains("minimised");
   dbl(doc.getElementById("dabHead"));
   check(dab.classList.contains("minimised") !== was, "double-click on the Deriv Auto Bot header toggles it");
