@@ -18,6 +18,7 @@ import { resolveRecord } from './calibration3m.js?v=15';
 import { backfill, mergeCandles, parseCandles } from './backfill3m.js?v=16';
 import { decimalsFromPip } from './timeframes.js?v=15';
 import { checkOrder, DEFAULT_LIMITS, exposureLevel } from './risk.js?v=15';
+import { normalizeLadder, ladderActive, nextLadderStake } from './stakeLadder3m.js?v=1';
 import { start as perfStart, mark as perfMark, startMonitors } from './perf3m.js?v=15';
 import { accountInfo, watchContracts, requestContractUpdate } from './execution.js?v=15';
 import { createBook, S as SS } from './signalBook3m.js?v=15';
@@ -603,6 +604,16 @@ export function setRunning(on) { state.running = !!on; if (on) startLoop(); log(
 export function setMode(m) { state.mode = m; log(`Mode: ${m}`); emit(); }
 export function setStake(v) { state.stake = Math.max(0.35, Number(v) || 1); state.curStake = state.stake; emit(); }
 export function setReverse(on) { state.reverse = !!on; log(on ? 'Reverse mode ON: trades the opposite of the prediction' : 'Reverse mode OFF: trades the predicted direction'); emit(); }
+const LADDER_KEY = 'bazu_stake_ladder_v1';
+state.ladder = (() => { try { return normalizeLadder(JSON.parse(localStorage.getItem(LADDER_KEY) || '{}')); } catch { return normalizeLadder(); } })();
+state.ladderCount = 0;
+/** Stake multipliers after a win / loss, and the number of settled trades after which the stake returns to the base stake. */
+export function setLadder(o) {
+  state.ladder = normalizeLadder({ ...state.ladder, ...o });
+  state.ladderCount = 0; state.curStake = state.stake;
+  try { localStorage.setItem(LADDER_KEY, JSON.stringify(state.ladder)); } catch { /* quota */ }
+  log(ladderActive(state.ladder) ? `Stake ladder: win x${state.ladder.afterWin}, loss x${state.ladder.afterLoss}, reset to base every ${state.ladder.resetEvery} trades` : 'Stake ladder off', 'ok'); emit();
+}
 export function setMartingale(v) { const n = Number(v); state.martingale = n > 1 ? n : 1; state.curStake = state.stake; emit(); }
 const nextStake = () => +(Math.max(0.35, state.curStake || state.stake)).toFixed(2);
 export function enableRealTrading(phrase) { const r = realMode.enable(accountInfo(), phrase); log(r.ok ? 'Real trading ENABLED for this session (demo-only on reload)' : `Real trading not enabled: ${r.reason}`, r.ok ? 'warn' : 'bad'); emit(); return r; }
@@ -681,6 +692,11 @@ function onContract(c) {
             : 'unknown';
     saveTrades();
     signalLogger.tick();
+    if (ladderActive(state.ladder)) {
+      const nx = nextLadderStake({ ladder: state.ladder, base: state.stake, lastStake: Number(t.stake), result: t.result, count: state.ladderCount });
+      state.curStake = nx.stake; state.ladderCount = nx.count;
+      if (nx.reset) log('Stake ladder reset to base stake', 'ok');
+    } else
     if (t.profit > 0) state.curStake = state.stake; else if (state.martingale > 1 && t.profit < 0) state.curStake = +(Number(t.stake) * state.martingale).toFixed(2);
     log(`${t.market} ${t.direction}${t.strength != null ? ` (${Math.round(t.strength * 100)}%)` : ''} ${t.result.toUpperCase()} ${t.profit >= 0 ? '+' : ''}${t.profit}`, t.profit > 0 ? 'ok' : 'bad');
   }

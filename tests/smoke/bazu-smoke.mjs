@@ -35,7 +35,7 @@ const smokePage = `<!doctype html><html><head><meta charset="utf-8"></head><body
   const scripts = [...doc.querySelectorAll("script[type=module]")].map((s) => s.src + s.textContent);
   const page = scripts.join(" ").match(/bazu\\/page\\.js\\?v=\\d+/);
   check(page, "BAZU page module is referenced");
-  const engine = await app.eval("import('/src/bazu/engine.js?v=32')");
+  const engine = await app.eval("import('/src/bazu/engine.js?v=33')");
   const st = engine.crtStatus("R_75");
   check(st.switches.crt_enabled === true, "crt_enabled defaults to true");
   check(st.switches.crt_trade_enabled === false, "crt_trade_enabled defaults to false");
@@ -45,6 +45,11 @@ const smokePage = `<!doctype html><html><head><meta charset="utf-8"></head><body
   const pr = await engine.placeCrt("R_75", "missing");
   check(pr.ok === false, "placeCrt refuses an unknown signal: " + pr.reason);
   check(Array.isArray(st.checklist.steps) && st.checklist.complete === false, "checklist is live and incomplete");
+  check(engine.state.ladder.afterWin === 1 && engine.state.ladder.afterLoss === 1, "stake ladder is off by default");
+  engine.setLadder({ afterWin: 2.5, afterLoss: 3, resetEvery: 5 });
+  check(engine.state.ladder.afterLoss === 3 && engine.state.ladder.resetEvery === 5 && engine.state.curStake === engine.state.stake, "stake ladder accepts user values");
+  engine.setLadder({ afterWin: 1, afterLoss: 1, resetEvery: 5 });
+  check(!!doc.getElementById("bzLadWin") && !!doc.getElementById("bzLadLoss") && !!doc.getElementById("bzLadN"), "ladder inputs are present");
   check(app.__errs.length === 0, "no JavaScript or console errors: " + app.__errs.join(" | "));
   out.textContent = "BAZU_SMOKE_PASS " + checks.length + " checks: " + checks.join("; ");
 })().catch((e) => { document.getElementById("r").textContent = "BAZU_SMOKE_FAIL " + (e && e.stack || e); });
