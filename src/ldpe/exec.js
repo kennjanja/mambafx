@@ -5,6 +5,7 @@
 export const MIN_CLEAN_EVIDENCE = 5;     // distinct, clean, mutually identical contracts before a config is "verified"
 export const MAX_ENTRY_DELAY_TICKS = 0;  // forecast must still be current when the buy is sent
 export const STALE_REQUEST_MS = 20000;
+export const ALIGN_WAIT_MS = 15000;
 
 export const configKey = (contractType, k, symbol) => `${contractType}|${k}|${symbol}`;
 
@@ -230,12 +231,31 @@ export class Executor {
     const risk = this._riskFor(order.accountId);
     if (pnl != null) risk.pnl += pnl;
     risk.consec = order.result === "lost" ? risk.consec + 1 : 0;
-    const eng = this.getEngine();
-    if (eng) {
-      try { order.alignment = this.alignment.evaluate(eng, order, c); } catch (e) { order.alignment = { status: "unresolved", reason: "evaluation error: " + e.message }; }
-    }
+    order.settledAt = this._now();
+    order.finalC = { purchase_time: c.purchase_time, date_start: c.date_start, entry_tick_time: c.entry_tick_time, exit_tick_time: c.exit_tick_time };
+    this._tryAlign(order, false);
     this._emit(order, "settled");
     return { handled: true, settled: true, order };
+  }
+
+  // The public tick feed is a separate socket from the trading socket, so the settlement tick may not
+  // have reached the engine yet. Evaluation waits for both ticks (up to ALIGN_WAIT_MS), then records
+  // whatever is available, so missing data is recorded as such rather than guessed.
+  _tryAlign(order, force) {
+    const eng = this.getEngine();
+    if (!eng || order.alignment || !order.finalC) return;
+    const c = order.finalC, sym = order.symbol;
+    const have = c.entry_tick_time != null && c.exit_tick_time != null
+      && eng.seqOfEpoch(sym, Number(c.entry_tick_time)) != null && eng.seqOfEpoch(sym, Number(c.exit_tick_time)) != null;
+    const timesMissing = c.entry_tick_time == null || c.exit_tick_time == null;
+    if (!have && !force && !timesMissing && this._now() - order.settledAt < ALIGN_WAIT_MS) return;
+    try { order.alignment = this.alignment.evaluate(eng, order, c); } catch (e) { order.alignment = { status: "unresolved", reason: "evaluation error: " + e.message }; }
+    this._emit(order, "aligned");
+  }
+
+  // Call on every tick and periodically: completes evaluations that were waiting for ticks.
+  retryAlignment() {
+    for (const o of this.orders.values()) if (o.state === "settled" && !o.alignment && o.finalC) this._tryAlign(o, false);
   }
 
   // Socket dropped. Nothing has been confirmed for in-flight requests.

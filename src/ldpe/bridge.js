@@ -1,12 +1,17 @@
-// LDPE page bridge: connects the pure engine to the existing MambaFX Digits page,
-// shared tick stream, Trading Grid execution path and DOM. It owns no WebSocket.
+// LDPE page bridge: connects the pure modules (engine, persist, exec) to the MambaFX Digits page.
+// It owns no WebSocket. ALL LDPE orders go through exec.js's Executor; the page's digPlaceTrade
+// refuses source "ldpe", so no second execution path exists.
 import { Ldpe, DEFAULTS, entropyBits } from "./engine.js";
+import { Executor, AlignmentLedger, configKey, MIN_CLEAN_EVIDENCE } from "./exec.js";
+import { StateStore, snapshotEngine, restoreEngine } from "./persist.js";
 
-const LS_CFG = "ldpe_settings_v1", LS_LOG = "ldpe_exec_log_v1", LS_ALIGN = "ldpe_alignment_v1";
+const LS_CFG = "ldpe_settings_v1", LS_EXEC = "ldpe_exec_v1";
 const $ = (id) => document.getElementById(id);
 const H = () => window.__ldpeHost || {};
 const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (_) { return d; } };
 const save = (k, v) => { try { localStorage.setItem(k, JSON.stringify(v)); } catch (_) {} };
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const CONTRACT = "DIGITMATCH";
 
 const FIELDS = [
   ["minProbability", "Min probability (0-1)", 0.12, 0.01, 0.5, 0.005],
@@ -15,7 +20,7 @@ const FIELDS = [
   ["maxStake", "Max stake", 10, 0.35, 1000, 0.5],
   ["dailyLoss", "Daily loss limit", 20, 0, 100000, 1],
   ["maxConsec", "Max consecutive losses", 5, 1, 100, 1],
-  ["maxOpen", "Max open contracts / symbol", 1, 1, 5, 1],
+  ["probeCount", "Demo probe contracts", 5, 1, 50, 1],
   ["alpha", "Dirichlet alpha", 1, 0.01, 50, 0.1],
   ["shortWindow", "Short window", 50, 10, 1000, 10],
   ["longWindow", "Long window", 1000, 100, 10000, 100],
@@ -27,6 +32,15 @@ const FIELDS = [
 
 const saved = load(LS_CFG, {});
 const settings = { triggerSource: "ensemble", ...Object.fromEntries(FIELDS.map(f => [f[0], f[2]])), ...saved };
+const alignment = new AlignmentLedger();
+
+// The horizon is provisional (= k) until settlement alignment for this exact configuration is verified.
+const keyFor = (sym = H().symbol) => configKey(CONTRACT, settings.k, sym);
+function alignStatus(sym) { return alignment.status(keyFor(sym)); }
+function effectiveHorizon() {
+  const s = alignStatus();
+  return s.state === "verified" ? s.horizon : Math.min(10, Math.max(1, settings.k));
+}
 const engineCfg = () => ({
   ...DEFAULTS,
   horizon: effectiveHorizon(),
@@ -35,131 +49,170 @@ const engineCfg = () => ({
   halfLife: settings.halfLife, eta: settings.eta, lossWindow: settings.lossWindow, floor: settings.floor,
 });
 
-// Alignment: horizon (ticks from forecast tick to settlement tick) learned from real contract responses.
-const align = load(LS_ALIGN, {}); // { [k]: { obs:[offsets], verified:null|offset } }
-function effectiveHorizon() {
-  const a = align[settings.k];
-  return a && a.verified ? a.verified : Math.min(10, Math.max(1, settings.k)); // unverified starting assumption
+const store = new StateStore(localStorage);
+let restoreInfo = { rejected: "not attempted" };
+let engine;
+{
+  const snap = store.load();
+  const cfg = engineCfg();
+  if (snap && snap.horizon === cfg.horizon) { const r = restoreEngine(cfg, snap); engine = r.engine; restoreInfo = r.info; }
+  else { engine = new Ldpe(cfg); restoreInfo = { rejected: snap ? "snapshot horizon differs from current configuration" : "no saved state" }; }
 }
 
-let engine = new Ldpe(engineCfg());
-let paused = false, killed = false;
-let latest = {};                 // symbol -> last forecast
-let execLog = load(LS_LOG, []);  // execution records only (never used for learning)
-let dayKey = new Date().toISOString().slice(0, 10), dayPnl = 0, consecLosses = 0;
-let lastHalt = null;
+let latest = {};          // symbol -> last forecast
+let ticksSinceSave = 0, lastSave = 0;
+let armedLock = false;    // account locked for the current arming session
+let probe = { remaining: 0, placed: 0 };
+let execMsg = "";
+const rows = new Map();   // order id -> page trade row
+
+// ---------------------------------------------------------------- executor (the only order path)
+const host = {
+  send: (m) => { const ws = H().gridWs; if (!ws || ws.readyState !== WebSocket.OPEN) throw new Error("trading socket not open"); ws.send(JSON.stringify(m)); },
+  nextReqId: () => H().nextReqId(),
+  await: (id, cb) => H().awaitReq(id, cb),
+  account: () => {
+    const h = H(), ws = h.gridWs;
+    return { authed: !!h.gridAuthed, open: !!ws && ws.readyState === WebSocket.OPEN, loginId: h.gridLoginId, isVirtual: h.gridIsVirtual === true, currency: h.gridCurrency || "USD" };
+  },
+  currentSeq: (sym) => engine.state(sym).seq,
+  now: () => Date.now(),
+};
+const executor = new Executor(host, {
+  alignment, getEngine: () => engine,
+  limits: { maxOpen: 1, maxStake: settings.maxStake, dailyLoss: settings.dailyLoss, maxConsec: settings.maxConsec },
+});
+executor.restore(load(LS_EXEC, null));
+const persistExec = () => save(LS_EXEC, executor.serialize());
+
+const STATUS_TEXT = { created: "pricing…", pricing: "pricing…", buying: "buying…", open: "open", unknown: "unknown — confirm on account" };
+executor.on((order, ev) => {
+  let row = rows.get(order.id);
+  if (ev === "created" && !row) {
+    row = {
+      id: "pending-" + order.id, orderId: order.id, digit: order.digit, source: "ldpe", stake: order.stake, contractType: order.contractType,
+      symbol: order.symbol, k: order.k, forecast: order.forecast, forecastId: order.forecastId,
+      accountId: order.accountId, isVirtual: order.isVirtual, currency: order.currency, time: Math.floor(order.createdAt / 1000),
+      entry: null, exit: null, exitDigit: null, payout: null, pnl: null, status: "pricing…",
+    };
+    rows.set(order.id, row);
+    const t = H().digTrades; if (t) { t.unshift(row); if (t.length > 100) t.pop(); }
+  }
+  if (row) {
+    if (order.contractId && row.id !== order.contractId) row.id = order.contractId;
+    if (order.state === "open") { row.buyPrice = order.buyPrice; if (H().openContracts) H().openContracts[row.id] = row; }
+    if (order.state === "rejected") row.status = "rejected: " + (order.reason || "");
+    else if (order.state === "settled") row.status = order.result;
+    else row.status = STATUS_TEXT[order.state] || order.state;
+  }
+  if (order.state === "open" && order.mode === "probe" && ev === "open") { probe.placed++; probe.remaining = Math.max(0, probe.remaining - 1); }
+  if (H().renderTrades) H().renderTrades();
+  persistExec();
+  api.render();
+});
+
+function syncHorizon() {
+  const h = effectiveHorizon();
+  if (engine.cfg.horizon !== h) engine.cfg.horizon = h;
+}
+function limitsFromSettings() { executor.limitsUpdate({ maxStake: settings.maxStake, dailyLoss: settings.dailyLoss, maxConsec: settings.maxConsec }); }
 
 function rebuild() {
   const old = engine; engine = new Ldpe(engineCfg());
-  // keep per-symbol learned state across non-model setting changes
   engine.symbols = old.symbols;
-  engine.cfg.horizon = effectiveHorizon();
+  syncHorizon();
 }
 
-function execAllowed() {
-  if (killed) return { ok: false, reason: "kill switch engaged" };
-  if (paused) return { ok: false, reason: lastHalt || "paused" };
-  if (!H().gridAuthed || !H().gridWs || H().gridWs.readyState !== WebSocket.OPEN) return { ok: false, reason: "not connected on Trading Grid" };
-  const a = align[settings.k];
-  const verified = !!(a && a.verified);
-  if (!verified && !H().gridIsVirtual) {
-    return { ok: false, reason: `settlement alignment for k=${settings.k} unverified - run on Demo first (needs 3 consistent contracts)` };
-  }
-  return { ok: true, verified };
+function saveState(force) {
+  const now = Date.now();
+  if (!force && now - lastSave < 5000) return;
+  lastSave = now; ticksSinceSave = 0;
+  try { store.save(snapshotEngine(engine)); } catch (_) {}
 }
-
-function openCount(sym) {
-  return (H().digTrades || []).filter(t => t.source === "ldpe" && t.symbol === sym && /pricing|buying|open/.test(t.status)).length;
-}
-
-function riskCheck(sym) {
-  const today = new Date().toISOString().slice(0, 10);
-  if (today !== dayKey) { dayKey = today; dayPnl = 0; consecLosses = 0; }
-  if (settings.dailyLoss > 0 && dayPnl <= -settings.dailyLoss) return "daily loss limit reached";
-  if (consecLosses >= settings.maxConsec) return "max consecutive losses reached";
-  if (openCount(sym) >= settings.maxOpen) return "open contract limit";
-  return null;
-}
+const releaseTimers = {};
 
 const api = {
-  settings, FIELDS,
+  settings, FIELDS, executor, alignment,
   get engine() { return engine; },
   latestFor: (s) => latest[s],
 
-  // Called from the shared tick path with the raw quote literal.
+  // Shared tick path, raw quote literal.
   ingest(symbol, rawQuote, decimals, epoch) {
     const r = engine.ingest(symbol, { epoch, quote: rawQuote, decimals, recv: Date.now() });
-    if (r.accepted && r.forecast) { latest[symbol] = r.forecast; api.maybeTrade(symbol, r.forecast); }
+    if (r.accepted) {
+      syncHorizon();
+      executor.retryAlignment();
+      if (r.forecast) { latest[symbol] = r.forecast; api.maybeTrade(symbol, r.forecast); }
+      if (++ticksSinceSave >= 20) saveState(false);
+    }
     api.render();
+    return r;
+  },
+
+  // Called whenever the page (re)subscribes to a symbol's ticks: hold live ticks until history arrives.
+  beginHold(symbol, ms = 6000) {
+    engine.beginHold(symbol);
+    clearTimeout(releaseTimers[symbol]);
+    releaseTimers[symbol] = setTimeout(() => { if (engine.isHolding(symbol)) { engine.releaseHold(symbol); api.render(); } }, ms);
+  },
+  // History response: reconcile pending forecasts against the true intermediate ticks.
+  backfill(symbol, prices, times, decimals) {
+    clearTimeout(releaseTimers[symbol]);
+    const hist = [];
+    for (let i = 0; i < prices.length; i++) hist.push({ epoch: Number(times[i]), quote: Number(prices[i]).toFixed(decimals), decimals });
+    const r = engine.backfill(symbol, hist);
+    api.lastBackfill = { symbol, received: hist.length, ...r, at: Date.now() };
+    saveState(true); api.render();
     return r;
   },
   discontinuity(symbol) { engine.markDiscontinuity(symbol); },
 
+  // Auto trading: only through the executor, only on a TRADE decision, only for a verified configuration.
   maybeTrade(symbol, f) {
-    if (!H().digAutoArmed || f.decision !== "TRADE") return;
-    const ex = execAllowed();
-    const status = $("ldpeExecStatus");
-    if (!ex.ok) { if (status) status.textContent = "Not executing: " + ex.reason; return; }
-    const risk = riskCheck(symbol);
-    if (risk) { lastHalt = risk; paused = true; if (status) status.textContent = "Paused: " + risk; return; }
-    const placed = H().placeTrade(f.predictedDigit, "ldpe", {
-      contractType: "DIGITMATCH", duration: settings.k, forecast: f, maxStake: settings.maxStake,
-      symbol,
-    });
-    if (placed && status) status.textContent = `Fired Matches on ${f.predictedDigit} (p=${(f.probability * 100).toFixed(1)}%, forecast ${f.id})`;
+    const armed = !!H().digAutoArmed;
+    if (!armed) { if (armedLock) { executor.unlockAccount(); armedLock = false; } }
+    if (probe.remaining > 0) return api.maybeProbe(symbol, f);
+    if (!armed || f.decision !== "TRADE") return;
+    if (!armedLock) { executor.lockAccount(host.account()); armedLock = true; }
+    const r = executor.place({ symbol, digit: f.predictedDigit, k: settings.k, contractType: CONTRACT, stake: settings.maxStake, forecast: f, mode: "auto" });
+    execMsg = r.ok ? `Order sent: Matches ${f.predictedDigit} (p=${(f.probability * 100).toFixed(1)}%, ${f.id})` : "Not executing: " + r.reason;
   },
 
-  // Called by gridUpdateContract for any digit row with a forecast attached.
-  onContract(row, c) {
-    if (row.source !== "ldpe" || !row.forecastId) return;
-    if (c.entry_tick_time != null) row.entryEpoch = Number(c.entry_tick_time);
-    if (c.exit_tick_time != null) row.exitEpoch = Number(c.exit_tick_time);
-    if (c.exit_tick != null) row.exitQuote = String(c.exit_tick_display_value ?? c.exit_tick);
-    if (!(c.is_sold || c.is_expired) || row.alignment) return;
-    const st = engine.state(row.symbol);
-    const f = row.forecast;
-    let exitSeq = null;
-    if (row.exitEpoch != null) {
-      for (let i = st.ticks.length - 1; i >= 0; i--) if (st.ticks[i].epoch === row.exitEpoch) { exitSeq = st.ticks[i].seq; break; }
-    }
-    if (exitSeq == null || !f) { row.alignment = "unknown"; }
-    else {
-      const offset = exitSeq - f.madeAtSeq;
-      row.settleSeq = exitSeq; row.observedOffset = offset;
-      row.alignment = offset === f.horizon ? "aligned" : "misaligned";
-      const a = (align[row.k] = align[row.k] || { obs: [], verified: null });
-      a.obs.push(offset); if (a.obs.length > 10) a.obs.shift();
-      const last3 = a.obs.slice(-3);
-      if (last3.length === 3 && last3.every(x => x === last3[0]) && a.verified !== last3[0]) {
-        a.verified = last3[0];
-        engine.cfg.horizon = effectiveHorizon();
-      }
-      save(LS_ALIGN, align);
-    }
-    const won = row.status === "won";
-    if (won) consecLosses = 0; else consecLosses++;
-    dayPnl += Number(row.pnl || 0);
-    execLog.unshift({
-      t: row.time, symbol: row.symbol, accountType: row.isVirtual ? "demo" : "real", account: row.accountId,
-      stake: row.stake, contractId: row.id, digit: row.digit, forecastId: row.forecastId,
-      probability: f && f.probability, vector: f && f.vectors.ensemble, targetSeq: f && f.targetSeq,
-      entryEpoch: row.entryEpoch, exitEpoch: row.exitEpoch, alignment: row.alignment,
-      result: row.status, pnl: row.pnl,
-    });
-    if (execLog.length > 300) execLog.length = 300;
-    save(LS_LOG, execLog);
+  // Demo-only settlement-alignment probe: observation, not a strategy and not evidence of skill.
+  maybeProbe(symbol, f) {
+    if (f.reconstructed || f.status !== "pending") return;
+    const r = executor.place({ symbol, digit: f.predictedDigit, k: settings.k, contractType: CONTRACT, stake: 0.35, forecast: f, mode: "probe" });
+    if (!r.ok && /Demo-only|not connected|account changed|kill/.test(r.reason)) { probe.remaining = 0; execMsg = "Probe stopped: " + r.reason; }
+    else if (r.ok) execMsg = `Probe order sent (${probe.placed + 1}/${probe.placed + probe.remaining}) on ${f.id}`;
+  },
+  startProbe() {
+    const a = host.account();
+    if (!a.authed) { execMsg = "Probe needs a logged-in Demo account on the Trading Grid page."; api.render(); return; }
+    if (!a.isVirtual) { execMsg = "Probe refused: the selected account is not a Demo account."; api.render(); return; }
+    probe = { remaining: settings.probeCount, placed: 0 };
+    execMsg = `Probe started: ${probe.remaining} Demo contract(s), one per fresh forecast.`;
     api.render();
   },
+  stopProbe() { probe.remaining = 0; execMsg = "Probe stopped."; api.render(); },
+
+  // Trading socket events forwarded by the page.
+  onContractUpdate(c) { return executor.onContractUpdate(c); },
+  onDisconnect() { executor.onDisconnect(); },
+  ownsOrder(orderId) { return executor.orders.has(orderId); },
 
   setSetting(key, val) {
     settings[key] = val; save(LS_CFG, settings);
     if (key === "k") { const d = $("digDuration"); if (d) d.value = settings.k; }
+    limitsFromSettings();
     rebuild(); api.render();
   },
-  kill() { killed = true; paused = true; lastHalt = "kill switch"; if (H().disarm) H().disarm("LDPE kill switch"); api.render(); },
-  resume() { killed = false; paused = false; lastHalt = null; consecLosses = 0; api.render(); },
+  kill() { executor.kill("kill switch"); probe.remaining = 0; if (H().disarm) H().disarm("LDPE kill switch"); api.render(); },
+  resume() { executor.resume(); api.render(); },
+  alignmentStatus: alignStatus,
+  saveState,
 
-  verification() { return align[settings.k] || { obs: [], verified: null }; },
+  // Last-resort operator action for an order whose purchase could not be confirmed.
+  resolveUnknown(orderId, contractId) { const ok = executor.resolveUnknown(orderId, contractId); persistExec(); api.render(); return ok; },
 
   render() {
     const root = $("ldpeCard");
@@ -168,12 +221,16 @@ const api = {
     const set = (id, h) => { const e = $(id); if (e) e.innerHTML = h; };
     const wu = engine.warmup(sym), m = engine.metrics(sym, engine.cfg.horizon);
     const st = engine.state(sym);
-    set("ldpeFeed", `${sym} · ${st.seq} ticks · dup ${st.quality.duplicates} · out-of-order ${st.quality.outOfOrder} · precision ${st.quality.precisionMismatch} · gaps ${st.quality.gaps}`);
+    const pct = (x) => (x * 100).toFixed(1) + "%";
+    set("ldpeFeed", `${esc(sym)} · ${st.seq} ticks · dup ${st.quality.duplicates} · out-of-order ${st.quality.outOfOrder} · precision ${st.quality.precisionMismatch} · gaps ${st.quality.gaps}` +
+      ` · state: ${engine.isHolding(sym) ? "<b>waiting for history backfill</b>" : "live"}` +
+      (restoreInfo.restored && restoreInfo.restored[sym] ? ` · restored ${restoreInfo.restored[sym].ticks} ticks, ${restoreInfo.restored[sym].pending} pending forecasts (models reconstructed by replay)` : "") +
+      (api.lastBackfill && api.lastBackfill.symbol === sym ? ` · last backfill ${api.lastBackfill.ingested} new ticks, ${api.lastBackfill.overlap ? "overlap confirmed" : "NO overlap (hole recorded)"}` : ""));
     if (!f) { set("ldpePred", "Waiting for ticks…"); }
     else {
       const cls = f.decision === "TRADE" ? "cell-pos" : "cell-mut";
-      set("ldpePred", `<b style="font-size:22px">${f.predictedDigit}</b> &nbsp; p=${(f.probability * 100).toFixed(2)}% &nbsp; <span class="${cls}"><b>${f.decision}</b>${f.reason ? " (" + f.reason + ")" : ""}</span>` +
-        `<div class="cell-mut">horizon ${f.horizon} ticks · target #${f.targetSeq} · threshold ${(f.minProbability * 100).toFixed(1)}% on ${f.triggerSource} · ${wu.isWarmingUp ? "warm-up: " + wu.remaining + " ticks left" : "warm-up complete"} · calibration: ${f.calibrationStatus} · ensemble uncertainty ${f.ensembleUncertainty} · state v${f.stateVersion}</div>` +
+      set("ldpePred", `<b style="font-size:22px">${f.predictedDigit}</b> &nbsp; p=${(f.probability * 100).toFixed(2)}% &nbsp; <span class="${cls}"><b>${f.decision}</b>${f.reason ? " (" + esc(f.reason) + ")" : ""}</span>` +
+        `<div class="cell-mut">horizon ${f.horizon} ticks (${alignStatus(sym).state === "verified" ? "verified" : "provisional, unverified"}) · target #${f.targetSeq} · threshold ${(f.minProbability * 100).toFixed(1)}% on ${f.triggerSource} · ${wu.isWarmingUp ? "warm-up: " + wu.remaining + " ticks left" : "warm-up complete"} · calibration: ${esc(f.calibrationStatus)} · structural break: ${f.structuralBreak ? "<b>ACTIVE</b>" : "none"} · state v${f.stateVersion}</div>` +
         `<div class="cell-mut">Crossing the trigger is an operational threshold, not evidence of predictive advantage.</div>`);
       const bars = f.vectors.ensemble.map((p, d) => `<div style="display:inline-block;width:9%;text-align:center;vertical-align:bottom"><div style="height:${Math.round(p * 600)}px;background:${d === f.predictedDigit ? "var(--accent)" : "var(--muted)"};opacity:.8;min-height:2px"></div><div style="font-size:11px">${d}<br>${(p * 100).toFixed(1)}</div></div>`).join("");
       set("ldpeDist", `<div style="position:relative;height:96px;border-bottom:1px solid var(--muted);display:flex;align-items:flex-end;gap:0">${bars}</div><div class="cell-mut">Bars: ensemble P(digit). Uniform reference = 10.0%. Entropy ${entropyBits(f.vectors.ensemble).toFixed(4)} / 3.3219 bits · module disagreement (JS) ${f.disagreement.toFixed(5)} · λ=${f.lambda.toFixed(2)}</div>`);
@@ -181,24 +238,54 @@ const api = {
     set("ldpeMetrics", m.n
       ? `Evaluated forecasts: <b>${m.n}</b> · log loss ${m.logLoss.toFixed(4)} vs uniform ${m.logLossUniform.toFixed(4)} (Δ ${(m.logLoss - m.logLossUniform).toFixed(4)}) · Brier ${m.brier.toFixed(4)} vs 0.9 · top-1 ${(m.top1 * 100).toFixed(1)}% [${(m.top1Ci95[0] * 100).toFixed(1)}, ${(m.top1Ci95[1] * 100).toFixed(1)}] vs 10%`
       : "No evaluated forecasts yet — insufficient data.");
+
+    // Tier 1 diagnostics from the live service state
+    const mi = engine.mutualInfo(sym), cal = engine.calibrationStatus(sym), brk = engine.breakStatus(sym), cs = engine.conditionalStats(sym);
+    let d = "";
+    d += `<div><b>Mutual information</b> (digit → digit +${mi.horizon}): ` + (mi.status === "ok"
+      ? `${mi.miBitsCorrected.toFixed(5)} bits (bias-corrected; raw ${mi.miBits.toFixed(5)}), n=${mi.n}, p=${mi.pValue.toPrecision(3)} — ${esc(mi.interpretation)}`
+      : `insufficient data (${mi.n}/${mi.needed} samples) — not reported`) + `</div>`;
+    d += `<div><b>Calibration:</b> ` + (cal.ready
+      ? `isotonic map fitted on ${cal.fittedOn} scored forecasts` + (cal.outOfSample ? `; out-of-sample on ${cal.outOfSample.n}: log loss ${cal.outOfSample.logLossCalibrated.toFixed(4)} calibrated vs ${cal.outOfSample.logLossRaw.toFixed(4)} raw (${cal.outOfSample.logLossCalibrated < cal.outOfSample.logLossRaw ? "calibration helps" : "calibration does not help"})` : "; no out-of-sample check yet")
+      : `not ready: ${cal.scored}/${cal.needed} scored forecasts (no calibration applied)`) + `</div>`;
+    d += `<div><b>Structural break:</b> ` + (brk.active ? `<span class="cell-neg"><b>ACTIVE</b></span> since #${brk.atSeq} (p=${brk.lastP != null ? Number(brk.lastP).toExponential(2) : "?"}) — trading suspended, module scores halved` : "none active") + ` · total detected: ${brk.count}</div>`;
+    if (cs) {
+      const gapRows = cs.gaps.map(g => `${g.digit}: ${g.sinceSeen}t${g.n >= 30 && g.hitRate != null ? " → " + pct(g.hitRate) + " (n=" + g.n + ")" : " (n=" + g.n + ", too few)"}`).join(" · ");
+      d += `<div><b>Gap context</b> (ticks since each digit; conditional hit rate at +${cs.horizon}, uniform 10%): ${gapRows}</div>`;
+      d += `<div><b>Streak context</b>: last digit ${cs.lastDigit}, run ${cs.run}; ` + (cs.streak.n >= 30 ? `next-digit frequencies after this state (n=${cs.streak.n}): ` + cs.streak.freq.map((x, i) => `${i}:${pct(x)}`).join(" ") : `too few matching states (n=${cs.streak.n}) to report frequencies`) + `</div>`;
+    }
+    set("ldpeDiag", d);
+
     const sb = engine.scoreboard(sym, engine.cfg.horizon);
     set("ldpeBoard", sb.map(r => `<tr><td class="l">${r.module}</td><td>${(r.weight * 100).toFixed(1)}%</td><td>${r.evaluated}</td><td>${r.relScore.toFixed(3)}</td></tr>`).join(""));
-    const v = api.verification();
-    const ex = execAllowed();
-    set("ldpeExec", `Account: <b>${H().gridIsVirtual ? "Demo" : (H().gridAuthed ? "REAL" : "—")}</b> ${H().gridLoginId || ""} · bot: <b>${killed ? "KILLED" : paused ? "paused (" + lastHalt + ")" : H().digAutoArmed ? "running" : "stopped"}</b> · day P/L (risk only) ${dayPnl.toFixed(2)} · consecutive losses ${consecLosses}` +
-      `<br>Settlement alignment k=${settings.k}: ${v.verified ? "<b>verified</b> (offset " + v.verified + " ticks)" : "<b>unverified</b> — observed offsets [" + v.obs.join(", ") + "]; Real execution is blocked until 3 consistent Demo contracts"} · executing: ${ex.ok ? "allowed" : "blocked — " + ex.reason}`);
+
+    // Execution and alignment evidence
+    const a = host.account(), v = alignStatus(sym), risk = a.loginId ? executor._riskFor(a.loginId) : { pnl: 0, consec: 0 };
+    const stateTxt = executor.killed ? `KILLED (${esc(executor.pausedReason)})` : H().digAutoArmed ? "armed" : "stopped";
+    set("ldpeExec", `Account: <b>${a.authed ? (a.isVirtual ? "Demo" : "REAL") : "—"}</b> ${esc(a.loginId || "")}${executor.lock ? " (locked for this run)" : ""} · bot: <b>${stateTxt}</b> · day P/L (risk only) ${risk.pnl.toFixed(2)} · consecutive losses ${risk.consec} · open contracts ${executor.openCount(sym)}`);
+    const verifiedTxt = v.state === "verified"
+      ? `<b>verified</b> from ${v.clean} clean contracts: ${esc(v.relation)}${v.matchesConfiguredTicks ? "" : " — differs from the configured tick count"}`
+      : `<b>${v.state}</b> — ${esc(v.reason)}`;
+    set("ldpeAlign", `<b>Settlement alignment</b> for ${esc(keyFor(sym))}: ${verifiedTxt}` +
+      `<br>Automatic execution: <b>${v.state === "verified" ? "permitted (subject to all safeguards)" : "DISABLED until verified (needs " + MIN_CLEAN_EVIDENCE + " clean, identical Demo observations)"}</b> · Demo probe: ${probe.remaining > 0 ? `running, ${probe.remaining} left` : "idle"} · Real execution: ${v.state === "verified" ? "only via auto on a verified config" : "blocked"}` +
+      `<br><span class="cell-mut">Probe contracts are measurements of timing, not evidence of predictive skill. ${esc(execMsg)}</span>`);
+    const ev = (alignment.cfgs[keyFor(sym)] || { evidence: [] }).evidence.slice(-8).reverse();
+    set("ldpeAlignRows", ev.map(e => `<tr><td class="l">${esc(e.contractId)}</td><td>${e.accountType}</td><td>${e.madeAtSeq}</td><td>${e.expectedTargetSeq}</td><td>${e.entrySeq ?? "—"}</td><td>${e.exitSeq ?? "—"}</td><td>${e.entryDelayTicks ?? "—"}</td><td>${e.observedOffset ?? "—"}</td><td class="${e.status === "aligned" ? "cell-pos" : "cell-warn"}">${e.status}${e.reason ? " — " + esc(e.reason) : ""}</td></tr>`).join("") || `<tr><td colspan="9" class="sig-empty">No settlement observations yet.</td></tr>`);
+
     const recent = st.forecasts.slice(-12).reverse();
     set("ldpeHist", recent.map(x => `<tr><td class="l">${x.id}</td><td>${x.predictedDigit}</td><td>${(x.probability * 100).toFixed(1)}%</td><td>${x.decision}</td><td>${x.targetSeq}</td><td>${x.realized ?? "—"}</td><td class="${x.hit ? "cell-pos" : "cell-mut"}">${x.status === "scored" ? (x.hit ? "hit" : "miss") : x.status}</td><td>${x.llEnsemble != null ? x.llEnsemble.toFixed(3) + " / " + x.llUniform.toFixed(3) : "—"}</td></tr>`).join("") || `<tr><td colspan="8" class="sig-empty">No scored forecasts yet.</td></tr>`);
-    set("ldpeExecLog", execLog.slice(0, 12).map(x => `<tr><td class="l">${new Date(x.t * 1000).toLocaleTimeString()}</td><td>${x.accountType}</td><td>${x.digit}</td><td>${x.stake}</td><td>${x.contractId}</td><td>#${x.targetSeq}</td><td>${x.alignment}</td><td class="${x.result === "won" ? "cell-pos" : "cell-neg"}">${x.result}</td></tr>`).join("") || `<tr><td colspan="8" class="sig-empty">No LDPE contracts yet.</td></tr>`);
+    const orders = [...executor.orders.values()].sort((p, q) => q.createdAt - p.createdAt).slice(0, 12);
+    set("ldpeExecLog", orders.map(o => `<tr><td class="l">${new Date(o.createdAt).toLocaleTimeString()}</td><td>${o.isVirtual ? "demo" : "real"}/${o.mode}</td><td>${o.digit}</td><td>${o.stake}</td><td>${esc(o.contractId || "—")}</td><td>#${o.forecast.targetSeq}</td><td>${o.alignment ? esc(o.alignment.status) : (o.state === "settled" ? "pending ticks" : "—")}</td><td class="${o.result === "won" ? "cell-pos" : o.result === "lost" ? "cell-neg" : "cell-mut"}">${o.result || esc(o.state + (o.reason ? ": " + o.reason : ""))}</td></tr>`).join("") || `<tr><td colspan="8" class="sig-empty">No LDPE contracts yet.</td></tr>`);
+    set("ldpeExecStatus", esc(execMsg));
   },
 
   buildPanel() {
-    const host = $("ldpeSettings");
-    if (!host || host.dataset.built) return;
-    host.dataset.built = "1";
-    host.innerHTML = FIELDS.map(([k, label, , min, max, step]) =>
+    const hostEl = $("ldpeSettings");
+    if (!hostEl || hostEl.dataset.built) return;
+    hostEl.dataset.built = "1";
+    hostEl.innerHTML = FIELDS.map(([k, label, , min, max, step]) =>
       `<div class="gc-field"><label for="ldpe_${k}">${label}</label><input type="number" id="ldpe_${k}" min="${min}" max="${max}" step="${step}" value="${settings[k]}"></div>`).join("") +
-      `<div class="gc-field"><label for="ldpe_triggerSource">Trigger source</label><select id="ldpe_triggerSource"><option value="ensemble">ensemble (raw)</option><option value="shrunk">shrunk (needs demonstrated gain)</option></select></div>`;
+      `<div class="gc-field"><label for="ldpe_triggerSource">Trigger source</label><select id="ldpe_triggerSource"><option value="ensemble">ensemble (raw)</option><option value="shrunk">shrunk (needs demonstrated gain)</option><option value="calibrated">calibrated (needs ≥ ${DEFAULTS.calMin} scored forecasts)</option></select></div>`;
     $("ldpe_triggerSource").value = settings.triggerSource;
     FIELDS.forEach(([k, , , min, max]) => {
       $("ldpe_" + k).addEventListener("change", (ev) => {
@@ -209,8 +296,17 @@ const api = {
     $("ldpe_triggerSource").addEventListener("change", (ev) => api.setSetting("triggerSource", ev.target.value));
     $("ldpeKill").addEventListener("click", () => api.kill());
     $("ldpeResume").addEventListener("click", () => api.resume());
+    const pb = $("ldpeProbe"), ps = $("ldpeProbeStop");
+    if (pb) pb.addEventListener("click", () => api.startProbe());
+    if (ps) ps.addEventListener("click", () => api.stopProbe());
   },
 };
+
+// Restored state: hold live ticks until history arrives; release with a recorded hole if it never does.
+for (const sym of engine.symbols.keys()) if (engine.isHolding(sym)) api.beginHold(sym, 8000);
+setInterval(() => { executor.sweep(); executor.retryAlignment(); }, 5000);
+window.addEventListener("pagehide", () => { saveState(true); persistExec(); });
+document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveState(true); });
 
 window.LDPE = api;
 document.addEventListener("DOMContentLoaded", () => api.buildPanel());

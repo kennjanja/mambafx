@@ -283,10 +283,13 @@ export class Ldpe {
     const overlap = prev === null || uniq.some(t => Number(t.epoch) === prev);
     if (!overlap) this.markDiscontinuity(sym);
     let ingested = 0;
-    for (const t of uniq) {
-      if (prev !== null && Number(t.epoch) <= prev) continue;
-      if (this.ingest(sym, t).accepted) ingested++;
-    }
+    st.replay = true;
+    try {
+      for (const t of uniq) {
+        if (prev !== null && Number(t.epoch) <= prev) continue;
+        if (this.ingest(sym, t).accepted) ingested++;
+      }
+    } finally { st.replay = false; }
     return { ingested, overlap };
   }
 
@@ -390,6 +393,20 @@ export class Ldpe {
   breakStatus(sym) {
     const b = this.state(sym).brk;
     return { active: b.active, atSeq: b.atSeq, count: b.count, lastP: b.lastP };
+  }
+
+  // Current gap/streak context and the empirical conditional frequencies it maps to (display only).
+  conditionalStats(sym, h = this.cfg.horizon) {
+    const st = this.state(sym), cfg = this.cfg, last = st.ticks[st.ticks.length - 1];
+    if (!last || !st.gapTab[h]) return null;
+    const gaps = [];
+    for (let d = 0; d < 10; d++) {
+      const c = st.gapTab[h][d], b = last.gaps ? last.gaps[d] : 0;
+      gaps.push({ digit: d, sinceSeen: last.gaps ? last.gaps[d] : null, bucket: b, n: c.n[b], hitRate: c.n[b] ? c.hit[b] / c.n[b] : null });
+    }
+    const srow = st.streakTab[h].get(last.digit * cfg.runBuckets + last.runB) || new Array(10).fill(0);
+    const sn = srow.reduce((a, b) => a + b, 0);
+    return { horizon: h, lastDigit: last.digit, run: st.runLen, gaps, streak: { n: sn, freq: srow.map(c => (sn ? c / sn : null)) } };
   }
 
   mutualInfo(sym, h = this.cfg.horizon) {
@@ -513,6 +530,7 @@ export class Ldpe {
     else if (cfg.triggerSource === "calibrated" && !calV) reason = "calibration unavailable";
     else if (src[top] < cfg.minProbability) reason = "below minProbability";
     else decision = "TRADE";
+    if (st.replay) { decision = "SKIP"; reason = "reconstructed from history (not a live forecast)"; }
     const f = {
       id: `${sym}:${h}:${++st.forecastSeq}`,
       symbol: sym, horizon: h,
@@ -526,7 +544,7 @@ export class Ldpe {
       structuralBreak: st.brk.active,
       calibrationStatus: calStatus, ensembleUncertainty: "unavailable",
       disagreement: jsDivergence(names.map(m => mods[m])),
-      status: "pending", realized: null, hit: null,
+      status: "pending", realized: null, hit: null, reconstructed: !!st.replay,
     };
     st.pending.push(f);
     return f;
