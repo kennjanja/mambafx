@@ -994,7 +994,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
           </div>
           <div class="gc-field" style="max-width:120px">
             <label for="martingaleXInput">Multiplier (×N)</label>
-            <input type="number" id="martingaleXInput" min="1.00" max="5.00" step="0.01" value="2.00" oninput="setMartingaleX(this.value)" title="Applies to every Martingale / Reverse Martingale bot on this page — shared, not per-bot. Allowed range: 1.00–5.00, step 0.01.">
+            <input type="number" id="martingaleXInput" min="1.00" max="10.00" step="0.01" value="2.00" oninput="setMartingaleX(this.value)" title="Applies to every Martingale / Reverse Martingale bot on this page — shared, not per-bot. Allowed range: 1.00–10.00, step 0.01.">
             <div class="gc-sub" style="margin-top:2px;margin-bottom:0">Allowed Range: 1.00 → 5.00 · Step: 0.01</div>
           </div>
         </div>
@@ -1264,53 +1264,8 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     <!-- Digit distribution — the core visual -->
     <div class="dig-card">
       <h2>Digit Distribution <span id="digTickCount" style="font-weight:400;font-size:11px;color:var(--muted);margin-left:auto">0 ticks</span></h2>
-      <div class="dig-sub">Frequency of each digit over the last 1,000 ticks. <span style="color:var(--accent)">Blue</span> = highest frequency, <span style="color:var(--down)">red</span> = lowest, <span style="color:var(--amber)">amber</span> = 2nd-lowest, <span style="color:var(--up)">green (with the pointer below it)</span> = the digit that just occurred. The prediction engine's composite score runs continuously in the background — it drives auto-execution below but isn't shown here as a raw number. Click any digit to place a manual Matches trade.</div>
       <div id="digForecastBox" style="text-align:center"></div>
       <div class="dig-circle-grid" id="digCircleGrid"></div>
-    </div>
-
-    <!-- Stats row -->
-    <div class="dig-stat-row" style="margin-bottom:16px">
-      <div class="dig-stat"><div class="lab">χ² statistic</div><div id="digChi" class="v">—</div></div>
-      <div class="dig-stat"><div class="lab">p-value</div><div id="digPval" class="v">—</div></div>
-      <div class="dig-stat"><div class="lab">Entropy (bits)</div><div id="digEntropy" class="v">—</div></div>
-      <div class="dig-stat"><div class="lab">Top digit</div><div id="digTop" class="v" style="color:var(--accent)">—</div></div>
-      <div class="dig-stat"><div class="lab">Longest gap</div><div id="digMaxGap" class="v">—</div></div>
-    </div>
-
-    <div class="dig-top">
-      <!-- Frequency table -->
-      <div class="dig-card" style="margin:0">
-        <h2>📋 Digit frequency table</h2>
-        <div class="dig-sub">Rolling window of the last <b id="digWinLabel">200</b> ticks. The χ² test checks whether the distribution deviates significantly from uniform (10% each).</div>
-        <div class="gc-field" style="margin-bottom:10px">
-          <label for="digWindow">Analysis window (ticks)</label>
-          <select id="digWindow" onchange="digSetWindow()">
-            <option value="50">50</option>
-            <option value="100">100</option>
-            <option value="200" selected>200</option>
-            <option value="500">500</option>
-            <option value="0">All ticks</option>
-          </select>
-        </div>
-        <table class="freq-table" id="digFreqTable">
-          <thead><tr><th>Digit</th><th>Count</th><th>Freq %</th><th>Dev</th><th>Gap</th></tr></thead>
-          <tbody id="digFreqBody"></tbody>
-        </table>
-        <div class="chi-bar"><div id="digChiBar" class="chi-fill" style="width:0"></div></div>
-      </div>
-
-      <!-- Transition matrix: hidden from the UI; the transition statistics are still computed (digTransitions, engine trans1/trans2) -->
-      <div class="dig-card" style="margin:0;display:none" hidden aria-hidden="true">
-        <h2>🔗 Transition matrix (Markov)</h2>
-        <div class="dig-sub">Row = current last digit, column = next digit. Cells show the observed probability P(col | row) as a %. Brighter = more frequent transition. Useful for spotting digit pairs that recur more than expected.</div>
-        <div class="tm-wrap">
-          <table class="tm-table" id="digTmTable">
-            <thead id="digTmHead"></thead>
-            <tbody id="digTmBody"></tbody>
-          </table>
-        </div>
-      </div>
     </div>
 
     <!-- Execution panel -->
@@ -1355,6 +1310,17 @@ table.an-table tbody tr:last-child td{border-bottom:none}
               <option value="one_3_2_6">1-3-2-6 sequence</option>
             </select>
           </div>
+          <div class="gc-field">
+            <label for="digMultN">Multiplier (×N, e.g. 1.4, 1.5, 8)</label>
+            <input type="number" id="digMultN" min="1" max="10" step="0.01" value="2.00" oninput="digSetMultN(this.value)" title="Step size for Martingale / Reverse Martingale. Allowed range 1.00–10.00.">
+          </div>
+          <div class="gc-field" id="digSessionPnlBox">
+            <label>Session profit / loss</label>
+            <div style="display:flex;align-items:center;gap:10px">
+              <span id="digSessionPnl" style="font-size:18px;font-weight:800;color:var(--muted)">—</span>
+              <button type="button" class="gc-btn" id="digPnlReset" onclick="digResetSessionPnl()" style="padding:4px 10px">Reset</button>
+            </div>
+          </div>
           <!-- Barrier (shown for Over/Under only) -->
           <div class="gc-field" id="digBarrierWrap" style="display:none">
             <label for="digBarrier">Barrier digit (0–9)</label>
@@ -1372,12 +1338,12 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         </div>
         <div>
           <div class="gc-field">
-            <label>Automatic execution</label>
+            <label>Automated Match</label>
             <div class="dig-auto-bar">
               <label class="auto-toggle">
                 <input type="checkbox" id="digAutoArm" onchange="digToggleAuto()">
                 <span class="track"></span>
-                <span id="digAutoLabel">Auto: OFF</span>
+                <span id="digAutoLabel">Automated Match: OFF</span>
               </label>
               <div class="auto-status" id="digAutoStatus">Disarmed.</div>
             </div>
@@ -1408,6 +1374,50 @@ table.an-table tbody tr:last-child td{border-bottom:none}
               </select>
             </div>
           </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Stats row -->
+    <div class="dig-stat-row" style="margin-bottom:16px">
+      <div class="dig-stat" hidden style="display:none"><div class="lab">χ² statistic</div><div id="digChi" class="v">—</div></div>
+      <div class="dig-stat" hidden style="display:none"><div class="lab">p-value</div><div id="digPval" class="v">—</div></div>
+      <div class="dig-stat" hidden style="display:none"><div class="lab">Entropy (bits)</div><div id="digEntropy" class="v">—</div></div>
+      <div class="dig-stat"><div class="lab">Top digit</div><div id="digTop" class="v" style="color:var(--accent)">—</div></div>
+      <div class="dig-stat"><div class="lab">Longest gap</div><div id="digMaxGap" class="v">—</div></div>
+    </div>
+
+    <div class="dig-top">
+      <!-- Frequency table -->
+      <div class="dig-card" style="margin:0">
+        <h2>📋 Digit frequency table</h2>
+        <div class="dig-sub">Rolling window of the last <b id="digWinLabel">200</b> ticks. The χ² test checks whether the distribution deviates significantly from uniform (10% each).</div>
+        <div class="gc-field" style="margin-bottom:10px">
+          <label for="digWindow">Analysis window (ticks)</label>
+          <select id="digWindow" onchange="digSetWindow()">
+            <option value="50">50</option>
+            <option value="100">100</option>
+            <option value="200" selected>200</option>
+            <option value="500">500</option>
+            <option value="0">All ticks</option>
+          </select>
+        </div>
+        <table class="freq-table" id="digFreqTable">
+          <thead><tr><th>Digit</th><th>Count</th><th>Freq %</th><th>Dev</th><th>Gap</th></tr></thead>
+          <tbody id="digFreqBody"></tbody>
+        </table>
+        <div class="chi-bar"><div id="digChiBar" class="chi-fill" style="width:0"></div></div>
+      </div>
+
+      <!-- Transition matrix: hidden from the UI; the transition statistics are still computed (digTransitions, engine trans1/trans2) -->
+      <div class="dig-card" style="margin:0;display:none" hidden aria-hidden="true">
+        <h2>🔗 Transition matrix (Markov)</h2>
+        <div class="dig-sub">Row = current last digit, column = next digit. Cells show the observed probability P(col | row) as a %. Brighter = more frequent transition. Useful for spotting digit pairs that recur more than expected.</div>
+        <div class="tm-wrap">
+          <table class="tm-table" id="digTmTable">
+            <thead id="digTmHead"></thead>
+            <tbody id="digTmBody"></tbody>
+          </table>
         </div>
       </div>
     </div>
@@ -29970,6 +29980,8 @@ window.__ldpeHost = {
   awaitReq: (id, cb) => { gridPending[id] = cb; },
   renderTrades: () => { try { digRenderTrades(); } catch(_){} },
   get digAutoArmed(){ return digAutoArmed; },
+  // stake for the next automatic LDPE order: the Trade execution card's stake + multiplier progression
+  nextStake: () => { const st = digMultStrat(); digMult()._strat = st; return Math.max(0.35, digMult().getNext(st)); },
   // the user's own Auto-panel settings (cooldown in ticks, stop after N trades)
   autoSettings: () => ({
     cooldown: Math.max(0, parseInt(($("digAutoCooldown") || {}).value || "0", 10) || 0),
@@ -30415,16 +30427,26 @@ function digPlaceTrade(digit, source, opts){
   return true;
 }
 
+let digPnlResetAt = 0;
+function digSetMultN(v){ if (typeof setMartingaleX === "function") setMartingaleX(v); }
+function digResetSessionPnl(){ digPnlResetAt = Date.now(); digRenderTrades(); }
+function digRenderSessionPnl(net, any){
+  const el = $("digSessionPnl"); if (!el) return;
+  el.textContent = any ? (net>=0?"+":"\u2212") + Math.abs(net).toFixed(2) + " " + gridCurrency : "\u2014";
+  el.style.color = !any || net === 0 ? "var(--muted)" : net > 0 ? "var(--up)" : "var(--down)";
+}
 function digRenderTrades(){
   const body = $("digTradeBody");
   if (!body) return;
   if (!digTrades.length){
     body.innerHTML = '<tr><td colspan="9" class="sig-empty">No trades yet.</td></tr>';
     gridSet("digPnL", "—");
+    digRenderSessionPnl(0, false);
     return;
   }
   let net = 0, any = false;
-  digTrades.forEach(t => { if (t.pnl != null && (t.status==="won"||t.status==="lost")){ net += t.pnl; any = true; } });
+  digTrades.forEach(t => { if (t.pnl != null && (t.status==="won"||t.status==="lost") && t.time*1000 >= digPnlResetAt){ net += t.pnl; any = true; } });
+  digRenderSessionPnl(net, any);
   const dec = decimals;
   body.innerHTML = digTrades.map(t => {
     const pnlCls = t.pnl == null ? "cell-mut" : t.pnl >= 0 ? "cell-pos" : "cell-neg";
@@ -30456,7 +30478,7 @@ function digToggleAuto(){
     digAutoArmed = true;
     digAutoCount = 0;
     digAutoLastAt = 0;
-    $("digAutoLabel").textContent = "Auto: ON";
+    $("digAutoLabel").textContent = "Automated Match: ON";
     gridSet("digAutoStatus", "Armed — watching for prediction threshold…");
   } else {
     digDisarmAuto("turned off");
@@ -30465,7 +30487,7 @@ function digToggleAuto(){
 function digDisarmAuto(reason){
   digAutoArmed = false;
   const t = $("digAutoArm"); if (t) t.checked = false;
-  const l = $("digAutoLabel"); if (l) l.textContent = "Auto: OFF";
+  const l = $("digAutoLabel"); if (l) l.textContent = "Automated Match: OFF";
   gridSet("digAutoStatus", "Disarmed" + (reason ? " — " + reason + "." : "."));
 }
 
@@ -30702,7 +30724,7 @@ function chartRenderAll(){
 // base on a WIN, Reverse Martingale -> base on a LOSS) — that logic is
 // unchanged, only the ×N step size is now user-controlled instead of
 // hardcoded to ×2, and constrained to exactly the requested range.
-const MARTINGALE_MIN = 1.00, MARTINGALE_MAX = 5.00;
+const MARTINGALE_MIN = 1.00, MARTINGALE_MAX = 10.00;
 let MARTINGALE_X = (function(){
   try { const v = parseFloat(localStorage.getItem('mfx_martingale_x')); if (v>=MARTINGALE_MIN && v<=MARTINGALE_MAX) return v; } catch(_){}
   return 2.00;
@@ -30715,8 +30737,10 @@ function setMartingaleX(v){
   const n = Number.isFinite(parsed) ? Math.max(MARTINGALE_MIN, Math.min(MARTINGALE_MAX, parsed)) : MARTINGALE_X;
   MARTINGALE_X = Math.round(n * 100) / 100; // keep exactly 2 decimal places, matching the 0.01 step
   try { localStorage.setItem('mfx_martingale_x', String(MARTINGALE_X)); } catch(_){}
-  const el = document.getElementById('martingaleXInput');
-  if (el && parseFloat(el.value) !== MARTINGALE_X) el.value = MARTINGALE_X.toFixed(2);
+  ['martingaleXInput','digMultN'].forEach(id => {
+    const el = document.getElementById(id);
+    if (el && id !== (document.activeElement && document.activeElement.id) && parseFloat(el.value) !== MARTINGALE_X) el.value = MARTINGALE_X.toFixed(2);
+  });
 }
 
 function makeMultiplier(getStakeEl){
@@ -32858,7 +32882,7 @@ try {
   connect();
 
   // Reflect the persisted Martingale multiplier in the input on load
-  { const mxEl = $("martingaleXInput"); if (mxEl) mxEl.value = MARTINGALE_X.toFixed(2); }
+  { ["martingaleXInput","digMultN"].forEach(id => { const mxEl = $(id); if (mxEl) mxEl.value = MARTINGALE_X.toFixed(2); }); }
 
   // If Deriv just redirected back here with ?code=&state=, finish the login.
   // gridSessionAuth.js is a <script type="module"> loaded after this classic
@@ -33248,7 +33272,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=22"></script>
-<script type="module" src="src/ldpe/bridge.js?v=5"></script>
+<script type="module" src="src/ldpe/bridge.js?v=6"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>
 <script type="module" src="src/trading/gridSetHelper.js"></script>
