@@ -30755,7 +30755,7 @@ function makeMultiplier(getStakeEl){
     switch(strat){
       case 'martingale':    return w?b:Math.max(0.35,p*MARTINGALE_X);
       case 'anti_martin':  return w?Math.max(0.35,p*MARTINGALE_X):b;
-      case 'dalembert':    return w?Math.max(0.35,p-u):p+u;
+      case 'dalembert':    return w?b:p+u;
       case 'anti_dalem':   return w?p+u:Math.max(0.35,p-u);
       case 'oscar':{
         if(!w) return p;
