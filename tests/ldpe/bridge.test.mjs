@@ -247,3 +247,20 @@ test("panel: Demo/Real and Stop controls exist; removed controls and rules do no
   const all = html.slice(start, start + 6000) + bridge;
   assert.ok(!/KILL SWITCH|ldpeKill|ldpeResume|ldpeProbe|ldpeAlign|Settlement alignment|settlement probe|provisional|unverified|daily loss|consecutive loss|open contracts/i.test(all));
 });
+
+test("panel hides LDPE explanatory and diagnostics text while retaining the forecast display and calculations", () => {
+  const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+  const bridge = readFileSync(new URL("../../src/ldpe/bridge.js", import.meta.url), "utf8");
+  const card = html.slice(html.indexOf('id="ldpeCard"'), html.indexOf('id="ldpeCard"') + 6000);
+  assert.match(card, /class="dig-sub" hidden aria-hidden="true"/);
+  for (const id of ["ldpeFeed", "ldpePred", "ldpeDist", "ldpeMetrics", "ldpeDiag"]) {
+    assert.match(card, new RegExp(`<div id="${id}"[^>]*(?:display:none|hidden)[^>]*>`), id);
+  }
+  assert.match(card, /<details hidden aria-hidden="true"><summary>Execution log/);
+  assert.match(html, /<div class="dig-card" hidden aria-hidden="true">\s*<h2>Digit statistics<\/h2>/);
+  assert.match(html, /id="digForecastBox"/);
+  assert.match(html, /id="digCircleGrid"/);
+  assert.match(bridge, /engine\.mutualInfo\(sym\)/);
+  assert.match(bridge, /engine\.metrics\(sym, engine\.cfg\.horizon\)/);
+  assert.match(bridge, /engine\.conditionalStats\(sym\)/);
+});

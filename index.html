@@ -1228,12 +1228,12 @@ table.an-table tbody tr:last-child td{border-bottom:none}
 
     <div class="dig-card" id="ldpeCard">
       <h2>🎲 LDPE: Last-Digit Prediction Engine — <span id="digMarket">—</span></h2>
-      <div class="dig-sub">Forecasts the last digit of the tick on which a Matches contract settles, scores every forecast against its own target tick, and trades on the account chosen with the Demo | Real switch when the configured trigger is met. Arm <b>Auto</b> below to execute; the Stop switch pauses automatic trading while forecasts continue. Crossing the trigger is an operational threshold, not proof of predictive advantage.</div>
-      <div id="ldpeFeed" class="cell-mut" style="margin-bottom:8px"></div>
-      <div id="ldpePred" style="margin-bottom:10px">Waiting for ticks…</div>
-      <div id="ldpeDist" style="margin-bottom:10px"></div>
-      <div id="ldpeMetrics" class="cell-mut" style="margin-bottom:10px"></div>
-      <div id="ldpeDiag" class="cell-mut" style="margin-bottom:10px"></div>
+      <div class="dig-sub" hidden aria-hidden="true">Forecasts the last digit of the tick on which a Matches contract settles, scores every forecast against its own target tick, and trades on the account chosen with the Demo | Real switch when the configured trigger is met. Arm <b>Auto</b> below to execute; the Stop switch pauses automatic trading while forecasts continue. Crossing the trigger is an operational threshold, not proof of predictive advantage.</div>
+      <div id="ldpeFeed" class="cell-mut" style="display:none" hidden aria-hidden="true"></div>
+      <div id="ldpePred" style="display:none" hidden aria-hidden="true">Waiting for ticks…</div>
+      <div id="ldpeDist" style="display:none" hidden aria-hidden="true"></div>
+      <div id="ldpeMetrics" class="cell-mut" style="display:none" hidden aria-hidden="true"></div>
+      <div id="ldpeDiag" class="cell-mut" style="display:none" hidden aria-hidden="true"></div>
       <div id="ldpeExec" class="cell-mut" style="margin-bottom:6px"></div>
       <div id="ldpeExecStatus" class="cell-mut" style="margin-bottom:10px"></div>
       <div class="gc-row" style="margin-bottom:10px;align-items:center">
@@ -1249,12 +1249,12 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       <details open><summary>Forecast history (scored against own target tick)</summary>
         <table class="sig-table"><thead><tr><th class="l">Forecast</th><th>Digit</th><th>p</th><th>Decision</th><th>Target #</th><th>Realized</th><th>Result</th><th>LL / uniform LL</th></tr></thead><tbody id="ldpeHist"></tbody></table>
       </details>
-      <details><summary>Execution log (operations only — never used for learning)</summary>
+      <details hidden aria-hidden="true"><summary>Execution log (operations only — never used for learning)</summary>
         <table class="sig-table"><thead><tr><th class="l">Time</th><th>Acct</th><th>Digit</th><th>Stake</th><th>Contract</th><th>Target #</th><th>Result</th></tr></thead><tbody id="ldpeExecLog"></tbody></table>
       </details>
     </div>
 
-    <div class="dig-card">
+    <div class="dig-card" hidden aria-hidden="true">
       <h2>Digit statistics</h2>
       <div class="dig-sub">
         Tracks the <b>last digit</b> (0–9) of every tick price in real time. Uses frequency deviation, gap analysis, a Markov transition matrix and a chi-square uniformity test to build a composite prediction score for each digit. Click any digit to place a manual <b>Matches</b> trade, or arm auto-execution to fire when the prediction engine's confidence exceeds your threshold.
