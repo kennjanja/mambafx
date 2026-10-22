@@ -13,8 +13,9 @@ function mulberry32(a) { return () => { a |= 0; a = (a + 0x6D2B79F5) | 0; let t 
 class Storage { constructor() { this.m = new Map(); } getItem(k) { return this.m.has(k) ? this.m.get(k) : null; } setItem(k, v) { this.m.set(k, String(v)); } removeItem(k) { this.m.delete(k); } }
 
 let n = 0;
-async function page({ storage = new Storage(), demo = true, armed = false } = {}) {
-  const sent = [], pending = {};
+function warmThenArm(p){ p.host.digAutoArmed = false; p.tick(130); p.L.engine.cfg.minProbability = 0.0001; }
+async function page({ storage = new Storage(), demo = true, armed = false, select } = {}) {
+  const sent = [], pending = {}, selected = [], noted = [];
   let reqId = 9000;
   globalThis.WebSocket = { OPEN: 1 };
   const ws = { readyState: 1, send: (s) => sent.push(JSON.parse(s)) };
@@ -23,16 +24,19 @@ async function page({ storage = new Storage(), demo = true, armed = false } = {}
     digAutoArmed: armed, digTrades: [], openContracts: {}, symbol: "S",
     nextReqId: () => ++reqId, awaitReq: (id, cb) => { pending[id] = cb; }, renderTrades() {}, disarm() {},
     placeTrade: () => false,
+    autoSettings: () => ({ cooldown: 0, max: 0, count: 0 }),
+    noteAutoOrder: () => noted.push(1),
+    selectAccountType: async (t) => { selected.push(t); return select ? select(t) : { ok: true }; },
   };
   const win = { __ldpeHost: hostObj, addEventListener() {} };
   globalThis.window = win; globalThis.localStorage = storage;
   globalThis.document = { getElementById: () => null, addEventListener() {}, readyState: "complete", visibilityState: "visible" };
-  const mod = await import(`../../src/ldpe/bridge.js?inst=${++n}`);
+  await import(`../../src/ldpe/bridge.js?inst=${++n}`);
   const L = win.LDPE;
   const rng = mulberry32(7 + n);
-  let epoch = 1_700_000_000, seq = 0;
-  const api = {
-    L, host: hostObj, sent, pending, storage,
+  let epoch = 1_700_000_000;
+  return {
+    L, host: hostObj, sent, pending, storage, selected, noted,
     tick(count = 1) {
       for (let i = 0; i < count; i++) { epoch++; const q = (1000 + Math.floor(rng() * 100000) / 100).toFixed(2); L.ingest("S", q, 2, epoch); }
     },
@@ -43,10 +47,8 @@ async function page({ storage = new Storage(), demo = true, armed = false } = {}
       const m = idx[0]; const cb = pending[m.req_id]; assert.ok(cb); delete pending[m.req_id]; cb(body, null);
     },
   };
-  return api;
 }
 
-async function warm(p) { p.tick(L_WARM); }
 const L_WARM = 130;
 
 test("bridge loads, ingests and exposes Tier 1 diagnostics from the live service", async () => {
@@ -57,90 +59,108 @@ test("bridge loads, ingests and exposes Tier 1 diagnostics from the live service
   assert.ok(e.mutualInfo("S").status);
   assert.ok(e.calibrationStatus("S").needed > 0);
   assert.ok("active" in e.breakStatus("S"));
-  const cs = e.conditionalStats("S");
-  assert.equal(cs.gaps.length, 10);
+  assert.equal(e.conditionalStats("S").gaps.length, 10);
 });
 
-test("auto execution is blocked while settlement alignment is unresolved (no proposal is ever sent)", async () => {
+test("settings: only user trade controls remain; removed rule keys are not persisted", async () => {
+  const storage = new Storage();
+  storage.setItem("ldpe_settings_v1", JSON.stringify({ k: 5, dailyLoss: 5, maxConsec: 3, maxStake: 2, probeCount: 5 }));
+  const p = await page({ storage });
+  for (const key of ["dailyLoss", "maxConsec", "maxStake", "probeCount"]) assert.ok(!(key in p.L.settings), key);
+  assert.equal(p.L.settings.stake, 2, "legacy maxStake migrates to the stake setting");
+  p.L.setSetting("stake", 1.5);
+  const saved = JSON.parse(storage.getItem("ldpe_settings_v1"));
+  assert.equal(saved.stake, 1.5);
+  assert.ok(!("dailyLoss" in saved) && !("maxConsec" in saved));
+});
+
+test("auto trading sends orders through the executor on the selected Demo account", async () => {
   const p = await page({ armed: true });
   p.tick(L_WARM);
-  // force TRADE decisions so only the alignment gate can stop the order
   p.L.engine.cfg.minProbability = 0.0001;
   p.tick(30);
+  assert.ok(p.sent.filter(m => m.proposal).length >= 1);
+  assert.ok([...p.L.executor.orders.values()].every(o => o.isVirtual === true));
+  assert.ok(p.noted.length >= 1);
+});
+
+test("Stop switch halts automatic orders while forecasts continue to be scored; toggle re-arms", async () => {
+  const p = await page({ armed: true });
+  warmThenArm(p); p.host.digAutoArmed = true;
+  p.L.setStopped(true);
+  const scoredBefore = p.L.engine.state("S").forecasts.filter(f => f.status === "scored").length;
+  p.tick(40);
   assert.equal(p.sent.filter(m => m.proposal).length, 0);
-  assert.equal(p.L.alignmentStatus("S").state, "unresolved");
-  assert.match(p.L.executor.log.join("|"), /alignment unresolved/);
+  assert.ok(p.L.engine.state("S").forecasts.filter(f => f.status === "scored").length > scoredBefore);
+  assert.equal(JSON.parse(p.storage.getItem("ldpe_settings_v1")).stopped, true);
+  p.L.toggleStop();
+  assert.equal(p.L.executor.stopped, false);
+  p.tick(30);
+  assert.ok(p.sent.filter(m => m.proposal).length >= 1);
 });
 
-test("probe is Demo-only: a Real account is refused before any message", async () => {
-  const p = await page({ demo: false });
-  p.tick(L_WARM);
-  p.L.startProbe();
-  p.tick(5);
+test("user cooldown and stop-after-N are honoured as ordinary settings", async () => {
+  const p = await page({ armed: true });
+  warmThenArm(p); p.host.digAutoArmed = true;
+  p.host.autoSettings = () => ({ cooldown: 0, max: 1, count: 1 });
+  p.tick(20);
   assert.equal(p.sent.filter(m => m.proposal).length, 0);
 });
 
-test("Demo probe: only the executor places orders, one open per symbol, and 5 clean aligned contracts verify the config", async () => {
-  const p = await page();
+test("Demo | Real switch: Real routes to the page's account flow; a failed switch never falls back", async () => {
+  const p = await page({ demo: true, select: (t) => (t === "real" ? { ok: false, error: "no real account on this Deriv login" } : { ok: true }) });
+  await p.L.setAccountType("real");
+  assert.deepEqual(p.selected, ["real"]);
+  assert.equal(p.L.executor.accountType, "real");
+  assert.equal(p.L.settings.accountType, "real");
+  p.host.digAutoArmed = true;
   p.tick(L_WARM);
-  const K = p.L.settings.k;
-  p.L.settings.probeCount = 5; p.L.startProbe();
-  const verifyOne = () => {
-    p.tick(1);                                                    // fresh forecast
-    const f = p.L.latestFor("S");
-    const before = p.sent.filter(m => m.proposal).length;
-    // the probe was sent synchronously on the tick; answer it before another tick arrives
-    const props = p.sent.filter(m => m.proposal);
-    assert.equal(props.length, before);
-    return f;
-  };
-  let settled = 0;
-  for (let attempt = 0; attempt < 40 && settled < 5; attempt++) {
-    p.tick(1);
-    const f = p.L.latestFor("S");
-    const proposals = p.sent.filter(m => m.proposal);
-    const last = proposals[proposals.length - 1];
-    if (!last || p.L.executor.openCount("S") !== 1) continue;
-    const order = [...p.L.executor.orders.values()].find(o => o.state === "pricing");
-    if (!order) continue;
-    assert.equal(order.isVirtual, true); assert.equal(order.mode, "probe");
-    p.respond("proposal", { id: "p" + attempt, ask_price: 0.35 });
-    p.respond("buy", { contract_id: "C" + attempt, buy_price: 0.35, purchase_time: p.epochNow() });
-    // a second concurrent attempt on the same symbol must be refused by the executor
-    const second = p.L.executor.place({ symbol: "S", digit: 1, k: K, contractType: "DIGITMATCH", stake: 0.35, forecast: { ...f, id: f.id + "x" }, mode: "probe" });
-    assert.equal(second.ok, false);
-    // contract: entry = next tick, exit = entry + (K-1) ticks (the hypothesis the ledger measures)
-    const entryEpoch = p.epochNow() + 1, exitEpoch = entryEpoch + (K - 1);
-    p.tick(K);
-    p.L.onContractUpdate({ contract_id: "C" + attempt, purchase_time: p.epochNow() - K, entry_tick_time: entryEpoch, exit_tick_time: exitEpoch, is_sold: 1, profit: -0.35 });
-    settled++;
-  }
-  assert.equal(settled, 5, p.L.executor.log.slice(-4).join(" | ") + " ids:" + [...p.L.executor.orderedForecasts].join(",") + " now:" + p.L.latestFor("S").id);
-  const st = p.L.alignmentStatus("S");
-  assert.equal(st.state, "verified", JSON.stringify(st));
-  assert.equal(st.horizon, K);
+  p.L.engine.cfg.minProbability = 0.0001;
+  p.tick(30);
+  assert.equal(p.sent.filter(m => m.proposal).length, 0, "still connected as Demo: no order on Demo");
+  assert.match(p.L.executor.log.join("|"), /Real account selected, but the connected account is Demo/);
+  await p.L.setAccountType("demo");
+  assert.deepEqual(p.selected, ["real", "demo"]);
 });
 
-test("a settlement update that arrives before the exit tick is deferred, then evaluated exactly once", async () => {
-  const p = await page();
-  p.tick(L_WARM);
-  p.L.startProbe();
+test("Demo | Real switch persists across reload; Real trades only when connected as Real", async () => {
+  const storage = new Storage();
+  const a = await page({ storage, demo: false });
+  await a.L.setAccountType("real");
+  const b = await page({ storage, demo: false, armed: true });
+  assert.equal(b.L.executor.accountType, "real");
+  b.tick(L_WARM); b.L.engine.cfg.minProbability = 0.0001; b.tick(30);
+  const o = [...b.L.executor.orders.values()];
+  assert.ok(o.length >= 1); assert.ok(o.every(x => x.isVirtual === false && x.accountId === "CR1"));
+});
+
+test("a settlement update is applied once; duplicates are ignored", async () => {
+  const p = await page({ armed: true });
+  p.tick(L_WARM); p.L.engine.cfg.minProbability = 0.0001;
   let order;
-  for (let i = 0; i < 20 && !order; i++) { p.tick(1); order = [...p.L.executor.orders.values()].find(o => o.state === "pricing"); }
+  for (let i = 0; i < 30 && !order; i++) { p.tick(1); order = [...p.L.executor.orders.values()].find(o => o.state === "pricing"); }
   assert.ok(order);
   p.respond("proposal", { id: "p", ask_price: 0.35 });
   p.respond("buy", { contract_id: "D1", buy_price: 0.35, purchase_time: p.epochNow() });
-  const K = p.L.settings.k, entry = p.epochNow() + 1, exit = entry + K - 1;
-  p.tick(K - 1);                                                  // exit tick not here yet
-  const upd = { contract_id: "D1", purchase_time: p.epochNow() - K + 1, entry_tick_time: entry, exit_tick_time: exit, is_sold: 1, profit: 1 };
-  p.L.onContractUpdate(upd);
-  assert.equal(order.alignment, null);
-  p.tick(1);                                                      // exit tick arrives
-  assert.ok(order.alignment && order.alignment.resolved, JSON.stringify(order.alignment));
-  const cfg = p.L.alignment.cfgs[`DIGITMATCH|${K}|S`];
-  p.L.onContractUpdate(upd);                                      // duplicate event
-  p.tick(3);
-  assert.equal(cfg.evidence.length, 1);
+  const upd = { contract_id: "D1", is_sold: 1, profit: 1 };
+  assert.equal(p.L.onContractUpdate(upd).settled, true);
+  assert.equal(p.L.onContractUpdate(upd).duplicate, true);
+});
+
+test("transition statistics are still computed and persisted while the matrix panel is hidden", async () => {
+  const storage = new Storage();
+  const p = await page({ storage });
+  p.tick(L_WARM);
+  const st = p.L.engine.state("S");
+  assert.ok(st.trans1 && st.trans2, "engine keeps first/second order transition counts");
+  const total = (m) => JSON.stringify(m).match(/\d+(\.\d+)?/g).reduce((s, x) => s + Number(x), 0);
+  assert.ok(total(st.trans1) > 0);
+  p.L.saveState(true);
+  assert.match([...storage.m.values()].join(""), /trans1/);
+  const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+  assert.match(html, /Transition matrix: hidden from the UI[\s\S]{0,200}display:none/);
+  assert.match(html, /id="digTmBody"/);
+  assert.match(html, /digTransitions\[/);
 });
 
 test("persistence: reload restores ticks, warm-up and pending forecasts and holds live ticks for backfill", async () => {
@@ -179,7 +199,7 @@ test("backfill after reload scores pending forecasts on real intermediate ticks,
   const ids = stB.forecasts.filter(f => pend.includes(f.id));
   assert.equal(ids.length, new Set(ids.map(f => f.id)).size);
   assert.ok(ids.every(f => f.status === "scored"));
-  b.L.backfill("S", prices, times, 2);                           // duplicate history: nothing re-scored
+  b.L.backfill("S", prices, times, 2);
   assert.equal(b.L.engine.state("S").forecasts.filter(f => pend.includes(f.id)).length, ids.length);
 });
 
@@ -193,21 +213,18 @@ test("history with no overlap records a hole and marks pending forecasts unscora
   assert.ok(b.L.engine.state("S").forecasts.some(f => f.status === "unscorable"));
 });
 
-test("reconnect: an order in flight is never silently resent; the kill switch engages for unconfirmed purchases", async () => {
-  const p = await page();
-  p.tick(L_WARM);
-  p.L.startProbe();
+test("reconnect: an order in flight is never silently resent", async () => {
+  const p = await page({ armed: true });
+  warmThenArm(p); p.host.digAutoArmed = true;
   let order;
-  for (let i = 0; i < 20 && !order; i++) { p.tick(1); order = [...p.L.executor.orders.values()].find(o => o.state === "pricing"); }
+  for (let i = 0; i < 30 && !order; i++) { p.tick(1); order = [...p.L.executor.orders.values()].find(o => o.state === "pricing"); }
   p.respond("proposal", { id: "p", ask_price: 0.35 });
   assert.equal(order.state, "buying");
   const buys = p.sent.filter(m => m.buy).length;
   p.L.onDisconnect();
   assert.equal(order.state, "unknown");
-  assert.equal(p.L.executor.killed, true);
   p.tick(5);
   assert.equal(p.sent.filter(m => m.buy).length, buys);
-  assert.equal(p.sent.filter(m => m.proposal).length, 1);
 });
 
 test("page wiring: digPlaceTrade refuses LDPE orders and the host exposes no second order path", () => {
@@ -220,4 +237,13 @@ test("page wiring: digPlaceTrade refuses LDPE orders and the host exposes no sec
   assert.match(html, /window\.LDPE\.onContractUpdate\(c\)/);
   assert.match(html, /window\.LDPE\.onDisconnect\(\)/);
   assert.match(html, /window\.LDPE\.backfill\(/);
+});
+
+test("panel: Demo/Real and Stop controls exist; removed controls and rules do not appear in UI or bridge", () => {
+  const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+  const bridge = readFileSync(new URL("../../src/ldpe/bridge.js", import.meta.url), "utf8");
+  for (const id of ["ldpeAcctDemo", "ldpeAcctReal", "ldpeStop"]) { assert.ok(html.includes(`id="${id}"`), id); assert.ok(bridge.includes(id), id); }
+  const start = html.indexOf('id="ldpeCard"');
+  const all = html.slice(start, start + 6000) + bridge;
+  assert.ok(!/KILL SWITCH|ldpeKill|ldpeResume|ldpeProbe|ldpeAlign|Settlement alignment|settlement probe|provisional|unverified|daily loss|consecutive loss|open contracts/i.test(all));
 });

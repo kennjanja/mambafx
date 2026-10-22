@@ -2,7 +2,7 @@
 // It owns no WebSocket. ALL LDPE orders go through exec.js's Executor; the page's digPlaceTrade
 // refuses source "ldpe", so no second execution path exists.
 import { Ldpe, DEFAULTS, entropyBits } from "./engine.js";
-import { Executor, AlignmentLedger, configKey, MIN_CLEAN_EVIDENCE } from "./exec.js";
+import { Executor } from "./exec.js";
 import { StateStore, snapshotEngine, restoreEngine } from "./persist.js";
 
 const LS_CFG = "ldpe_settings_v1", LS_EXEC = "ldpe_exec_v1";
@@ -17,10 +17,7 @@ const FIELDS = [
   ["minProbability", "Min probability (0-1)", 0.12, 0.01, 0.5, 0.005],
   ["k", "Contract duration k (ticks)", 5, 1, 10, 1],
   ["minTicks", "Warm-up ticks (minTicks)", 100, 10, 5000, 10],
-  ["maxStake", "Max stake", 10, 0.35, 1000, 0.5],
-  ["dailyLoss", "Daily loss limit", 20, 0, 100000, 1],
-  ["maxConsec", "Max consecutive losses", 5, 1, 100, 1],
-  ["probeCount", "Demo probe contracts", 5, 1, 50, 1],
+  ["stake", "Stake per trade", 1, 0.35, 100000, 0.5],
   ["alpha", "Dirichlet alpha", 1, 0.01, 50, 0.1],
   ["shortWindow", "Short window", 50, 10, 1000, 10],
   ["longWindow", "Long window", 1000, 100, 10000, 100],
@@ -31,16 +28,16 @@ const FIELDS = [
 ];
 
 const saved = load(LS_CFG, {});
-const settings = { triggerSource: "ensemble", ...Object.fromEntries(FIELDS.map(f => [f[0], f[2]])), ...saved };
-const alignment = new AlignmentLedger();
+// Only the current settings are kept; the earlier stake field is carried over, nothing else is.
+const settings = {
+  triggerSource: "ensemble", accountType: "demo", stopped: false,
+  ...Object.fromEntries(FIELDS.map(f => [f[0], f[2]])),
+  ...(saved.maxStake != null && saved.stake == null ? { stake: saved.maxStake } : {}),
+};
+for (const k of [...FIELDS.map(f => f[0]), "triggerSource", "accountType", "stopped"]) if (saved[k] !== undefined) settings[k] = saved[k];
+if (settings.accountType !== "real") settings.accountType = "demo";
 
-// The horizon is provisional (= k) until settlement alignment for this exact configuration is verified.
-const keyFor = (sym = H().symbol) => configKey(CONTRACT, settings.k, sym);
-function alignStatus(sym) { return alignment.status(keyFor(sym)); }
-function effectiveHorizon() {
-  const s = alignStatus();
-  return s.state === "verified" ? s.horizon : Math.min(10, Math.max(1, settings.k));
-}
+const effectiveHorizon = () => Math.min(10, Math.max(1, settings.k));
 const engineCfg = () => ({
   ...DEFAULTS,
   horizon: effectiveHorizon(),
@@ -61,8 +58,7 @@ let engine;
 
 let latest = {};          // symbol -> last forecast
 let ticksSinceSave = 0, lastSave = 0;
-let armedLock = false;    // account locked for the current arming session
-let probe = { remaining: 0, placed: 0 };
+const lastAutoSeq = {};   // symbol -> engine seq of the last automatic order (user cooldown)
 let execMsg = "";
 const rows = new Map();   // order id -> page trade row
 
@@ -78,10 +74,7 @@ const host = {
   currentSeq: (sym) => engine.state(sym).seq,
   now: () => Date.now(),
 };
-const executor = new Executor(host, {
-  alignment, getEngine: () => engine,
-  limits: { maxOpen: 1, maxStake: settings.maxStake, dailyLoss: settings.dailyLoss, maxConsec: settings.maxConsec },
-});
+const executor = new Executor(host, { accountType: settings.accountType, stopped: settings.stopped });
 executor.restore(load(LS_EXEC, null));
 const persistExec = () => save(LS_EXEC, executor.serialize());
 
@@ -105,7 +98,7 @@ executor.on((order, ev) => {
     else if (order.state === "settled") row.status = order.result;
     else row.status = STATUS_TEXT[order.state] || order.state;
   }
-  if (order.state === "open" && order.mode === "probe" && ev === "open") { probe.placed++; probe.remaining = Math.max(0, probe.remaining - 1); }
+  if (order.state === "rejected" && ev === "rejected") execMsg = `Order rejected on ${order.isVirtual ? "Demo" : "Real"} ${order.accountId}: ${order.reason}`;
   if (H().renderTrades) H().renderTrades();
   persistExec();
   api.render();
@@ -115,7 +108,6 @@ function syncHorizon() {
   const h = effectiveHorizon();
   if (engine.cfg.horizon !== h) engine.cfg.horizon = h;
 }
-function limitsFromSettings() { executor.limitsUpdate({ maxStake: settings.maxStake, dailyLoss: settings.dailyLoss, maxConsec: settings.maxConsec }); }
 
 function rebuild() {
   const old = engine; engine = new Ldpe(engineCfg());
@@ -132,7 +124,7 @@ function saveState(force) {
 const releaseTimers = {};
 
 const api = {
-  settings, FIELDS, executor, alignment,
+  settings, FIELDS, executor,
   get engine() { return engine; },
   latestFor: (s) => latest[s],
 
@@ -141,7 +133,6 @@ const api = {
     const r = engine.ingest(symbol, { epoch, quote: rawQuote, decimals, recv: Date.now() });
     if (r.accepted) {
       syncHorizon();
-      executor.retryAlignment();
       if (r.forecast) { latest[symbol] = r.forecast; api.maybeTrade(symbol, r.forecast); }
       if (++ticksSinceSave >= 20) saveState(false);
     }
@@ -167,33 +158,18 @@ const api = {
   },
   discontinuity(symbol) { engine.markDiscontinuity(symbol); },
 
-  // Auto trading: only through the executor, only on a TRADE decision, only for a verified configuration.
+  // Automatic trading: only through the executor, only on a TRADE decision, only while Auto is armed
+  // and the Stop switch is off. Cooldown and stop-after-N are the user's own settings (Auto panel).
   maybeTrade(symbol, f) {
-    const armed = !!H().digAutoArmed;
-    if (!armed) { if (armedLock) { executor.unlockAccount(); armedLock = false; } }
-    if (probe.remaining > 0) return api.maybeProbe(symbol, f);
-    if (!armed || f.decision !== "TRADE") return;
-    if (!armedLock) { executor.lockAccount(host.account()); armedLock = true; }
-    const r = executor.place({ symbol, digit: f.predictedDigit, k: settings.k, contractType: CONTRACT, stake: settings.maxStake, forecast: f, mode: "auto" });
-    execMsg = r.ok ? `Order sent: Matches ${f.predictedDigit} (p=${(f.probability * 100).toFixed(1)}%, ${f.id})` : "Not executing: " + r.reason;
+    if (!H().digAutoArmed || executor.stopped || f.decision !== "TRADE" || f.reconstructed) return;
+    const u = H().autoSettings ? H().autoSettings() : { cooldown: 0, max: 0, count: 0 };
+    const seq = engine.state(symbol).seq;
+    if (u.max && u.count >= u.max) return;
+    if (u.cooldown && lastAutoSeq[symbol] != null && seq - lastAutoSeq[symbol] < u.cooldown) return;
+    const r = executor.place({ symbol, digit: f.predictedDigit, k: settings.k, contractType: CONTRACT, stake: settings.stake, forecast: f });
+    if (r.ok) { lastAutoSeq[symbol] = seq; if (H().noteAutoOrder) H().noteAutoOrder(); }
+    execMsg = r.ok ? `Order sent on ${executor.accountType === "demo" ? "Demo" : "Real"}: Matches ${f.predictedDigit} (p=${(f.probability * 100).toFixed(1)}%, ${f.id})` : "Not executing: " + r.reason;
   },
-
-  // Demo-only settlement-alignment probe: observation, not a strategy and not evidence of skill.
-  maybeProbe(symbol, f) {
-    if (f.reconstructed || f.status !== "pending") return;
-    const r = executor.place({ symbol, digit: f.predictedDigit, k: settings.k, contractType: CONTRACT, stake: 0.35, forecast: f, mode: "probe" });
-    if (!r.ok && /Demo-only|not connected|account changed|kill/.test(r.reason)) { probe.remaining = 0; execMsg = "Probe stopped: " + r.reason; }
-    else if (r.ok) execMsg = `Probe order sent (${probe.placed + 1}/${probe.placed + probe.remaining}) on ${f.id}`;
-  },
-  startProbe() {
-    const a = host.account();
-    if (!a.authed) { execMsg = "Probe needs a logged-in Demo account on the Trading Grid page."; api.render(); return; }
-    if (!a.isVirtual) { execMsg = "Probe refused: the selected account is not a Demo account."; api.render(); return; }
-    probe = { remaining: settings.probeCount, placed: 0 };
-    execMsg = `Probe started: ${probe.remaining} Demo contract(s), one per fresh forecast.`;
-    api.render();
-  },
-  stopProbe() { probe.remaining = 0; execMsg = "Probe stopped."; api.render(); },
 
   // Trading socket events forwarded by the page.
   onContractUpdate(c) { return executor.onContractUpdate(c); },
@@ -203,12 +179,33 @@ const api = {
   setSetting(key, val) {
     settings[key] = val; save(LS_CFG, settings);
     if (key === "k") { const d = $("digDuration"); if (d) d.value = settings.k; }
-    limitsFromSettings();
-    rebuild(); api.render();
+    if (key !== "stake") rebuild();
+    api.render();
   },
-  kill() { executor.kill("kill switch"); probe.remaining = 0; if (H().disarm) H().disarm("LDPE kill switch"); api.render(); },
-  resume() { executor.resume(); api.render(); },
-  alignmentStatus: alignStatus,
+
+  // Demo | Real: selects the account LDPE trades on, through the page's existing account flow.
+  // Never falls back to the other account: a failure is shown as the actual error.
+  async setAccountType(type) {
+    const t = type === "real" ? "real" : "demo";
+    settings.accountType = t; save(LS_CFG, settings);
+    executor.setAccountType(t);
+    execMsg = `${t === "demo" ? "Demo" : "Real"} account selected.`;
+    api.render();
+    try {
+      const r = H().selectAccountType ? await H().selectAccountType(t) : { ok: false, error: "account selection is unavailable" };
+      if (r && r.ok === false) execMsg = `Cannot use the ${t} account: ${r.error}`;
+      else if (r && r.switching) execMsg = `Switching to the ${t} account ${r.accountId || ""}… re-arm Auto after it connects.`;
+    } catch (e) { execMsg = `Cannot use the ${t} account: ${e && e.message ? e.message : e}`; }
+    api.render();
+  },
+
+  // Stop switch: no automatic trades while stopped; forecasts keep being generated and scored.
+  setStopped(b) {
+    executor.setStopped(b); settings.stopped = !!b; save(LS_CFG, settings);
+    execMsg = executor.stopped ? "Automatic trading stopped. Forecasts continue." : "Automatic trading re-armed.";
+    api.render();
+  },
+  toggleStop() { api.setStopped(!executor.stopped); },
   saveState,
 
   // Last-resort operator action for an order whose purchase could not be confirmed.
@@ -230,7 +227,7 @@ const api = {
     else {
       const cls = f.decision === "TRADE" ? "cell-pos" : "cell-mut";
       set("ldpePred", `<b style="font-size:22px">${f.predictedDigit}</b> &nbsp; p=${(f.probability * 100).toFixed(2)}% &nbsp; <span class="${cls}"><b>${f.decision}</b>${f.reason ? " (" + esc(f.reason) + ")" : ""}</span>` +
-        `<div class="cell-mut">horizon ${f.horizon} ticks (${alignStatus(sym).state === "verified" ? "verified" : "provisional, unverified"}) · target #${f.targetSeq} · threshold ${(f.minProbability * 100).toFixed(1)}% on ${f.triggerSource} · ${wu.isWarmingUp ? "warm-up: " + wu.remaining + " ticks left" : "warm-up complete"} · calibration: ${esc(f.calibrationStatus)} · structural break: ${f.structuralBreak ? "<b>ACTIVE</b>" : "none"} · state v${f.stateVersion}</div>` +
+        `<div class="cell-mut">horizon ${f.horizon} ticks · target #${f.targetSeq} · threshold ${(f.minProbability * 100).toFixed(1)}% on ${f.triggerSource} · ${wu.isWarmingUp ? "warm-up: " + wu.remaining + " ticks left" : "warm-up complete"} · calibration: ${esc(f.calibrationStatus)} · structural break: ${f.structuralBreak ? "<b>ACTIVE</b>" : "none"} · state v${f.stateVersion}</div>` +
         `<div class="cell-mut">Crossing the trigger is an operational threshold, not evidence of predictive advantage.</div>`);
       const bars = f.vectors.ensemble.map((p, d) => `<div style="display:inline-block;width:9%;text-align:center;vertical-align:bottom"><div style="height:${Math.round(p * 600)}px;background:${d === f.predictedDigit ? "var(--accent)" : "var(--muted)"};opacity:.8;min-height:2px"></div><div style="font-size:11px">${d}<br>${(p * 100).toFixed(1)}</div></div>`).join("");
       const td = f.decision === "TRADE" ? f.predictedDigit : -1;
@@ -263,23 +260,22 @@ const api = {
     const sb = engine.scoreboard(sym, engine.cfg.horizon);
     set("ldpeBoard", sb.map(r => `<tr><td class="l">${r.module}</td><td>${(r.weight * 100).toFixed(1)}%</td><td>${r.evaluated}</td><td>${r.relScore.toFixed(3)}</td></tr>`).join(""));
 
-    // Execution and alignment evidence
-    const a = host.account(), v = alignStatus(sym), risk = a.loginId ? executor._riskFor(a.loginId) : { pnl: 0, consec: 0 };
-    const stateTxt = executor.killed ? `KILLED (${esc(executor.pausedReason)})` : H().digAutoArmed ? "armed" : "stopped";
-    set("ldpeExec", `Account: <b>${a.authed ? (a.isVirtual ? "Demo" : "REAL") : "—"}</b> ${esc(a.loginId || "")}${executor.lock ? " (locked for this run)" : ""} · bot: <b>${stateTxt}</b> · day P/L (risk only) ${risk.pnl.toFixed(2)} · consecutive losses ${risk.consec} · open contracts ${executor.openCount(sym)}`);
-    const verifiedTxt = v.state === "verified"
-      ? `<b>verified</b> from ${v.clean} clean contracts: ${esc(v.relation)}${v.matchesConfiguredTicks ? "" : " — differs from the configured tick count"}`
-      : `<b>${v.state}</b> — ${esc(v.reason)}`;
-    set("ldpeAlign", `<b>Settlement alignment</b> for ${esc(keyFor(sym))}: ${verifiedTxt}` +
-      `<br>Automatic execution: <b>${v.state === "verified" ? "permitted (subject to all safeguards)" : "DISABLED until verified (needs " + MIN_CLEAN_EVIDENCE + " clean, identical Demo observations)"}</b> · Demo probe: ${probe.remaining > 0 ? `running, ${probe.remaining} left` : "idle"} · Real execution: ${v.state === "verified" ? "only via auto on a verified config" : "blocked"}` +
-      `<br><span class="cell-mut">Probe contracts are measurements of timing, not evidence of predictive skill. ${esc(execMsg)}</span>`);
-    const ev = (alignment.cfgs[keyFor(sym)] || { evidence: [] }).evidence.slice(-8).reverse();
-    set("ldpeAlignRows", ev.map(e => `<tr><td class="l">${esc(e.contractId)}</td><td>${e.accountType}</td><td>${e.madeAtSeq}</td><td>${e.expectedTargetSeq}</td><td>${e.entrySeq ?? "—"}</td><td>${e.exitSeq ?? "—"}</td><td>${e.entryDelayTicks ?? "—"}</td><td>${e.observedOffset ?? "—"}</td><td class="${e.status === "aligned" ? "cell-pos" : "cell-warn"}">${e.status}${e.reason ? " — " + esc(e.reason) : ""}</td></tr>`).join("") || `<tr><td colspan="9" class="sig-empty">No settlement observations yet.</td></tr>`);
+    // Execution: selected account, connected account, Stop state
+    const a = host.account(), sel = executor.accountType === "demo" ? "Demo" : "REAL";
+    const mm = executor.accountMismatch(a);
+    set("ldpeExec", `Trading account: <b class="${executor.accountType === "real" ? "cell-neg" : "cell-pos"}">${sel}</b>` +
+      ` · connected: <b>${a.authed ? (a.isVirtual ? "Demo" : "REAL") : "—"}</b> ${esc(a.loginId || "")}` +
+      ` · automatic trading: <b>${executor.stopped ? "STOPPED" : H().digAutoArmed ? "running (Auto armed)" : "ready (arm Auto to trade)"}</b>` +
+      (mm ? ` · <span class="cell-neg">${esc(mm)}</span>` : ""));
+    const mark = (id, on) => { const e = $(id); if (e) { e.style.outline = on ? "2px solid var(--accent)" : "none"; e.style.fontWeight = on ? "800" : "400"; } };
+    mark("ldpeAcctDemo", executor.accountType === "demo"); mark("ldpeAcctReal", executor.accountType === "real");
+    const sw = $("ldpeStop");
+    if (sw) { sw.textContent = executor.stopped ? "▶ Automatic trading: STOPPED (click to re-arm)" : "⏹ Stop automatic trading"; sw.style.background = executor.stopped ? "var(--down)" : ""; }
 
     const recent = st.forecasts.slice(-12).reverse();
     set("ldpeHist", recent.map(x => `<tr><td class="l">${x.id}</td><td>${x.predictedDigit}</td><td>${(x.probability * 100).toFixed(1)}%</td><td>${x.decision}</td><td>${x.targetSeq}</td><td>${x.realized ?? "—"}</td><td class="${x.hit ? "cell-pos" : "cell-mut"}">${x.status === "scored" ? (x.hit ? "hit" : "miss") : x.status}</td><td>${x.llEnsemble != null ? x.llEnsemble.toFixed(3) + " / " + x.llUniform.toFixed(3) : "—"}</td></tr>`).join("") || `<tr><td colspan="8" class="sig-empty">No scored forecasts yet.</td></tr>`);
     const orders = [...executor.orders.values()].sort((p, q) => q.createdAt - p.createdAt).slice(0, 12);
-    set("ldpeExecLog", orders.map(o => `<tr><td class="l">${new Date(o.createdAt).toLocaleTimeString()}</td><td>${o.isVirtual ? "demo" : "real"}/${o.mode}</td><td>${o.digit}</td><td>${o.stake}</td><td>${esc(o.contractId || "—")}</td><td>#${o.forecast.targetSeq}</td><td>${o.alignment ? esc(o.alignment.status) : (o.state === "settled" ? "pending ticks" : "—")}</td><td class="${o.result === "won" ? "cell-pos" : o.result === "lost" ? "cell-neg" : "cell-mut"}">${o.result || esc(o.state + (o.reason ? ": " + o.reason : ""))}</td></tr>`).join("") || `<tr><td colspan="8" class="sig-empty">No LDPE contracts yet.</td></tr>`);
+    set("ldpeExecLog", orders.map(o => `<tr><td class="l">${new Date(o.createdAt).toLocaleTimeString()}</td><td>${o.isVirtual ? "demo" : "real"}/${o.mode}</td><td>${o.digit}</td><td>${o.stake}</td><td>${esc(o.contractId || "—")}</td><td>#${o.forecast.targetSeq}</td><td class="${o.result === "won" ? "cell-pos" : o.result === "lost" ? "cell-neg" : "cell-mut"}">${o.result || esc(o.state + (o.reason ? ": " + o.reason : ""))}</td></tr>`).join("") || `<tr><td colspan="7" class="sig-empty">No LDPE contracts yet.</td></tr>`);
     set("ldpeExecStatus", esc(execMsg));
   },
 
@@ -298,17 +294,15 @@ const api = {
       });
     });
     $("ldpe_triggerSource").addEventListener("change", (ev) => api.setSetting("triggerSource", ev.target.value));
-    $("ldpeKill").addEventListener("click", () => api.kill());
-    $("ldpeResume").addEventListener("click", () => api.resume());
-    const pb = $("ldpeProbe"), ps = $("ldpeProbeStop");
-    if (pb) pb.addEventListener("click", () => api.startProbe());
-    if (ps) ps.addEventListener("click", () => api.stopProbe());
+    $("ldpeStop").addEventListener("click", () => api.toggleStop());
+    $("ldpeAcctDemo").addEventListener("click", () => api.setAccountType("demo"));
+    $("ldpeAcctReal").addEventListener("click", () => api.setAccountType("real"));
   },
 };
 
 // Restored state: hold live ticks until history arrives; release with a recorded hole if it never does.
 for (const sym of engine.symbols.keys()) if (engine.isHolding(sym)) api.beginHold(sym, 8000);
-setInterval(() => { executor.sweep(); executor.retryAlignment(); }, 5000);
+setInterval(() => { executor.sweep(); }, 5000);
 window.addEventListener("pagehide", () => { saveState(true); persistExec(); });
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "hidden") saveState(true); });
 
