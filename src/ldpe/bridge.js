@@ -166,7 +166,8 @@ const api = {
     const seq = engine.state(symbol).seq;
     if (u.max && u.count >= u.max) return;
     if (u.cooldown && lastAutoSeq[symbol] != null && seq - lastAutoSeq[symbol] < u.cooldown) return;
-    const r = executor.place({ symbol, digit: f.predictedDigit, k: settings.k, contractType: CONTRACT, stake: settings.stake, forecast: f });
+    const stake = H().nextStake ? H().nextStake() : settings.stake;
+    const r = executor.place({ symbol, digit: f.predictedDigit, k: settings.k, contractType: CONTRACT, stake, forecast: f });
     if (r.ok) { lastAutoSeq[symbol] = seq; if (H().noteAutoOrder) H().noteAutoOrder(); }
     execMsg = r.ok ? `Order sent on ${executor.accountType === "demo" ? "Demo" : "Real"}: Matches ${f.predictedDigit} (p=${(f.probability * 100).toFixed(1)}%, ${f.id})` : "Not executing: " + r.reason;
   },

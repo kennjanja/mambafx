@@ -264,3 +264,31 @@ test("panel hides LDPE explanatory and diagnostics text while retaining the fore
   assert.match(bridge, /engine\.metrics\(sym, engine\.cfg\.horizon\)/);
   assert.match(bridge, /engine\.conditionalStats\(sym\)/);
 });
+
+test("auto orders use the Trade execution card's stake/multiplier progression when the host provides it", async () => {
+  const p = await page({ armed: true });
+  p.host.nextStake = () => 1.4;
+  p.tick(L_WARM);
+  p.L.engine.cfg.minProbability = 0.0001;
+  p.tick(30);
+  const props = p.sent.filter(m => m.proposal);
+  assert.ok(props.length >= 1);
+  assert.ok(props.every(m => m.amount === 1.4));
+});
+
+test("Digits page layout: distribution, then trade execution, then frequency table; extra stats hidden; new controls present", () => {
+  const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+  const page = html.slice(html.indexOf('id="page-digits"'));
+  const iDist = page.indexOf("Digit Distribution"), iExec = page.indexOf("Trade execution"), iFreq = page.indexOf("Digit frequency table");
+  assert.ok(iDist > 0 && iDist < iExec && iExec < iFreq);
+  assert.ok(!page.includes("Frequency of each digit over the last 1,000 ticks"));
+  for (const id of ["digChi", "digPval", "digEntropy"]) {
+    assert.match(page, new RegExp(`<div class="dig-stat" hidden style="display:none"><div class="lab">[^<]*</div><div id="${id}"`), id);
+  }
+  for (const id of ["digStake", "digMultiplier", "digMultN", "digManualBtns", "digAutoThresh", "digAutoCooldown", "digAutoMax", "digAutoArm", "digSessionPnl", "digPnlReset"]) {
+    assert.ok(page.indexOf(`id="${id}"`) > iExec && page.indexOf(`id="${id}"`) < iFreq, id);
+  }
+  assert.match(page, /Automated Match/);
+  assert.match(html, /function digResetSessionPnl\(\)/);
+  assert.match(html, /nextStake: \(\) =>/);
+});
