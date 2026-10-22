@@ -994,7 +994,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
           </div>
           <div class="gc-field" style="max-width:120px">
             <label for="martingaleXInput">Multiplier (×N)</label>
-            <input type="number" id="martingaleXInput" min="1.00" max="10.00" step="0.01" value="2.00" oninput="setMartingaleX(this.value)" title="Applies to every Martingale / Reverse Martingale bot on this page — shared, not per-bot. Allowed range: 1.00–10.00, step 0.01.">
+            <input type="number" id="martingaleXInput" min="1.0" max="10.0" step="0.1" value="2.0" oninput="setMartingaleX(this.value)" title="Applies to every Martingale / Reverse Martingale bot on this page — shared, not per-bot. Allowed range: 1.00–10.00, step 0.01.">
             <div class="gc-sub" style="margin-top:2px;margin-bottom:0">Allowed Range: 1.00 → 5.00 · Step: 0.01</div>
           </div>
         </div>
@@ -1312,7 +1312,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
           </div>
           <div class="gc-field">
             <label for="digMultN">Multiplier (×N, e.g. 1.4, 1.5, 8)</label>
-            <input type="number" id="digMultN" min="1" max="10" step="0.01" value="2.00" oninput="digSetMultN(this.value)" title="Step size for Martingale / Reverse Martingale. Allowed range 1.00–10.00.">
+            <input type="number" id="digMultN" min="1" max="10" step="0.1" value="2.0" oninput="digSetMultN(this.value)" title="Step size for Martingale / Reverse Martingale. Allowed range 1.00–10.00.">
           </div>
           <div class="gc-field" id="digSessionPnlBox">
             <label>Session profit / loss</label>
@@ -30350,7 +30350,7 @@ function digPlaceTrade(digit, source, opts){
     return false;
   }
   const strat = digMultStrat(); digMult()._strat = strat;
-  let stake = Math.max(0.35, digMult().getNext(strat));
+  let stake = Math.round(Math.max(0.35, digMult().getNext(strat)) * 100) / 100;
   if (opts.maxStake) stake = Math.min(stake, opts.maxStake);
   const duration = opts.duration || Math.max(1, parseInt($("digDuration").value || "5", 10));
   const proposalReqId = ++gridReqId;
@@ -30726,7 +30726,7 @@ function chartRenderAll(){
 // hardcoded to ×2, and constrained to exactly the requested range.
 const MARTINGALE_MIN = 1.00, MARTINGALE_MAX = 10.00;
 let MARTINGALE_X = (function(){
-  try { const v = parseFloat(localStorage.getItem('mfx_martingale_x')); if (v>=MARTINGALE_MIN && v<=MARTINGALE_MAX) return v; } catch(_){}
+  try { const v = parseFloat(localStorage.getItem('mfx_martingale_x')); if (v>=MARTINGALE_MIN && v<=MARTINGALE_MAX) return Math.round(v*10)/10; } catch(_){}
   return 2.00;
 })();
 function setMartingaleX(v){
@@ -30735,11 +30735,11 @@ function setMartingaleX(v){
   // arbitrary clamped result — an invalid input should fall back to the
   // last valid value, not to a fabricated default that overwrites it.
   const n = Number.isFinite(parsed) ? Math.max(MARTINGALE_MIN, Math.min(MARTINGALE_MAX, parsed)) : MARTINGALE_X;
-  MARTINGALE_X = Math.round(n * 100) / 100; // keep exactly 2 decimal places, matching the 0.01 step
+  MARTINGALE_X = Math.round(n * 10) / 10; // one decimal place, matching the 0.1 step
   try { localStorage.setItem('mfx_martingale_x', String(MARTINGALE_X)); } catch(_){}
   ['martingaleXInput','digMultN'].forEach(id => {
     const el = document.getElementById(id);
-    if (el && id !== (document.activeElement && document.activeElement.id) && parseFloat(el.value) !== MARTINGALE_X) el.value = MARTINGALE_X.toFixed(2);
+    if (el && id !== (document.activeElement && document.activeElement.id) && parseFloat(el.value) !== MARTINGALE_X) el.value = MARTINGALE_X.toFixed(1);
   });
 }
 
@@ -30747,7 +30747,8 @@ function makeMultiplier(getStakeEl){
   let history=[], seq=0, grindProfit=0;
   const MULT_1326=[1,3,2,6];
   function base(){ const el=getStakeEl(); return Math.max(0.35,parseFloat((el&&el.value)||'1')); }
-  function nextStake(strat){
+  function nextStake(strat){ return Math.round(rawNext(strat)*100)/100; }
+  function rawNext(strat){
     const b=base();
     if(strat==='flat'||!history.length) return b;
     const last=history[history.length-1];
@@ -32882,7 +32883,7 @@ try {
   connect();
 
   // Reflect the persisted Martingale multiplier in the input on load
-  { ["martingaleXInput","digMultN"].forEach(id => { const mxEl = $(id); if (mxEl) mxEl.value = MARTINGALE_X.toFixed(2); }); }
+  { ["martingaleXInput","digMultN"].forEach(id => { const mxEl = $(id); if (mxEl) mxEl.value = MARTINGALE_X.toFixed(1); }); }
 
   // If Deriv just redirected back here with ?code=&state=, finish the login.
   // gridSessionAuth.js is a <script type="module"> loaded after this classic
