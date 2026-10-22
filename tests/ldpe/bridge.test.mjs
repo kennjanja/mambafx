@@ -292,3 +292,20 @@ test("Digits page layout: distribution, then trade execution, then frequency tab
   assert.match(html, /function digResetSessionPnl\(\)/);
   assert.match(html, /nextStake: \(\) =>/);
 });
+test("auto-order stake is rounded to at most 2 decimals before the proposal is sent", async () => {
+  const p = await page({ armed: true });
+  p.host.nextStake = () => 5.832;
+  p.tick(L_WARM);
+  p.L.engine.cfg.minProbability = 0.0001;
+  p.tick(30);
+  const props = p.sent.filter(m => m.proposal);
+  assert.ok(props.length >= 1);
+  assert.ok(props.every(m => m.amount === 5.83));
+});
+
+test("multiplier inputs use one decimal and the stake progression is rounded to cents", () => {
+  const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+  assert.match(html, /id="digMultN" min="1" max="10" step="0\.1"/);
+  assert.match(html, /Math\.round\(n \* 10\) \/ 10/);
+  assert.match(html, /function nextStake\(strat\)\{ return Math\.round\(rawNext\(strat\)\*100\)\/100; \}/);
+});

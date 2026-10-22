@@ -57,7 +57,7 @@ export class Executor {
     if (f.decision !== "TRADE") return refuse("forecast is not a TRADE decision");
     if (h.currentSeq(req.symbol) !== f.madeAtSeq) return refuse("stale forecast (newer ticks have arrived)");
     if (this.orderedForecasts.has(f.id)) return refuse("duplicate: an order already exists for this forecast");
-    const stake = Number(req.stake);
+    const stake = Math.round(Number(req.stake) * 100) / 100; // Deriv allows at most 2 decimals
     if (!Number.isFinite(stake) || stake < MIN_STAKE) return refuse(`invalid stake (minimum ${MIN_STAKE})`);
 
     const order = {
