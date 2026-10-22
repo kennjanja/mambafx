@@ -1228,20 +1228,19 @@ table.an-table tbody tr:last-child td{border-bottom:none}
 
     <div class="dig-card" id="ldpeCard">
       <h2>🎲 LDPE: Last-Digit Prediction Engine — <span id="digMarket">—</span></h2>
-      <div class="dig-sub">Forecasts the last digit of the tick on which a Matches contract settles, scores every forecast against its own target tick, and trades Demo or Real (whichever account is selected on the Trading Grid) when the configured trigger is met. Arm <b>Auto</b> below to execute. Crossing the trigger is an operational threshold, not proof of predictive advantage.</div>
+      <div class="dig-sub">Forecasts the last digit of the tick on which a Matches contract settles, scores every forecast against its own target tick, and trades on the account chosen with the Demo | Real switch when the configured trigger is met. Arm <b>Auto</b> below to execute; the Stop switch pauses automatic trading while forecasts continue. Crossing the trigger is an operational threshold, not proof of predictive advantage.</div>
       <div id="ldpeFeed" class="cell-mut" style="margin-bottom:8px"></div>
       <div id="ldpePred" style="margin-bottom:10px">Waiting for ticks…</div>
       <div id="ldpeDist" style="margin-bottom:10px"></div>
       <div id="ldpeMetrics" class="cell-mut" style="margin-bottom:10px"></div>
       <div id="ldpeDiag" class="cell-mut" style="margin-bottom:10px"></div>
       <div id="ldpeExec" class="cell-mut" style="margin-bottom:6px"></div>
-      <div id="ldpeAlign" class="cell-mut" style="margin-bottom:6px"></div>
       <div id="ldpeExecStatus" class="cell-mut" style="margin-bottom:10px"></div>
-      <div class="gc-row" style="margin-bottom:10px">
-        <button class="gc-btn" id="ldpeKill" style="font-weight:800;background:var(--down)">⛔ KILL SWITCH</button>
-        <button class="gc-btn" id="ldpeResume">Resume</button>
-        <button class="gc-btn" id="ldpeProbe" title="Demo account only. Buys small Matches contracts to measure how settlement lines up with the forecast target tick.">Run Demo settlement probe</button>
-        <button class="gc-btn" id="ldpeProbeStop">Stop probe</button>
+      <div class="gc-row" style="margin-bottom:10px;align-items:center">
+        <span class="cell-mut">Account:</span>
+        <button class="gc-btn" id="ldpeAcctDemo">Demo</button>
+        <button class="gc-btn" id="ldpeAcctReal">Real</button>
+        <button class="gc-btn" id="ldpeStop" style="font-weight:800">⏹ Stop automatic trading</button>
       </div>
       <details><summary>Settings (persisted)</summary><div id="ldpeSettings" class="gc-row" style="flex-wrap:wrap"></div></details>
       <details open><summary>Module scoreboard</summary>
@@ -1250,11 +1249,8 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       <details open><summary>Forecast history (scored against own target tick)</summary>
         <table class="sig-table"><thead><tr><th class="l">Forecast</th><th>Digit</th><th>p</th><th>Decision</th><th>Target #</th><th>Realized</th><th>Result</th><th>LL / uniform LL</th></tr></thead><tbody id="ldpeHist"></tbody></table>
       </details>
-      <details open><summary>Settlement alignment evidence (actual contract entry/exit ticks)</summary>
-        <table class="sig-table"><thead><tr><th class="l">Contract</th><th>Acct</th><th>Forecast seq</th><th>Expected target</th><th>Entry seq</th><th>Exit seq</th><th>Entry delay</th><th>Offset</th><th class="l">Status</th></tr></thead><tbody id="ldpeAlignRows"></tbody></table>
-      </details>
       <details><summary>Execution log (operations only — never used for learning)</summary>
-        <table class="sig-table"><thead><tr><th class="l">Time</th><th>Acct</th><th>Digit</th><th>Stake</th><th>Contract</th><th>Target #</th><th>Alignment</th><th>Result</th></tr></thead><tbody id="ldpeExecLog"></tbody></table>
+        <table class="sig-table"><thead><tr><th class="l">Time</th><th>Acct</th><th>Digit</th><th>Stake</th><th>Contract</th><th>Target #</th><th>Result</th></tr></thead><tbody id="ldpeExecLog"></tbody></table>
       </details>
     </div>
 
@@ -1303,8 +1299,8 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <div class="chi-bar"><div id="digChiBar" class="chi-fill" style="width:0"></div></div>
       </div>
 
-      <!-- Transition matrix -->
-      <div class="dig-card" style="margin:0">
+      <!-- Transition matrix: hidden from the UI; the transition statistics are still computed (digTransitions, engine trans1/trans2) -->
+      <div class="dig-card" style="margin:0;display:none" hidden aria-hidden="true">
         <h2>🔗 Transition matrix (Markov)</h2>
         <div class="dig-sub">Row = current last digit, column = next digit. Cells show the observed probability P(col | row) as a %. Brighter = more frequent transition. Useful for spotting digit pairs that recur more than expected.</div>
         <div class="tm-wrap">
@@ -29973,6 +29969,33 @@ window.__ldpeHost = {
   awaitReq: (id, cb) => { gridPending[id] = cb; },
   renderTrades: () => { try { digRenderTrades(); } catch(_){} },
   get digAutoArmed(){ return digAutoArmed; },
+  // the user's own Auto-panel settings (cooldown in ticks, stop after N trades)
+  autoSettings: () => ({
+    cooldown: Math.max(0, parseInt(($("digAutoCooldown") || {}).value || "0", 10) || 0),
+    max: Math.max(0, parseInt(($("digAutoMax") || {}).value || "0", 10) || 0),
+    count: digAutoCount,
+  }),
+  noteAutoOrder: () => {
+    digAutoCount++;
+    const maxN = Math.max(0, parseInt(($("digAutoMax") || {}).value || "0", 10) || 0);
+    if (maxN && digAutoCount >= maxN) digDisarmAuto(`reached ${maxN} trades`);
+  },
+  // Demo | Real: uses the existing account picker and connect flow; returns the actual error, never falls back
+  selectAccountType: async (type) => {
+    if (!gridLoggedIn) return { ok: false, error: "not logged in to Deriv (log in on the Trading Grid page)" };
+    if (!gridAccounts.length){ try { await gridLoadAccounts(); } catch(e){ return { ok: false, error: "could not load accounts: " + (e && e.message || e) }; } }
+    const wantDemo = type === "demo";
+    if (gridAuthed && gridIsVirtual === wantDemo) return { ok: true, accountId: gridLoginId };
+    const acct = gridAccounts.find(a => (a.is_virtual === 1) === wantDemo);
+    if (!acct) return { ok: false, error: `no ${type} account on this Deriv login` };
+    const sel = $("gridAcctPick");
+    if (sel) sel.value = acct.account_id;
+    if (!sel || sel.value !== acct.account_id) return { ok: false, error: `account ${acct.account_id} is not in the account picker` };
+    if (window.LDPE) { try { window.LDPE.onDisconnect(); } catch(_){} }
+    if (gridWs && gridWs.readyState === WebSocket.OPEN) gridDisconnect();
+    setTimeout(() => gridConnect(), 300);
+    return { ok: true, switching: true, accountId: acct.account_id };
+  },
   get digTrades(){ return digTrades; },
   get symbol(){ return SYMBOL; },
   placeTrade: () => false,   // LDPE orders go only through exec.js (LDPE.executor)
@@ -30294,7 +30317,7 @@ function digManualTrade(digit){
 
 function digPlaceTrade(digit, source, opts){
   opts = opts || {};
-  // LDPE orders must go through exec.js (guards, alignment gate, account lock); never through here.
+  // LDPE orders must go through exec.js; never through here.
   if (source === "ldpe" || opts.forecast){
     console.warn("[ldpe] digPlaceTrade refused: LDPE orders are only placed by the LDPE executor");
     return false;
@@ -33214,7 +33237,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=22"></script>
-<script type="module" src="src/ldpe/bridge.js?v=3"></script>
+<script type="module" src="src/ldpe/bridge.js?v=4"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>
 <script type="module" src="src/trading/gridSetHelper.js"></script>
