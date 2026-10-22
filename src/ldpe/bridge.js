@@ -229,12 +229,12 @@ const api = {
       set("ldpePred", `<b style="font-size:22px">${f.predictedDigit}</b> &nbsp; p=${(f.probability * 100).toFixed(2)}% &nbsp; <span class="${cls}"><b>${f.decision}</b>${f.reason ? " (" + esc(f.reason) + ")" : ""}</span>` +
         `<div class="cell-mut">horizon ${f.horizon} ticks · target #${f.targetSeq} · threshold ${(f.minProbability * 100).toFixed(1)}% on ${f.triggerSource} · ${wu.isWarmingUp ? "warm-up: " + wu.remaining + " ticks left" : "warm-up complete"} · calibration: ${esc(f.calibrationStatus)} · structural break: ${f.structuralBreak ? "<b>ACTIVE</b>" : "none"} · state v${f.stateVersion}</div>` +
         `<div class="cell-mut">Crossing the trigger is an operational threshold, not evidence of predictive advantage.</div>`);
-      const bars = f.vectors.ensemble.map((p, d) => `<div style="display:inline-block;width:9%;text-align:center;vertical-align:bottom"><div style="height:${Math.round(p * 600)}px;background:${d === f.predictedDigit ? "var(--accent)" : "var(--muted)"};opacity:.8;min-height:2px"></div><div style="font-size:11px">${d}<br>${(p * 100).toFixed(1)}</div></div>`).join("");
       const td = f.decision === "TRADE" ? f.predictedDigit : -1;
       window.__ldpeTradeDigit = td;
       for (let d = 0; d < 10; d++) { const c = document.getElementById("digCircle" + d); if (c) c.classList.toggle("ldpe-trade", d === td); }
-      set("ldpeDist", `<div class="ldpe-fbox"><span>Forecast digit</span><b>${f.predictedDigit}</b><span>${(f.probability * 100).toFixed(1)}% · ${f.decision}</span></div>` +
-        `<div style="position:relative;height:96px;border-bottom:1px solid var(--muted);display:flex;align-items:flex-end;gap:0">${bars}</div><div class="cell-mut">Bars: ensemble P(digit). Uniform reference = 10.0%. Entropy ${entropyBits(f.vectors.ensemble).toFixed(4)} / 3.3219 bits · module disagreement (JS) ${f.disagreement.toFixed(5)} · λ=${f.lambda.toFixed(2)}</div>`);
+      set("digForecastBox", `<div class="ldpe-fbox"><span>Forecast digit</span><b>${f.predictedDigit}</b><span>${(f.probability * 100).toFixed(1)}% · ${f.decision}</span></div>`);
+      set("ldpeDist", 
+        `<div class="cell-mut">Uniform reference = 10.0% per digit. Entropy ${entropyBits(f.vectors.ensemble).toFixed(4)} / 3.3219 bits · module disagreement (JS) ${f.disagreement.toFixed(5)} · λ=${f.lambda.toFixed(2)}</div>`);
     }
     set("ldpeMetrics", m.n
       ? `Evaluated forecasts: <b>${m.n}</b> · log loss ${m.logLoss.toFixed(4)} vs uniform ${m.logLossUniform.toFixed(4)} (Δ ${(m.logLoss - m.logLossUniform).toFixed(4)}) · Brier ${m.brier.toFixed(4)} vs 0.9 · top-1 ${(m.top1 * 100).toFixed(1)}% [${(m.top1Ci95[0] * 100).toFixed(1)}, ${(m.top1Ci95[1] * 100).toFixed(1)}] vs 10%`
