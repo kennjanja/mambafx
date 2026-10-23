@@ -4275,7 +4275,24 @@ function setConn(state){
 }
 
 // ── Core logic: track consecutive ticks ──────────────────────────────
+const _tickErrAt = {};
+function _tickSafe(name, fn){
+  try { fn(); } catch (e) {
+    const t = Date.now();
+    if (!_tickErrAt[name] || t - _tickErrAt[name] > 5000){ _tickErrAt[name] = t; console.error("[tick] " + name + " threw:", e); }
+  }
+}
+// Watchdog: a half-open public socket keeps saying "Live" while no ticks arrive. No tick for 12 s -> reconnect.
+let _lastTickAt = Date.now();
+setInterval(() => {
+  if (ws && ws.readyState === WebSocket.OPEN && Date.now() - _lastTickAt > 12000){
+    console.warn("[deriv ws] no ticks for 12 s - reconnecting");
+    _lastTickAt = Date.now();
+    try { ws.close(); } catch(_){}
+  }
+}, 4000);
 function handleTick(price, epoch){
+  _lastTickAt = Date.now();
   if (epoch === undefined) epoch = Math.floor(Date.now()/1000);
   tickCount++;
   let dir = 0;
@@ -4320,34 +4337,38 @@ function handleTick(price, epoch){
   aggregate5mCandle(price, epoch, dir);
   aggregate10tCandle(price, epoch, dir);
 
-  updateReadout(price, dir);
-  drawChart();
-  updateIndicators();
-  drawCandles();
-  drawLiveCandles();
-  // Only draw 5-min and 10-tick charts when the indicator page is active
-  if (document.getElementById("page-charts")&&document.getElementById("page-charts").classList.contains("active")){
-    draw5mCandles();
-    draw10tCandles();
-  }
-  engineOnTick(price, epoch, dir);
-  digOnTick(price, epoch);
-  if (document.getElementById("page-tracker") &&
-      document.getElementById("page-tracker").classList.contains("active")){
-    renderAnalysisDigitCircles();
-    renderTrackerPage();
-  }
-  // Live model validation — always runs when active regardless of which page is shown
-  if (typeof lmvOnTick === "function") lmvOnTick(price, epoch, dir);
-  // Only Ups/Downs Bot — fires on every tick based on fingerprint (NOT on 5-tick run signal)
-  if (typeof ouHandleSignal === "function") ouHandleSignal(dir, price, epoch);
-  // Refresh fingerprint display when on the OU bot page
-  if (typeof ouRefreshFingerprint === "function"){
-    if(document.getElementById("page-oubot")&&document.getElementById("page-oubot").classList.contains("active"))
-      ouRefreshFingerprint();
-  }
-  // Aggression Bot — tracks buy/sell aggression within the live 1-min candle
-  if (typeof aggOnTick === "function") aggOnTick(price, epoch, dir);
+  _tickSafe("charts", () => {
+    updateReadout(price, dir);
+    drawChart();
+    updateIndicators();
+    drawCandles();
+    drawLiveCandles();
+    // Only draw 5-min and 10-tick charts when the indicator page is active
+    if (document.getElementById("page-charts")&&document.getElementById("page-charts").classList.contains("active")){
+      draw5mCandles();
+      draw10tCandles();
+    }
+  });
+  // Each consumer is isolated: an exception in one must never starve the others (it used to freeze every
+  // bot downstream of the failing call while the charts above kept ticking).
+  _tickSafe("engine", () => engineOnTick(price, epoch, dir));
+  _tickSafe("digits/LDPE", () => digOnTick(price, epoch));
+  _tickSafe("tracker", () => {
+    if (document.getElementById("page-tracker") &&
+        document.getElementById("page-tracker").classList.contains("active")){
+      renderAnalysisDigitCircles();
+      renderTrackerPage();
+    }
+  });
+  _tickSafe("lmv", () => { if (typeof lmvOnTick === "function") lmvOnTick(price, epoch, dir); });
+  _tickSafe("ou-bot", () => { if (typeof ouHandleSignal === "function") ouHandleSignal(dir, price, epoch); });
+  _tickSafe("ou-fingerprint", () => {
+    if (typeof ouRefreshFingerprint === "function"){
+      if(document.getElementById("page-oubot")&&document.getElementById("page-oubot").classList.contains("active"))
+        ouRefreshFingerprint();
+    }
+  });
+  _tickSafe("aggression", () => { if (typeof aggOnTick === "function") aggOnTick(price, epoch, dir); });
 
   // Persist the last 100 ticks (throttled: every 3rd tick, plus always on a signal)
   _saveThrottle++;
@@ -30168,16 +30189,16 @@ function digOnTick(price, epoch){
   digRing.push(d);
   if (digRing.length > DIG_RING_MAX) digRing.shift();
   if (prevDigit !== null) digTransitions[prevDigit][d]++;
-  if (window.GAPRES) window.GAPRES.ingest(SYMBOL, d, epoch, MARKETS[SYMBOL] || SYMBOL);
-  if (digPageReady) digRender();
+  _tickSafe("research", () => { if (window.GAPRES) window.GAPRES.ingest(SYMBOL, d, epoch, MARKETS[SYMBOL] || SYMBOL); });
+  _tickSafe("digit page", () => { if (digPageReady) digRender(); });
   if (window.LDPE){
     // exact digit from the raw quote literal when its precision matches the symbol's; otherwise
     // reconstruct at the symbol's true precision (JSON numbers carry no extra information)
     const rq = window.__rawQuote;
     const fracLen = rq && rq.includes(".") ? rq.split(".")[1].length : 0;
     const raw = (rq && fracLen === decimals) ? rq : Number(price).toFixed(decimals);
-    window.LDPE.ingest(SYMBOL, raw, decimals, epoch);
-    if (window.GAPRES && window.GAPRES.afterTick) window.GAPRES.afterTick(SYMBOL, d, epoch);
+    _tickSafe("ldpe", () => window.LDPE.ingest(SYMBOL, raw, decimals, epoch));
+    _tickSafe("gap trader", () => { if (window.GAPRES && window.GAPRES.afterTick) window.GAPRES.afterTick(SYMBOL, d, epoch); });
   } else {
     digCheckAuto();
   }
@@ -33336,7 +33357,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=22"></script>
-<script type="module" src="src/ldpe/bridge.js?v=11"></script>
+<script type="module" src="src/ldpe/bridge.js?v=12"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>
