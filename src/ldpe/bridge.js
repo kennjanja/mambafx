@@ -303,7 +303,8 @@ const api = {
     if (settings.executionMode !== "forecast") {
       const cs2 = cycles.status(sym), n = cs2.counts;
       set("ldpeCycle", `Cycle: ${cs2.cycle ? `#${cs2.cycle.id} target <b>${cs2.cycle.target}</b> (fixed) ? ${cs2.cycle.intentions} intentions` : (H().digAutoArmed && !executor.stopped ? "<b>waiting for an eligible current prediction</b>" : "idle")}` +
-        ` ? all intentions ${n.total}: submitted ${n.submitted}, confirmed ${n.confirmed}, failed ${n.failed}, unresolved ${n.unresolved}`);
+        ` ? all intentions ${n.total}: submitted ${n.submitted}, confirmed ${n.confirmed}, failed ${n.failed}, unresolved ${n.unresolved}` +
+        (cycles.cycles.length ? `<div class="cell-mut">last cycles: ${cycles.cycles.slice(-5).reverse().map(c => `#${c.id} target ${c.target}, ${c.intentions} buys, ended: ${esc(c.endReason)}`).join(" ? ")}</div>` : ""));
     }
     set("ldpeExecStatus", esc(execMsg));
   },
