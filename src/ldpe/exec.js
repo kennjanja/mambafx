@@ -7,6 +7,8 @@
 // not a TRADE decision, is stale, or already has an order (duplicate-order prevention).
 
 export const MAX_ENTRY_DELAY_TICKS = 0;  // forecast must still be current when the buy is sent
+export const MAX_TICK_ORDER_LAG = 2;    // tick-driven orders: ticks allowed between the intention and the buy
+export const MAX_ORDERS_PER_SEC = 2;    // each order is two API calls (proposal + buy); no automatic retries
 export const STALE_REQUEST_MS = 20000;
 export const MIN_STAKE = 0.35;
 
@@ -23,6 +25,8 @@ export class Executor {
     this.byContract = new Map();      // contractId -> order
     this.orderedForecasts = new Set();// one order per forecast, ever (persisted)
     this.settled = new Set();         // contract ids already settled (persisted)
+    this.orderedTicks = new Set();    // tick keys that already have a tick-driven order (persisted)
+    this.sentAt = [];                 // recent tick-order send times (rate limit)
     this.legacy = null;               // stored records from earlier versions, passed through untouched
     this.listeners = []; this.seq = 0; this.log = [];
   }
@@ -81,6 +85,43 @@ export class Executor {
     return { ok: true, order };
   }
 
+  // Tick-driven order: one DIGITMATCH purchase intention for one incoming tick (see cycle.js). It is tied to
+  // the tick, not to a forecast, so many orders may share one cycle target. Same account checks, same
+  // proposal/buy workflow; never retried.
+  placeTick(req) {
+    const h = this.host, a = h.account();
+    const refuse = (reason) => { this._note(`refused tick ${req.symbol}#${req.tickSeq}: ${reason}`); return { ok: false, reason }; };
+    if (this.stopped) return refuse("stopped");
+    const mm = this.accountMismatch(a);
+    if (mm) return refuse(mm);
+    const key = `${req.symbol}:${req.tickSeq}:${req.tickEpoch}`;
+    if (this.orderedTicks.has(key)) return refuse("duplicate: this tick already has a purchase intention");
+    const stake = Math.round(Number(req.stake) * 100) / 100;
+    if (!Number.isFinite(stake) || stake < MIN_STAKE) return refuse(`invalid stake (minimum ${MIN_STAKE})`);
+    if (!(req.digit >= 0 && req.digit <= 9)) return refuse("invalid target digit");
+    const t = this._now();
+    this.sentAt = this.sentAt.filter(x => t - x < 1000);
+    if (this.sentAt.length >= MAX_ORDERS_PER_SEC) return refuse("rate limit: purchase not sent (API call budget for this second used)");
+    this.sentAt.push(t);
+    this.orderedTicks.add(key);
+    const f = req.forecast;
+    const order = {
+      id: `o${++this.seq}-${t}`, contractId: null, state: "pricing", reason: null, forecastId: f ? f.id : null,
+      forecast: f ? { id: f.id, madeAtSeq: f.madeAtSeq, targetSeq: f.targetSeq, horizon: f.horizon, madeAtEpoch: f.madeAtEpoch, predictedDigit: f.predictedDigit, probability: f.probability, decision: f.decision } : { id: null, targetSeq: null },
+      intent: { key, cycleId: req.cycleId, tickSeq: req.tickSeq, tickEpoch: req.tickEpoch, tickDigit: req.tickDigit },
+      symbol: req.symbol, digit: req.digit, k: req.k, contractType: req.contractType, stake, mode: "cycle",
+      accountId: a.loginId, isVirtual: !!a.isVirtual, currency: a.currency,
+      createdAt: t, updatedAt: t, result: null, pnl: null, entryEpoch: null, exitEpoch: null, purchaseTime: null,
+    };
+    this.orders.set(order.id, order);
+    this._emit(order, "created");
+    const reqId = h.nextReqId();
+    const msg = { proposal: 1, req_id: reqId, amount: stake, basis: "stake", contract_type: req.contractType, currency: a.currency, duration: req.k, duration_unit: "t", underlying_symbol: req.symbol, barrier: String(req.digit) };
+    h.await(reqId, (proposal, err) => this._onProposal(order, proposal, err));
+    try { h.send(msg); } catch (e) { this._finish(order, "rejected", "send failed: " + (e && e.message)); return { ok: false, reason: order.reason, order }; }
+    return { ok: true, order };
+  }
+
   _set(order, state, reason) { order.state = state; if (reason !== undefined) order.reason = reason; order.updatedAt = this._now(); }
   _finish(order, state, reason) { this._set(order, state, reason); this._emit(order, state); }
 
@@ -92,7 +133,8 @@ export class Executor {
     if (!a.authed || !a.open) return this._finish(order, "rejected", "connection lost before purchase");
     if (a.loginId !== order.accountId || !!a.isVirtual !== order.isVirtual) return this._finish(order, "rejected", "account changed before purchase");
     if (this.stopped) return this._finish(order, "rejected", "stopped before purchase");
-    if (h.currentSeq(order.symbol) - order.forecast.madeAtSeq > MAX_ENTRY_DELAY_TICKS) return this._finish(order, "rejected", "stale before purchase: a newer tick arrived, entry would not follow the forecast");
+    const lag = h.currentSeq(order.symbol) - (order.intent ? order.intent.tickSeq : order.forecast.madeAtSeq);
+    if (lag > (order.intent ? MAX_TICK_ORDER_LAG : MAX_ENTRY_DELAY_TICKS)) return this._finish(order, "rejected", order.intent ? `late: ${lag} ticks passed since the intention, purchase not sent` : "stale before purchase: a newer tick arrived, entry would not follow the forecast");
     const reqId = h.nextReqId();
     this._set(order, "buying");
     this._emit(order, "buying");
@@ -165,13 +207,14 @@ export class Executor {
     const live = [...this.orders.values()].filter(o => LIVE.has(o.state)).map(o => ({ ...o }));
     const recent = [...this.orders.values()].filter(o => !LIVE.has(o.state)).slice(-100).map(o => ({ ...o }));
     return {
-      v: 1, orderedForecasts: [...this.orderedForecasts].slice(-1000), settled: [...this.settled].slice(-1000),
+      v: 1, orderedForecasts: [...this.orderedForecasts].slice(-1000), orderedTicks: [...this.orderedTicks].slice(-3000), settled: [...this.settled].slice(-1000),
       orders: [...live, ...recent], seq: this.seq, legacy: this.legacy,
     };
   }
   restore(s) {
     if (!s || s.v !== 1) return;
     this.orderedForecasts = new Set(s.orderedForecasts || []); this.settled = new Set(s.settled || []);
+    this.orderedTicks = new Set(s.orderedTicks || []);
     this.seq = s.seq || 0;
     // Records written by earlier versions are kept as stored (never deleted), but nothing reads them.
     this.legacy = s.legacy || (s.alignment ? { alignment: s.alignment } : null);

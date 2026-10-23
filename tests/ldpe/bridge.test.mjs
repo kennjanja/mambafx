@@ -14,7 +14,7 @@ class Storage { constructor() { this.m = new Map(); } getItem(k) { return this.m
 
 let n = 0;
 function warmThenArm(p){ p.host.digAutoArmed = false; p.tick(130); p.L.engine.cfg.minProbability = 0.0001; }
-async function page({ storage = new Storage(), demo = true, armed = false, select } = {}) {
+async function page({ storage = new Storage(), demo = true, armed = false, select, mode = "forecast" } = {}) {
   const sent = [], pending = {}, selected = [], noted = [];
   let reqId = 9000;
   globalThis.WebSocket = { OPEN: 1 };
@@ -32,7 +32,7 @@ async function page({ storage = new Storage(), demo = true, armed = false, selec
   globalThis.window = win; globalThis.localStorage = storage;
   globalThis.document = { getElementById: () => null, addEventListener() {}, readyState: "complete", visibilityState: "visible" };
   await import(`../../src/ldpe/bridge.js?inst=${++n}`);
-  const L = win.LDPE;
+  const L = win.LDPE; L.settings.executionMode = mode;
   const rng = mulberry32(7 + n);
   let epoch = 1_700_000_000;
   return {
@@ -308,4 +308,24 @@ test("multiplier inputs use one decimal and the stake progression is rounded to 
   assert.match(html, /id="digMultN" min="1" max="10" step="0\.1"/);
   assert.match(html, /Math\.round\(n \* 10\) \/ 10/);
   assert.match(html, /function nextStake\(strat\)\{ return Math\.round\(rawNext\(strat\)\*100\)\/100; \}/);
+});
+test("cycle mode (default): one proposal per non-target tick through the executor, Demo/Real selected account, Stop halts", async () => {
+  for (const demo of [true, false]) {
+    const p = await page({ armed: true, demo, mode: "cycle" });
+    p.L.executor.setAccountType(demo ? "demo" : "real");
+    p.tick(L_WARM);
+    p.L.engine.cfg.minProbability = 0.0001;
+    p.tick(40);
+    const props = p.sent.filter(m => m.proposal);
+    const orders = [...p.L.executor.orders.values()];
+    assert.ok(props.length >= 1);
+    assert.ok(orders.every(o => o.isVirtual === demo && o.mode === "cycle"));
+    const keys = orders.map(o => o.intent.key);
+    assert.equal(new Set(keys).size, keys.length);
+    assert.ok(orders.every(o => o.intent.tickDigit !== o.digit));
+    p.L.executor.setStopped(true);
+    const n = p.sent.filter(m => m.proposal).length;
+    p.tick(10);
+    assert.equal(p.sent.filter(m => m.proposal).length, n);
+  }
 });

@@ -166,3 +166,20 @@ test("serialize/restore keeps duplicate protection and passes old records throug
   assert.deepEqual(ex2.legacy, { alignment: { old: "record" } });
   assert.equal(ex2.serialize().legacy.alignment.old, "record");
 });
+
+test("placeTick: rate limit refuses excess orders without sending", () => {
+  const h = harness({ k: 1 });
+  const mk = (i) => h.ex.placeTick({ symbol: "S", digit: 5, k: 1, contractType: "DIGITMATCH", stake: 1, tickSeq: 9000 + i, tickEpoch: 9000 + i, tickDigit: 1, cycleId: 1, forecast: null });
+  assert.equal(mk(1).ok, true); assert.equal(mk(2).ok, true);
+  const r = mk(3); assert.equal(r.ok, false);
+  assert.equal(h.sent.filter(m => m.proposal).length, 2);
+});
+
+test("placeTick: stake is rounded to 2 decimals and stopped executor refuses", () => {
+  const h = harness({ k: 1 });
+  const r = h.ex.placeTick({ symbol: "S", digit: 5, k: 1, contractType: "DIGITMATCH", stake: 5.832, tickSeq: 9001, tickEpoch: 9001, tickDigit: 1, cycleId: 1, forecast: null });
+  assert.equal(r.ok, true);
+  assert.equal(h.sent.filter(m => m.proposal).pop().amount, 5.83);
+  h.ex.setStopped(true);
+  assert.equal(h.ex.placeTick({ symbol: "S", digit: 5, k: 1, contractType: "DIGITMATCH", stake: 1, tickSeq: 9002, tickEpoch: 9002, tickDigit: 1, cycleId: 1, forecast: null }).ok, false);
+});
