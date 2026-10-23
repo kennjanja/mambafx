@@ -1410,6 +1410,17 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <div class="chi-bar"><div id="digChiBar" class="chi-fill" style="width:0"></div></div>
       </div>
 
+      <!-- Research: longest completed digit gaps for the current market -->
+      <div class="dig-card" id="digResearchCard" style="margin:0">
+        <h2>?? Research</h2>
+        <div class="dig-sub">Top 5 longest gaps (ticks without the digit) recorded on <b id="digResearchMarket">?</b> over <b id="digResearchTicks">0</b> ticks. Frequency = how many times that digit has had exactly that gap.</div>
+        <table class="freq-table">
+          <thead><tr><th>#</th><th>Digit</th><th>Gap</th><th>Frequency</th></tr></thead>
+          <tbody id="digResearchBody"></tbody>
+        </table>
+        <button type="button" class="gc-btn" style="margin-top:10px;padding:4px 10px" onclick="window.GAPRES && window.GAPRES.reset()">Reset market research</button>
+      </div>
+
       <!-- Transition matrix: hidden from the UI; the transition statistics are still computed (digTransitions, engine trans1/trans2) -->
       <div class="dig-card" style="margin:0;display:none" hidden aria-hidden="true">
         <h2>🔗 Transition matrix (Markov)</h2>
@@ -30113,6 +30124,7 @@ function digOnTick(price, epoch){
   digRing.push(d);
   if (digRing.length > DIG_RING_MAX) digRing.shift();
   if (prevDigit !== null) digTransitions[prevDigit][d]++;
+  if (window.GAPRES) window.GAPRES.ingest(SYMBOL, d, epoch, MARKETS[SYMBOL] || SYMBOL);
   if (digPageReady) digRender();
   if (window.LDPE){
     // exact digit from the raw quote literal when its precision matches the symbol's; otherwise
@@ -33276,6 +33288,7 @@ try {
 
 <script type="module" src="src/bazu/page.js?v=22"></script>
 <script type="module" src="src/ldpe/bridge.js?v=8"></script>
+<script type="module" src="src/ldpe/gap-research.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>
 <script type="module" src="src/trading/gridSetHelper.js"></script>
