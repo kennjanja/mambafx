@@ -103,6 +103,13 @@ export class CycleManager {
       if (t.digit !== st.cycle.target) return this._intend(st, t);
       this._end(st, `target ${t.digit} appeared`, t);   // the target tick is never bought
     }
+    const lim = this.opts.limits ? this.opts.limits() : { max: 0, count: 0 };
+    if (lim.max && lim.count >= lim.max) {
+      // Stop-after-N never cuts a running cycle short: it only prevents the NEXT cycle from starting.
+      st.waiting = false; this._changed();
+      if (this.opts.onLimit) { try { this.opts.onLimit(lim.max); } catch (_) {} }
+      return { idle: true, limit: lim.max };
+    }
     const f = t.forecast;
     if (this._eligible(f, t)) {
       this.usedForecasts.add(f.id);
@@ -117,8 +124,7 @@ export class CycleManager {
   }
 
   _intend(st, t) {
-    const c = st.cycle, lim = this.opts.limits ? this.opts.limits() : { max: 0, count: 0 };
-    if (lim.max && lim.count >= lim.max) { this._end(st, "stop-after-N reached", t); st.waiting = true; this._changed(); return { ended: "stop-after-N" }; }
+    const c = st.cycle;
     const key = `${t.symbol}:${t.seq}:${t.epoch}`;
     const it = { key, cycleId: c.id, symbol: t.symbol, tickSeq: t.seq, tickEpoch: t.epoch, tickDigit: t.digit, target: c.target, at: Date.now(), status: "intended", reason: null, contractId: null };
     this.intentions.push(it); keep(this.intentions, 300); this.byKey.set(key, it);

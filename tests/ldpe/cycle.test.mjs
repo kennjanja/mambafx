@@ -109,11 +109,15 @@ test("stop (inactive) ends the cycle; re-arming needs a fresh prediction", () =>
   assert.equal(h.cm.intentions.length, before);
 });
 
-test("stop-after-N ends the cycle", () => {
+test("stop-after-N never cuts a cycle short: it runs to its target, then no new cycle starts", () => {
   const h = setup({ max: 2 });
-  h.tick(0, 5); h.tick(1); h.tick(2); h.tick(3);
-  assert.equal(h.cm.intentions.length, 2);
+  h.tick(0, 5); h.tick(1); h.tick(2); h.tick(3); h.tick(4);
+  assert.equal(h.cm.intentions.length, 4);
+  assert.equal(h.cm.status("S").cycle.target, 5);
+  h.tick(5, 7);
   assert.equal(h.cm.status("S").cycle, null);
+  h.tick(6, 7); h.tick(7);
+  assert.equal(h.cm.intentions.length, 4);
 });
 
 test("Demo/Real: orders go to the selected account only; mismatch is an error with no fallback", () => {
