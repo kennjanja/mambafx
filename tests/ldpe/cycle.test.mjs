@@ -126,3 +126,78 @@ test("Demo/Real: orders go to the selected account only; mismatch is an error wi
   assert.match(mis.cm.intentions[0].reason, /no fallback/);
   assert.equal(mis.sent.length, 0);
 });
+
+// ---- stake progression is cycle-scoped (martingale x1.8 from 0.50, mirrors makeMultiplier) ----
+function stakeHarness() {
+  const h = setup();
+  let hist = [];
+  const base = 0.5, X = 1.8;
+  const nextStake = () => { const l = hist[hist.length - 1]; return Math.round((!l || l.won ? base : l.stake * X) * 100) / 100; };
+  h.cm.opts.stake = nextStake;
+  h.cm.opts.resetStake = () => { hist = []; };
+  h.ex.on((o, ev) => { if (ev === "settled" && h.cm.countsForStake(o.contractId)) hist.push({ stake: o.stake, won: o.result === "won" }); });
+  let cid = 0;
+  h.openOrder = (o) => {
+    const prop = h.sent.filter(m => m.proposal !== undefined)[[...h.ex.orders.values()].indexOf(o)];
+    h.pending.get(prop.req_id)({ id: "P" + prop.req_id, ask_price: o.stake }); h.pending.delete(prop.req_id);
+    const buy = h.sent.filter(m => m.buy !== undefined).pop();
+    h.pending.get(buy.req_id)({ contract_id: ++cid + 500, buy_price: o.stake, purchase_time: 1 }); h.pending.delete(buy.req_id);
+  };
+  h.settle = (o, won) => h.ex.onContractUpdate({ contract_id: o.contractId, status: won ? "won" : "lost", is_sold: 1, profit: won ? o.stake * 8 : -o.stake });
+  h.orders = () => [...h.ex.orders.values()];
+  return h;
+}
+
+test("a confirmed win ends the cycle; the next cycle starts at the base stake even with the same target digit", () => {
+  const h = stakeHarness();
+  h.tick(0, 2);                        // cycle 1, target 2
+  h.tick(3); const a1 = h.orders()[0]; h.openOrder(a1); h.settle(a1, false);
+  h.tick(4); const a2 = h.orders()[1]; h.openOrder(a2); h.settle(a2, false);
+  h.tick(6); const a3 = h.orders()[2]; h.openOrder(a3);
+  assert.deepEqual([a1.stake, a2.stake, a3.stake], [0.5, 0.9, 1.62]);
+  h.settle(a3, true);                  // win (13:28:30)
+  assert.equal(h.cm.status("S").cycle, null);
+  assert.equal(h.cm.cycles.at(-1).endReason, "win confirmed");
+  h.tick(7, 2);                        // next cycle, SAME target digit
+  const c2 = h.cm.status("S").cycle; assert.equal(c2.id, 2); assert.equal(c2.target, 2);
+  h.tick(8); const b1 = h.orders()[3]; h.openOrder(b1);
+  assert.equal(b1.stake, 0.5); assert.equal(b1.intent.cycleId, 2);
+  h.settle(b1, true);                  // second win (13:28:42)
+  assert.equal(h.cm.status("S").cycle, null);
+  h.tick(9, 2); h.tick(1);
+  assert.equal(h.orders()[4].stake, 0.5); assert.equal(h.orders()[4].intent.cycleId, 3);
+});
+
+test("losses inside a cycle keep following the recovery progression", () => {
+  const h = stakeHarness();
+  h.tick(0, 2);
+  const st = [];
+  for (const d of [3, 4, 6, 7]) { h.tick(d); const o = h.orders().at(-1); h.openOrder(o); h.settle(o, false); st.push(o.stake); }
+  assert.deepEqual(st, [0.5, 0.9, 1.62, 2.92]);
+  assert.equal(h.cm.status("S").cycle.id, 1);
+});
+
+test("late loss from an older cycle cannot restore its recovery stake in the new cycle", () => {
+  const h = stakeHarness();
+  h.tick(0, 2);
+  h.tick(3); const a1 = h.orders()[0]; h.openOrder(a1);
+  h.tick(4); const a2 = h.orders()[1]; h.openOrder(a2);
+  h.settle(a2, true);                  // win ends cycle 1 while a1 is still open
+  h.tick(5, 2);
+  h.tick(6); const b1 = h.orders()[2]; h.openOrder(b1);
+  h.settle(a1, false);                 // delayed loss from cycle 1
+  h.tick(8); const b2 = h.orders()[3];
+  assert.equal(b1.stake, 0.5); assert.equal(b2.stake, 0.5);
+  assert.equal(b2.intent.cycleId, 2); assert.equal(h.cm.status("S").cycle.target, 2);
+});
+
+test("duplicate settlement events do not end another cycle or change the stake", () => {
+  const h = stakeHarness();
+  h.tick(0, 2); h.tick(3); const a1 = h.orders()[0]; h.openOrder(a1);
+  h.settle(a1, true);
+  h.tick(5, 2);
+  const dup = h.settle(a1, true);
+  assert.equal(dup.duplicate, true);
+  assert.equal(h.cm.status("S").cycle.id, 2);
+  h.tick(6); assert.equal(h.orders()[1].stake, 0.5);
+});

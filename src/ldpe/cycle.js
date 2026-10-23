@@ -42,6 +42,14 @@ export class CycleManager {
     const it = this.byKey.get(order.intent.key); if (!it) return;
     it.status = intentionStatusFromOrder(order); it.reason = order.reason || null;
     it.contractId = order.contractId || null;
+    if (ev === "settled" && !it.settledSeen) {
+      it.settledSeen = true;
+      // A confirmed win ends ITS OWN cycle only; a late win from an older cycle never touches a newer one.
+      if (order.result === "won") {
+        const st = this._s(order.symbol), c = st.cycle;
+        if (c && c.id === order.intent.cycleId) { this._end(st, "win confirmed", { seq: st.lastSeq }); st.waiting = true; }
+      }
+    }
     if (ev === "settled") {
       const p = order.provisional;
       if (p) order.reconciliation = { outcomeAgrees: p.win === (order.result === "won"), exitTickAgrees: order.exitEpoch != null ? order.exitEpoch === p.epoch : null };
@@ -65,6 +73,18 @@ export class CycleManager {
     c.endedAtSeq = t.seq; c.endReason = reason;
     this.cycles.push(c); keep(this.cycles, 100);
     st.cycle = null;
+    this._resetStake();
+  }
+
+  _resetStake() { if (this.opts.resetStake) { try { this.opts.resetStake(); } catch (_) {} } }
+
+  // Stake progression is scoped to the active cycle: a result only feeds it if its order belongs to that cycle.
+  // Late confirmations/settlements from finished cycles are ignored, so they cannot restore an old stake.
+  countsForStake(contractId) {
+    const o = this.ex.byContract.get(String(contractId));
+    if (!o || !o.intent) return true;
+    const c = this._s(o.symbol).cycle;
+    return !!c && c.id === o.intent.cycleId;
   }
 
   _eligible(f, t) {
@@ -87,6 +107,7 @@ export class CycleManager {
     if (this._eligible(f, t)) {
       this.usedForecasts.add(f.id);
       if (this.usedForecasts.size > 1000) this.usedForecasts.delete(this.usedForecasts.values().next().value);
+      this._resetStake();
       st.cycle = { id: ++this.cycleSeq, symbol: t.symbol, target: f.predictedDigit, forecastId: f.id, forecast: f, startedAfterSeq: t.seq, intentions: 0 };
       st.waiting = false; this._changed();
       return { started: st.cycle.id, target: st.cycle.target };
