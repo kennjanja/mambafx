@@ -193,7 +193,7 @@ const api = {
   },
 
   // Trading socket events forwarded by the page.
-  stakeCounts: (contractId) => cycles.countsForStake(contractId),
+  stakeCounts: (contractId) => cycles.countsForStake(contractId) && (!window.GAPRES || window.GAPRES.countsForStake(contractId)),
   onContractUpdate(c) { return executor.onContractUpdate(c); },
   onDisconnect() { executor.onDisconnect(); },
   ownsOrder(orderId) { return executor.orders.has(orderId); },

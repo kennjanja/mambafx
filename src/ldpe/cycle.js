@@ -82,7 +82,7 @@ export class CycleManager {
   // Late confirmations/settlements from finished cycles are ignored, so they cannot restore an old stake.
   countsForStake(contractId) {
     const o = this.ex.byContract.get(String(contractId));
-    if (!o || !o.intent) return true;
+    if (!o || !o.intent || typeof o.intent.cycleId !== "number") return true;   // not an LDPE-cycle order
     const c = this._s(o.symbol).cycle;
     return !!c && c.id === o.intent.cycleId;
   }
