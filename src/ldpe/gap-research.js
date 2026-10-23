@@ -85,7 +85,13 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const m = $("digResearchMarket"); if (m) m.textContent = label || current;
     const t = $("digResearchTicks"); if (t) t.textContent = String(research.ticks(current));
     const cur = research.current(current);
-    for (let d = 0; d < 10; d++) { const g = $("digResGap" + d); if (g) g.textContent = cur && cur[d] != null ? "gap " + cur[d] : "gap —"; }
+    const tg0 = trader && trader.cycle && trader.cycle.symbol === current ? trader.cycle.target : null, trig0 = trigger();
+    for (let d = 0; d < 10; d++) {
+      const g = $("digResGap" + d); if (!g) continue;
+      g.textContent = cur && cur[d] != null ? "gap " + cur[d] : "gap —";
+      // an active gap (reached the trigger, or the running cycle's target) blinks purple
+      const btn = g.parentElement; if (btn) btn.classList.toggle("gap-active", d === tg0 || (cur != null && cur[d] != null && cur[d] >= trig0));
+    }
     const tr = getTrader(), st = $("digResStatus"); if (!st) return;
     const L = window.LDPE;
     const acct = L ? (L.settings.accountType === "real" ? "Real" : "Demo") : "—";
