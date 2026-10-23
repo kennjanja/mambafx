@@ -30042,8 +30042,9 @@ window.__ldpeHost = {
     max: Math.max(0, parseInt(($("digAutoMax") || {}).value || "0", 10) || 0),
     count: digAutoCount,
   }),
-  noteAutoOrder: () => {
+  noteAutoOrder: (keepArmed) => {
     digAutoCount++;
+    if (keepArmed) return;   // cycle mode: the limit is applied when the next cycle would start, never mid-cycle
     const maxN = Math.max(0, parseInt(($("digAutoMax") || {}).value || "0", 10) || 0);
     if (maxN && digAutoCount >= maxN) digDisarmAuto(`reached ${maxN} trades`);
   },
@@ -33333,7 +33334,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=22"></script>
-<script type="module" src="src/ldpe/bridge.js?v=8"></script>
+<script type="module" src="src/ldpe/bridge.js?v=9"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=4"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>

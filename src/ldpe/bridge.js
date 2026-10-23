@@ -86,7 +86,8 @@ const cycles = new CycleManager(executor, {
   stake: () => (H().nextStake ? H().nextStake() : settings.stake),
   limits: () => (H().autoSettings ? H().autoSettings() : { max: 0, count: 0 }),
   resetStake: () => { if (H().resetStake) H().resetStake(); },
-  noteOrder: () => { if (H().noteAutoOrder) H().noteAutoOrder(); },
+  noteOrder: () => { if (H().noteAutoOrder) H().noteAutoOrder(true); },
+  onLimit: (n) => { if (H().disarm) H().disarm(`reached ${n} trades (last cycle finished)`); },
   onChange: () => { save(LS_CYC, cycles.serialize()); },
 });
 cycles.restore(load(LS_CYC, null));
