@@ -91,10 +91,10 @@ export class Executor {
   placeTick(req) {
     const h = this.host, a = h.account();
     const refuse = (reason) => { this._note(`refused tick ${req.symbol}#${req.tickSeq}: ${reason}`); return { ok: false, reason }; };
-    if (this.stopped) return refuse("stopped");
+    if (this.stopped && !req.manual) return refuse("stopped");
     const mm = this.accountMismatch(a);
     if (mm) return refuse(mm);
-    const key = `${req.symbol}:${req.tickSeq}:${req.tickEpoch}`;
+    const key = `${req.keyPrefix || ""}${req.symbol}:${req.tickSeq}:${req.tickEpoch}`;
     if (this.orderedTicks.has(key)) return refuse("duplicate: this tick already has a purchase intention");
     const stake = Math.round(Number(req.stake) * 100) / 100;
     if (!Number.isFinite(stake) || stake < MIN_STAKE) return refuse(`invalid stake (minimum ${MIN_STAKE})`);

@@ -1412,13 +1412,50 @@ table.an-table tbody tr:last-child td{border-bottom:none}
 
       <!-- Research: longest completed digit gaps for the current market -->
       <div class="dig-card" id="digResearchCard" style="margin:0">
-        <h2>?? Research</h2>
-        <div class="dig-sub">Top 5 longest gaps (ticks without the digit) recorded on <b id="digResearchMarket">?</b> over <b id="digResearchTicks">0</b> ticks. Frequency = how many times that digit has had exactly that gap.</div>
+        <h2>?? Digit research</h2>
+        <div class="dig-sub">Top 5 longest gaps (ticks without the digit) recorded on <b id="digResearchMarket">?</b> over <b id="digResearchTicks">0</b> ticks. Frequency = how many completed gaps (by this or any other digit) have reached at least that length.</div>
         <table class="freq-table">
-          <thead><tr><th>#</th><th>Digit</th><th>Gap</th><th>Frequency</th></tr></thead>
+          <thead><tr><th>Digit</th><th>Gap</th><th>Frequency</th></tr></thead>
           <tbody id="digResearchBody"></tbody>
         </table>
         <button type="button" class="gc-btn" style="margin-top:10px;padding:4px 10px" onclick="window.GAPRES && window.GAPRES.reset()">Reset market research</button>
+
+        <div id="digResTrade" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
+          <h3 style="margin:0 0 6px;font-size:13px">Gap trading (Matches)</h3>
+          <div class="dig-sub">Trades on the account chosen with the LDPE Demo | Real switch, with the Trade execution card's stake and progression. When armed, a cycle starts once any digit's current gap reaches the trigger and targets the digit with the highest gap; it buys on every tick until the target digit appears (or a win is confirmed). The next cycle starts only if the next highest-gap digit has also reached the trigger. No other analysis is done.</div>
+          <div class="gc-row" style="margin:8px 0">
+            <div class="gc-field"><label for="digResStake">Stake per trade</label><input type="number" id="digResStake" min="0.35" step="0.01" value="0.50"></div>
+            <div class="gc-field"><label for="digResStrat">Stake multiplier</label>
+              <select id="digResStrat">
+                <option value="flat" selected>Flat (no progression)</option>
+                <option value="martingale">Martingale (x N on loss, base stake after a win)</option>
+                <option value="anti_martin">Reverse Martingale (x N on win)</option>
+                <option value="dalembert">D'Alembert (+1 unit on loss, base stake after a win)</option>
+                <option value="anti_dalem">Reverse D'Alembert (+1 unit on win)</option>
+                <option value="oscar">Oscar's Grind</option>
+                <option value="one_3_2_6">1-3-2-6 sequence</option>
+              </select></div>
+            <div class="gc-field"><label for="digResMultN">Multiplier (x N, e.g. 1.4, 1.5, 8)</label><input type="number" id="digResMultN" min="1" max="10" step="0.1" value="2.0" onchange="this.value=(Math.min(10,Math.max(1,Math.round((parseFloat(this.value)||2)*10)/10))).toFixed(1)"></div>
+          </div>
+          <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:8px 0">
+            <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="digResArm" onchange="window.GAPRES && window.GAPRES.arm(this.checked)"> <b>Automated gap trading</b></label>
+            <label style="display:flex;gap:6px;align-items:center">Trigger gap (ticks) <input type="number" id="digResTrigger" min="1" max="1000" step="1" value="30" style="width:70px"></label>
+          </div>
+          <div id="digResStatus" class="cell-mut" style="margin-bottom:8px"></div>
+          <div class="dig-sub" style="margin-bottom:4px">Manual: click a digit to buy Matches on it (current gap shown).</div>
+          <div id="digResManual" style="display:grid;grid-template-columns:repeat(5,1fr);gap:6px">
+            <button class="dig-digit-btn" onclick="window.GAPRES&&window.GAPRES.manual(0)">0<br><small id="digResGap0">gap ?</small></button>
+            <button class="dig-digit-btn" onclick="window.GAPRES&&window.GAPRES.manual(1)">1<br><small id="digResGap1">gap ?</small></button>
+            <button class="dig-digit-btn" onclick="window.GAPRES&&window.GAPRES.manual(2)">2<br><small id="digResGap2">gap ?</small></button>
+            <button class="dig-digit-btn" onclick="window.GAPRES&&window.GAPRES.manual(3)">3<br><small id="digResGap3">gap ?</small></button>
+            <button class="dig-digit-btn" onclick="window.GAPRES&&window.GAPRES.manual(4)">4<br><small id="digResGap4">gap ?</small></button>
+            <button class="dig-digit-btn" onclick="window.GAPRES&&window.GAPRES.manual(5)">5<br><small id="digResGap5">gap ?</small></button>
+            <button class="dig-digit-btn" onclick="window.GAPRES&&window.GAPRES.manual(6)">6<br><small id="digResGap6">gap ?</small></button>
+            <button class="dig-digit-btn" onclick="window.GAPRES&&window.GAPRES.manual(7)">7<br><small id="digResGap7">gap ?</small></button>
+            <button class="dig-digit-btn" onclick="window.GAPRES&&window.GAPRES.manual(8)">8<br><small id="digResGap8">gap ?</small></button>
+            <button class="dig-digit-btn" onclick="window.GAPRES&&window.GAPRES.manual(9)">9<br><small id="digResGap9">gap ?</small></button>
+          </div>
+        </div>
       </div>
 
       <!-- Transition matrix: hidden from the UI; the transition statistics are still computed (digTransitions, engine trans1/trans2) -->
@@ -29169,7 +29206,7 @@ function gridUpdateContract(c){
     if (gridTrades.some(t => t.id === id) && typeof gridMult === 'function')
       gridMult().record(stk, won);
     if (typeof digTrades !== 'undefined' && digTrades.some(t => t.id === id) && typeof digMult === 'function')
-      { if (!(window.LDPE && window.LDPE.stakeCounts) || window.LDPE.stakeCounts(id)) digMult().record(stk, won); }
+      { if (window.GAPRES && window.GAPRES.recordResult && window.GAPRES.recordResult(id, stk, won)) { /* digit research order: own progression */ } else if (!(window.LDPE && window.LDPE.stakeCounts) || window.LDPE.stakeCounts(id)) digMult().record(stk, won); }
     if (typeof engTrades !== 'undefined' && engTrades.some(t => t.id === id) && typeof engMult === 'function')
       engMult().record(stk, won);
     // Mamba FX bot and Deriv Auto Bot multipliers are handled inside their own IIFEs
@@ -29994,6 +30031,10 @@ window.__ldpeHost = {
   get digAutoArmed(){ return digAutoArmed; },
   // stake for the next automatic LDPE order: the Trade execution card's stake + multiplier progression
   resetStake: () => { digMult().reset(); },
+  // Digit research trading has its own stake / progression / multiplier inputs
+  resNextStake: () => { const m = resMult(); const st = ($("digResStrat") || {}).value || "flat"; m._strat = st; return Math.max(0.35, m.getNext(st)); },
+  resResetStake: () => { resMult().reset(); },
+  resRecord: (stk, won) => { const m = resMult(); m._strat = ($("digResStrat") || {}).value || "flat"; m.record(stk, won); },
   nextStake: () => { const st = digMultStrat(); digMult()._strat = st; return Math.max(0.35, digMult().getNext(st)); },
   // the user's own Auto-panel settings (cooldown in ticks, stop after N trades)
   autoSettings: () => ({
@@ -30133,6 +30174,7 @@ function digOnTick(price, epoch){
     const fracLen = rq && rq.includes(".") ? rq.split(".")[1].length : 0;
     const raw = (rq && fracLen === decimals) ? rq : Number(price).toFixed(decimals);
     window.LDPE.ingest(SYMBOL, raw, decimals, epoch);
+    if (window.GAPRES && window.GAPRES.afterTick) window.GAPRES.afterTick(SYMBOL, d, epoch);
   } else {
     digCheckAuto();
   }
@@ -30442,6 +30484,7 @@ function digPlaceTrade(digit, source, opts){
 }
 
 let digPnlResetAt = 0;
+let _resMult; function resMult(){ return _resMult || (_resMult = makeMultiplier(() => $("digResStake"), () => parseFloat(($("digResMultN") || {}).value))); }
 function digSetMultN(v){ if (typeof setMartingaleX === "function") setMartingaleX(v); }
 function digResetSessionPnl(){ digPnlResetAt = Date.now(); digRenderTrades(); }
 function digRenderSessionPnl(net, any){
@@ -30500,6 +30543,7 @@ function digToggleAuto(){
 }
 function digDisarmAuto(reason){
   digAutoArmed = false;
+  if (window.GAPRES && window.GAPRES.disarm) window.GAPRES.disarm();
   const t = $("digAutoArm"); if (t) t.checked = false;
   const l = $("digAutoLabel"); if (l) l.textContent = "Automated Match: OFF";
   gridSet("digAutoStatus", "Disarmed" + (reason ? " — " + reason + "." : "."));
@@ -30757,8 +30801,10 @@ function setMartingaleX(v){
   });
 }
 
-function makeMultiplier(getStakeEl){
+function makeMultiplier(getStakeEl, getMultN){
   let history=[], seq=0, grindProfit=0;
+  // optional per-instance multiplier (one decimal, 1-10); otherwise the shared MARTINGALE_X
+  function multX(){ const n=getMultN?Math.round(getMultN()*10)/10:NaN; return n>=1&&n<=10?n:MARTINGALE_X; }
   const MULT_1326=[1,3,2,6];
   function base(){ const el=getStakeEl(); return Math.max(0.35,parseFloat((el&&el.value)||'1')); }
   function nextStake(strat){ return Math.round(rawNext(strat)*100)/100; }
@@ -30768,8 +30814,8 @@ function makeMultiplier(getStakeEl){
     const last=history[history.length-1];
     const p=last.stake, w=last.won, u=b;
     switch(strat){
-      case 'martingale':    return w?b:Math.max(0.35,p*MARTINGALE_X);
-      case 'anti_martin':  return w?Math.max(0.35,p*MARTINGALE_X):b;
+      case 'martingale':    return w?b:Math.max(0.35,p*multX());
+      case 'anti_martin':  return w?Math.max(0.35,p*multX()):b;
       case 'dalembert':    return w?b:p+u;
       case 'anti_dalem':   return w?p+u:Math.max(0.35,p-u);
       case 'oscar':{
@@ -33288,7 +33334,7 @@ try {
 
 <script type="module" src="src/bazu/page.js?v=22"></script>
 <script type="module" src="src/ldpe/bridge.js?v=8"></script>
-<script type="module" src="src/ldpe/gap-research.js?v=1"></script>
+<script type="module" src="src/ldpe/gap-research.js?v=3"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>
 <script type="module" src="src/trading/gridSetHelper.js"></script>

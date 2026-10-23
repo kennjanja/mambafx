@@ -5,12 +5,12 @@ import { GapResearch } from "../../src/ldpe/gap-research.js";
 
 const feed = (r, digits, sym = "R_10", e0 = 1) => digits.forEach((d, i) => r.ingest(sym, d, e0 + i));
 
-test("gap = ticks without the digit between two occurrences; frequency counts exact repeats", () => {
+test("gap = ticks without the digit between two occurrences", () => {
   const r = new GapResearch();
   feed(r, [5, 1, 2, 5, 1, 2, 5, 5]);           // 5: gaps 2, 2, 0
   const top = r.top("R_10");
-  assert.deepEqual(top.find(x => x.digit === 5 && x.gap === 2), { digit: 5, gap: 2, frequency: 2 });
-  assert.ok(top.some(x => x.digit === 5 && x.gap === 0 && x.frequency === 1));
+  assert.deepEqual(top.find(x => x.digit === 5 && x.gap === 2), { digit: 5, gap: 2, frequency: 4 });
+  assert.deepEqual(top.find(x => x.digit === 5 && x.gap === 0), { digit: 5, gap: 0, frequency: 5 });   // every gap reached >= 0
 });
 
 test("the unseen start before a digit's first occurrence is not counted as a gap", () => {
@@ -50,4 +50,32 @@ test("page wiring: research card sits beside the frequency table and ticks feed 
   assert.ok(a > 0 && b > a && b - a < 2500);
   assert.match(html, /window\.GAPRES\.ingest\(SYMBOL, d, epoch/);
   assert.match(html, /src\/ldpe\/gap-research\.js/);
+});
+test("frequency counts every completed gap, by any digit, that reached at least this length", () => {
+  const r = new GapResearch();
+  // digit 6 gap 4; then digit 7 gap 4 (6's frequency becomes 2); then digit 0 gap 6 (6's becomes 3, 0 has 1)
+  feed(r, [6, 1, 1, 1, 1, 6, 7, 1, 1, 1, 1, 7, 0, 1, 1, 1, 1, 1, 1, 0]);
+  let top = r.top("R_10");
+  const row = (d, g) => top.find(x => x.digit === d && x.gap === g);
+  assert.equal(row(0, 6).frequency, 1);
+  assert.equal(row(6, 4).frequency, 3);
+  assert.equal(row(7, 4).frequency, 3 - 0);
+  assert.ok(top.every((x, i) => i === 0 || top[i - 1].gap >= x.gap));
+});
+
+test("current gaps are exposed; unseen digits are null", () => {
+  const r = new GapResearch();
+  feed(r, [3, 1, 1]);
+  const c = r.current("R_10");
+  assert.equal(c[3], 2); assert.equal(c[1], 0); assert.equal(c[9], null);
+});
+
+test("page wiring: research card is named Digit research, has own stake/progression/multiplier and trading controls, no row numbering", () => {
+  const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
+  assert.match(html, /Digit research<\/h2>/);
+  for (const id of ["digResStake", "digResStrat", "digResMultN", "digResArm", "digResTrigger", "digResManual"]) assert.ok(html.includes(`id="${id}"`), id);
+  assert.match(html, /<thead><tr><th>Digit<\/th><th>Gap<\/th><th>Frequency<\/th><\/tr><\/thead>/);
+  assert.match(html, /value="martingale"[^>]*>Martingale[\s\S]{0,400}value="dalembert"/);
+  assert.match(html, /GAPRES\.afterTick\(SYMBOL, d, epoch\)/);
+  assert.match(html, /function makeMultiplier\(getStakeEl, getMultN\)/);
 });
