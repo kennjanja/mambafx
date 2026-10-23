@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { Ldpe } from "../../src/ldpe/engine.js";
-import { Executor } from "../../src/ldpe/exec.js";
+import { Executor, PROPOSAL_TIMEOUT_MS } from "../../src/ldpe/exec.js";
 
 function rng(a) { return () => { a |= 0; a = a + 0x6D2B79F5 | 0; let t = Math.imul(a ^ a >>> 15, 1 | a); t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t; return ((t ^ t >>> 14) >>> 0) / 4294967296; }; }
 
@@ -182,4 +182,14 @@ test("placeTick: stake is rounded to 2 decimals and stopped executor refuses", (
   assert.equal(h.sent.filter(m => m.proposal).pop().amount, 5.83);
   h.ex.setStopped(true);
   assert.equal(h.ex.placeTick({ symbol: "S", digit: 5, k: 1, contractType: "DIGITMATCH", stake: 1, tickSeq: 9002, tickEpoch: 9002, tickDigit: 1, cycleId: 1, forecast: null }).ok, false);
+});
+test("placeTick: an unanswered proposal times out cleanly (nothing bought) and a late reply is ignored", async () => {
+  const h = harness();
+  const r = h.ex.placeTick({ symbol: "S", digit: 5, k: 1, contractType: "DIGITMATCH", stake: 1, tickSeq: 7001, tickEpoch: 7001, tickDigit: 1, cycleId: 1, forecast: null });
+  assert.equal(r.ok, true);
+  await new Promise(res => setTimeout(res, PROPOSAL_TIMEOUT_MS + 300));
+  assert.equal(r.order.state, "rejected");
+  assert.match(r.order.reason, /timed out/);
+  h.respond("proposal", { id: "p1", ask_price: 1 });
+  assert.equal(h.sent.filter(m => m.buy).length, 0);
 });
