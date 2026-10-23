@@ -28684,7 +28684,7 @@ let gridConnecting = false;
 let gridAutoCall = false, gridWantConn = false, gridRetryTimer = null, gridRetryN = 0;   // auto-reconnect state
 function gridScheduleRetry(){
   if (!gridWantConn || gridRetryTimer) return;
-  const delay = Math.min(30000, 1500 * Math.pow(1.6, gridRetryN++));
+  const delay = Math.min(8000, 1000 * Math.pow(1.6, gridRetryN++));
   gridDiag(`<b>Connection lost.</b> Reconnecting automatically in ${Math.round(delay/1000)}s…`, true);
   gridRetryTimer = setTimeout(() => { gridRetryTimer = null; if (gridWantConn && !gridConnecting && !(gridWs && gridWs.readyState === 1)) (gridAutoCall = true, gridConnect()); }, delay);
 }
@@ -28841,11 +28841,11 @@ function gridWsSubscribeAndInit(acctId){
   window.__gridLastMsgAt = Date.now();
   gridPing = setInterval(() => {
     if (gridWs && gridWs.readyState === WebSocket.OPEN){
-      // half-open socket: no frame (not even a pong) for 45 s -> close it so the auto-reconnect runs
-      if (Date.now() - window.__gridLastMsgAt > 45000){ try { gridWs.close(); } catch(_){} return; }
+      // half-open socket: no frame (not even a pong) for 15 s -> close it so the auto-reconnect runs
+      if (Date.now() - window.__gridLastMsgAt > 15000){ try { gridWs.close(); } catch(_){} return; }
       gridWs.send(JSON.stringify({ ping: 1 }));
     }
-  }, 20000);
+  }, 5000);
 
   if (typeof digUpdateConnStatus  === "function") digUpdateConnStatus();
   if (typeof diagUpdateConnStatus === "function") diagUpdateConnStatus();
@@ -33334,7 +33334,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=22"></script>
-<script type="module" src="src/ldpe/bridge.js?v=9"></script>
+<script type="module" src="src/ldpe/bridge.js?v=10"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=4"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>

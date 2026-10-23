@@ -8,6 +8,7 @@
 
 export const MAX_ENTRY_DELAY_TICKS = 0;  // forecast must still be current when the buy is sent
 export const MAX_TICK_ORDER_LAG = 2;    // tick-driven orders: ticks allowed between the intention and the buy
+export const PROPOSAL_TIMEOUT_MS = 4000;  // no proposal reply by then: nothing was bought, so the order is failed cleanly
 export const MAX_ORDERS_PER_SEC = 2;    // each order is two API calls (proposal + buy); no automatic retries
 export const STALE_REQUEST_MS = 20000;
 export const MIN_STAKE = 0.35;
@@ -119,6 +120,9 @@ export class Executor {
     const msg = { proposal: 1, req_id: reqId, amount: stake, basis: "stake", contract_type: req.contractType, currency: a.currency, duration: req.k, duration_unit: "t", underlying_symbol: req.symbol, barrier: String(req.digit) };
     h.await(reqId, (proposal, err) => this._onProposal(order, proposal, err));
     try { h.send(msg); } catch (e) { this._finish(order, "rejected", "send failed: " + (e && e.message)); return { ok: false, reason: order.reason, order }; }
+    // Only the pricing stage is timed out (no buy was sent). A later proposal reply is ignored by _onProposal.
+    const timer = setTimeout(() => { if (order.state === "pricing") this._finish(order, "rejected", "proposal timed out (connection slow or lost); purchase not sent"); }, PROPOSAL_TIMEOUT_MS);
+    if (timer && timer.unref) timer.unref();
     return { ok: true, order };
   }
 
