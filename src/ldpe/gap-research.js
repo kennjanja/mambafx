@@ -54,6 +54,7 @@ export class GapResearch {
 }
 
 const LS_TRIG = "ldpe_gap_trigger_v1";
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
 if (typeof window !== "undefined" && typeof document !== "undefined") {
   const research = new GapResearch(window.localStorage);

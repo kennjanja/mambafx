@@ -79,3 +79,7 @@ test("page wiring: research card is named Digit research, has own stake/progress
   assert.match(html, /GAPRES\.afterTick\(SYMBOL, d, epoch\)/);
   assert.match(html, /function makeMultiplier\(getStakeEl, getMultN\)/);
 });
+test("gap-research.js defines esc when it calls it (regression: undefined esc froze the tick path)", () => {
+  const src = readFileSync(new URL("../../src/ldpe/gap-research.js", import.meta.url), "utf8");
+  if (/\besc\(/.test(src)) assert.match(src, /const esc\s*=/);
+});
