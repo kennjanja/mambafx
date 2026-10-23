@@ -85,6 +85,7 @@ const cycles = new CycleManager(executor, {
   k: () => settings.k,
   stake: () => (H().nextStake ? H().nextStake() : settings.stake),
   limits: () => (H().autoSettings ? H().autoSettings() : { max: 0, count: 0 }),
+  resetStake: () => { if (H().resetStake) H().resetStake(); },
   noteOrder: () => { if (H().noteAutoOrder) H().noteAutoOrder(); },
   onChange: () => { save(LS_CYC, cycles.serialize()); },
 });
@@ -192,6 +193,7 @@ const api = {
   },
 
   // Trading socket events forwarded by the page.
+  stakeCounts: (contractId) => cycles.countsForStake(contractId),
   onContractUpdate(c) { return executor.onContractUpdate(c); },
   onDisconnect() { executor.onDisconnect(); },
   ownsOrder(orderId) { return executor.orders.has(orderId); },

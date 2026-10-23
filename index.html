@@ -29158,7 +29158,7 @@ function gridUpdateContract(c){
     if (gridTrades.some(t => t.id === id) && typeof gridMult === 'function')
       gridMult().record(stk, won);
     if (typeof digTrades !== 'undefined' && digTrades.some(t => t.id === id) && typeof digMult === 'function')
-      digMult().record(stk, won);
+      { if (!(window.LDPE && window.LDPE.stakeCounts) || window.LDPE.stakeCounts(id)) digMult().record(stk, won); }
     if (typeof engTrades !== 'undefined' && engTrades.some(t => t.id === id) && typeof engMult === 'function')
       engMult().record(stk, won);
     // Mamba FX bot and Deriv Auto Bot multipliers are handled inside their own IIFEs
@@ -29982,6 +29982,7 @@ window.__ldpeHost = {
   renderTrades: () => { try { digRenderTrades(); } catch(_){} },
   get digAutoArmed(){ return digAutoArmed; },
   // stake for the next automatic LDPE order: the Trade execution card's stake + multiplier progression
+  resetStake: () => { digMult().reset(); },
   nextStake: () => { const st = digMultStrat(); digMult()._strat = st; return Math.max(0.35, digMult().getNext(st)); },
   // the user's own Auto-panel settings (cooldown in ticks, stop after N trades)
   autoSettings: () => ({
@@ -33274,7 +33275,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=22"></script>
-<script type="module" src="src/ldpe/bridge.js?v=7"></script>
+<script type="module" src="src/ldpe/bridge.js?v=8"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>
 <script type="module" src="src/trading/gridSetHelper.js"></script>
