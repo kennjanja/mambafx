@@ -3,9 +3,10 @@
 // refuses source "ldpe", so no second execution path exists.
 import { Ldpe, DEFAULTS, entropyBits } from "./engine.js";
 import { Executor } from "./exec.js";
+import { CycleManager } from "./cycle.js";
 import { StateStore, snapshotEngine, restoreEngine } from "./persist.js";
 
-const LS_CFG = "ldpe_settings_v1", LS_EXEC = "ldpe_exec_v1";
+const LS_CFG = "ldpe_settings_v1", LS_EXEC = "ldpe_exec_v1", LS_CYC = "ldpe_cycles_v1";
 const $ = (id) => document.getElementById(id);
 const H = () => window.__ldpeHost || {};
 const load = (k, d) => { try { return JSON.parse(localStorage.getItem(k)) ?? d; } catch (_) { return d; } };
@@ -30,11 +31,12 @@ const FIELDS = [
 const saved = load(LS_CFG, {});
 // Only the current settings are kept; the earlier stake field is carried over, nothing else is.
 const settings = {
-  triggerSource: "ensemble", accountType: "demo", stopped: false,
+  triggerSource: "ensemble", accountType: "demo", stopped: false, executionMode: "cycle",
   ...Object.fromEntries(FIELDS.map(f => [f[0], f[2]])),
   ...(saved.maxStake != null && saved.stake == null ? { stake: saved.maxStake } : {}),
 };
-for (const k of [...FIELDS.map(f => f[0]), "triggerSource", "accountType", "stopped"]) if (saved[k] !== undefined) settings[k] = saved[k];
+for (const k of [...FIELDS.map(f => f[0]), "triggerSource", "accountType", "stopped", "executionMode"]) if (saved[k] !== undefined) settings[k] = saved[k];
+if (settings.executionMode !== "forecast") settings.executionMode = "cycle";
 if (settings.accountType !== "real") settings.accountType = "demo";
 
 const effectiveHorizon = () => Math.min(10, Math.max(1, settings.k));
@@ -77,6 +79,16 @@ const host = {
 const executor = new Executor(host, { accountType: settings.accountType, stopped: settings.stopped });
 executor.restore(load(LS_EXEC, null));
 const persistExec = () => save(LS_EXEC, executor.serialize());
+
+// Tick-driven cycles: one DIGITMATCH intention per non-target tick, through the executor only.
+const cycles = new CycleManager(executor, {
+  k: () => settings.k,
+  stake: () => (H().nextStake ? H().nextStake() : settings.stake),
+  limits: () => (H().autoSettings ? H().autoSettings() : { max: 0, count: 0 }),
+  noteOrder: () => { if (H().noteAutoOrder) H().noteAutoOrder(); },
+  onChange: () => { save(LS_CYC, cycles.serialize()); },
+});
+cycles.restore(load(LS_CYC, null));
 
 const STATUS_TEXT = { created: "pricing…", pricing: "pricing…", buying: "buying…", open: "open", unknown: "unknown — confirm on account" };
 executor.on((order, ev) => {
@@ -124,7 +136,7 @@ function saveState(force) {
 const releaseTimers = {};
 
 const api = {
-  settings, FIELDS, executor,
+  settings, FIELDS, executor, cycles,
   get engine() { return engine; },
   latestFor: (s) => latest[s],
 
@@ -133,7 +145,14 @@ const api = {
     const r = engine.ingest(symbol, { epoch, quote: rawQuote, decimals, recv: Date.now() });
     if (r.accepted) {
       syncHorizon();
-      if (r.forecast) { latest[symbol] = r.forecast; api.maybeTrade(symbol, r.forecast); }
+      if (r.forecast) {
+        latest[symbol] = r.forecast;
+        if (settings.executionMode === "forecast") api.maybeTrade(symbol, r.forecast);
+        else {
+          const seq = engine.state(symbol).seq;
+          cycles.onTick({ symbol, seq, epoch: Number(epoch), digit: r.digit, forecast: r.forecast, active: !!H().digAutoArmed && !executor.stopped });
+        }
+      }
       if (++ticksSinceSave >= 20) saveState(false);
     }
     api.render();
@@ -180,7 +199,7 @@ const api = {
   setSetting(key, val) {
     settings[key] = val; save(LS_CFG, settings);
     if (key === "k") { const d = $("digDuration"); if (d) d.value = settings.k; }
-    if (key !== "stake") rebuild();
+    if (key !== "stake" && key !== "executionMode") rebuild();
     api.render();
   },
 
@@ -230,7 +249,8 @@ const api = {
       set("ldpePred", `<b style="font-size:22px">${f.predictedDigit}</b> &nbsp; p=${(f.probability * 100).toFixed(2)}% &nbsp; <span class="${cls}"><b>${f.decision}</b>${f.reason ? " (" + esc(f.reason) + ")" : ""}</span>` +
         `<div class="cell-mut">horizon ${f.horizon} ticks · target #${f.targetSeq} · threshold ${(f.minProbability * 100).toFixed(1)}% on ${f.triggerSource} · ${wu.isWarmingUp ? "warm-up: " + wu.remaining + " ticks left" : "warm-up complete"} · calibration: ${esc(f.calibrationStatus)} · structural break: ${f.structuralBreak ? "<b>ACTIVE</b>" : "none"} · state v${f.stateVersion}</div>` +
         `<div class="cell-mut">Crossing the trigger is an operational threshold, not evidence of predictive advantage.</div>`);
-      const td = f.decision === "TRADE" ? f.predictedDigit : -1;
+      const cyc = cycles.status(sym).cycle;
+      const td = settings.executionMode === "forecast" ? (f.decision === "TRADE" ? f.predictedDigit : -1) : (cyc ? cyc.target : -1);
       window.__ldpeTradeDigit = td;
       for (let d = 0; d < 10; d++) { const c = document.getElementById("digCircle" + d); if (c) c.classList.toggle("ldpe-trade", d === td); }
       set("digForecastBox", `<div class="ldpe-fbox"><span>Forecast digit</span><b>${f.predictedDigit}</b><span>${(f.probability * 100).toFixed(1)}% · ${f.decision}</span></div>`);
@@ -277,6 +297,11 @@ const api = {
     set("ldpeHist", recent.map(x => `<tr><td class="l">${x.id}</td><td>${x.predictedDigit}</td><td>${(x.probability * 100).toFixed(1)}%</td><td>${x.decision}</td><td>${x.targetSeq}</td><td>${x.realized ?? "—"}</td><td class="${x.hit ? "cell-pos" : "cell-mut"}">${x.status === "scored" ? (x.hit ? "hit" : "miss") : x.status}</td><td>${x.llEnsemble != null ? x.llEnsemble.toFixed(3) + " / " + x.llUniform.toFixed(3) : "—"}</td></tr>`).join("") || `<tr><td colspan="8" class="sig-empty">No scored forecasts yet.</td></tr>`);
     const orders = [...executor.orders.values()].sort((p, q) => q.createdAt - p.createdAt).slice(0, 12);
     set("ldpeExecLog", orders.map(o => `<tr><td class="l">${new Date(o.createdAt).toLocaleTimeString()}</td><td>${o.isVirtual ? "demo" : "real"}/${o.mode}</td><td>${o.digit}</td><td>${o.stake}</td><td>${esc(o.contractId || "—")}</td><td>#${o.forecast.targetSeq}</td><td class="${o.result === "won" ? "cell-pos" : o.result === "lost" ? "cell-neg" : "cell-mut"}">${o.result || esc(o.state + (o.reason ? ": " + o.reason : ""))}</td></tr>`).join("") || `<tr><td colspan="7" class="sig-empty">No LDPE contracts yet.</td></tr>`);
+    if (settings.executionMode !== "forecast") {
+      const cs2 = cycles.status(sym), n = cs2.counts;
+      set("ldpeCycle", `Cycle: ${cs2.cycle ? `#${cs2.cycle.id} target <b>${cs2.cycle.target}</b> (fixed) ? ${cs2.cycle.intentions} intentions` : (H().digAutoArmed && !executor.stopped ? "<b>waiting for an eligible current prediction</b>" : "idle")}` +
+        ` ? all intentions ${n.total}: submitted ${n.submitted}, confirmed ${n.confirmed}, failed ${n.failed}, unresolved ${n.unresolved}`);
+    }
     set("ldpeExecStatus", esc(execMsg));
   },
 
