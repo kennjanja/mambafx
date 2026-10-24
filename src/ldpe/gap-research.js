@@ -63,12 +63,16 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   const H = () => window.__ldpeHost || {};
   const trigger = () => { const v = parseInt(($("digResTrigger") || {}).value, 10); return Number.isFinite(v) && v >= 1 ? v : 30; };
 
+  const num = (id) => { const v = parseFloat(($(id) || {}).value); return Number.isFinite(v) && v > 0 ? v : 0; };
+
   const getTrader = () => {
     if (trader || !window.LDPE || !window.LDPE.executor) return trader;
     trader = new GapTrader(window.LDPE.executor, {
       k: () => window.LDPE.settings.k,
       stake: () => (H().resNextStake ? H().resNextStake() : window.LDPE.settings.stake),
       trigger,
+      targetProfit: () => num("digResTP"), stopLoss: () => num("digResSL"),
+      cooldowns: () => [{ gap: num("digResCd1Gap"), ticks: num("digResCd1Ticks") }, { gap: num("digResCd2Gap"), ticks: num("digResCd2Ticks") }],
       resetStake: () => { if (H().resResetStake) H().resResetStake(); },
       gaps: (sym) => research.current(sym),
       onChange: () => render(),
@@ -93,14 +97,15 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       const btn = g.parentElement; if (btn) btn.classList.toggle("gap-active", d === tg0 || (cur != null && cur[d] != null && cur[d] >= trig0));
     }
     const tr = getTrader(), st = $("digResStatus"); if (!st) return;
+    const armBox = $("digResArm"); if (armBox && tr) armBox.checked = tr.armed;
     const L = window.LDPE;
     const acct = L ? (L.settings.accountType === "real" ? "Real" : "Demo") : "—";
     if (!tr) { st.textContent = "Trading unavailable: LDPE executor not loaded."; return; }
     const top = tr.topGap(current), n = tr.counts();
     st.innerHTML = `Account: <b>${acct}</b> · ` + (tr.armed
-      ? (tr.cycle ? `cycle ${tr.cycle.n}: target <b>${tr.cycle.target}</b> (gap was ${tr.cycle.startGap}, fixed) · ${tr.cycle.intentions} trades`
+      ? (tr.cycle ? `cycle ${tr.cycle.n}: target <b>${tr.cycle.target}</b> (gap was ${tr.cycle.startGap}, fixed) · ${tr.cycle.intentions} trades` + (tr.cooldownLeft > 0 ? ` · <b>cooldown</b>, ${tr.cooldownLeft} more ticks skipped` : "")
         : `<b>waiting</b> for a digit to reach gap ${trigger()}` + (top ? ` (highest now: ${top.digit} at ${top.gap})` : ""))
-      : "automated trading off") + ` · intentions ${n.total}: submitted ${n.submitted}, confirmed ${n.confirmed}, failed ${n.failed}, unresolved ${n.unresolved}`
+      : "automated trading off" + (tr.stopReason ? ` — stopped: ${esc(tr.stopReason)}` : "")) + ` · session P/L ${tr.pnl.toFixed(2)}` + ` · intentions ${n.total}: submitted ${n.submitted}, confirmed ${n.confirmed}, failed ${n.failed}, unresolved ${n.unresolved}`
       + (tr.intentions.length && tr.intentions[tr.intentions.length - 1].status === "failed" ? ` · last error: ${esc(tr.intentions[tr.intentions.length - 1].reason)}` : "");
   };
 

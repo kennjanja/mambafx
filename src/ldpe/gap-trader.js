@@ -15,22 +15,35 @@ export class GapTrader {
   // opts: { k(), stake(), trigger(), resetStake(), gaps(symbol) -> number[10] | null, onChange() }
   constructor(executor, opts) {
     this.ex = executor; this.opts = opts;
-    this.armed = false; this.cycle = null; this.cycleSeq = 0; this.waiting = false;
+    this.armed = false; this.pnl = 0; this.stopReason = null; this.cooldownLeft = 0; this.cycle = null; this.cycleSeq = 0; this.waiting = false;
     this.lastSeq = -1; this.last = null;          // last tick seen: { symbol, seq, epoch, digit }
     this.intentions = []; this.byKey = new Map(); this.cycles = [];
     executor.on((o, ev) => this._onOrder(o, ev));
   }
   _changed() { if (this.opts.onChange) { try { this.opts.onChange(); } catch (_) {} } }
   _reset() { if (this.opts.resetStake) { try { this.opts.resetStake(); } catch (_) {} } }
-  setArmed(b) { this.armed = !!b; if (!this.armed) this._end("disarmed"); this._changed(); }
+  setArmed(b) {
+    this.armed = !!b; this.cooldownLeft = 0;
+    if (this.armed) { this.pnl = 0; this.stopReason = null; } else this._end("disarmed");
+    this._changed();
+  }
+  // Target profit / stop loss are checked on the realised P/L of this armed session; 0 disables a limit.
+  _checkLimits() {
+    if (!this.armed) return;
+    const tp = Number(this.opts.targetProfit && this.opts.targetProfit()) || 0, sl = Number(this.opts.stopLoss && this.opts.stopLoss()) || 0;
+    if (tp > 0 && this.pnl >= tp) { this.setArmed(false); this.stopReason = `target profit reached (${this.pnl.toFixed(2)})`; this._changed(); }
+    else if (sl > 0 && this.pnl <= -sl) { this.setArmed(false); this.stopReason = `stop loss reached (${this.pnl.toFixed(2)})`; this._changed(); }
+  }
 
   _onOrder(o, ev) {
     const it = o.intent && this.byKey.get(o.intent.key); if (!it) return;
+    if (ev === "settled" && !it.pnlSeen && !it.manual && o.pnl != null) { it.pnlSeen = true; this.pnl += Number(o.pnl) || 0; }
     it.status = statusOf(o); it.reason = o.reason || null; it.contractId = o.contractId || null;
     if (ev === "settled" && o.result === "won" && !it.winSeen) {
       it.winSeen = true;
       if (this.cycle && this.cycle.id === o.intent.cycleId) this._end("win confirmed");
     }
+    this._checkLimits();
     this._changed();
   }
 
@@ -55,13 +68,26 @@ export class GapTrader {
     this.lastSeq = t.seq; this.last = { symbol: t.symbol, seq: t.seq, epoch: t.epoch, digit: t.digit };
     if (!this.armed || !t.active) { this._end(this.armed ? "automatic trading stopped" : "disarmed"); this.waiting = false; this._changed(); return { idle: true }; }
     if (this.cycle) {
-      if (t.digit !== this.cycle.target) return this._intend(t);
+      if (t.digit !== this.cycle.target) {
+        if (this.cooldownLeft > 0) { this.cooldownLeft--; this._changed(); return { cooldown: this.cooldownLeft }; }
+        const g = this.opts.gaps(t.symbol), cur = g ? g[this.cycle.target] : null;
+        const rules = (this.opts.cooldowns && this.opts.cooldowns()) || [];
+        for (let i = 0; i < rules.length; i++) {
+          const r = rules[i];
+          if (r && r.gap > 0 && r.ticks > 0 && cur != null && cur >= r.gap && !this.cycle.cdFired[i]) {
+            this.cycle.cdFired[i] = true; this.cooldownLeft = r.ticks - 1; this._changed();
+            return { cooldown: r.ticks };
+          }
+        }
+        return this._intend(t);
+      }
       this._end(`target ${t.digit} appeared`);       // the target tick is never bought
     }
     const top = this.topGap(t.symbol), trig = Math.max(1, Number(this.opts.trigger()) || 1);
     if (top && top.gap >= trig) {
       this._reset();
-      this.cycle = { id: "R:" + (++this.cycleSeq), n: this.cycleSeq, symbol: t.symbol, target: top.digit, startGap: top.gap, trigger: trig, intentions: 0 };
+      this.cycle = { id: "R:" + (++this.cycleSeq), n: this.cycleSeq, symbol: t.symbol, target: top.digit, startGap: top.gap, trigger: trig, intentions: 0, cdFired: [false, false] };
+      this.cooldownLeft = 0;
       this.waiting = false; this._changed();
       return { started: this.cycle.id, target: top.digit };
     }
