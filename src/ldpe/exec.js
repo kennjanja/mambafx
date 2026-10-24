@@ -7,7 +7,7 @@
 // not a TRADE decision, is stale, or already has an order (duplicate-order prevention).
 
 export const MAX_ENTRY_DELAY_TICKS = 0;  // forecast must still be current when the buy is sent
-export const MAX_TICK_ORDER_LAG = 2;    // tick-driven orders: ticks allowed between the intention and the buy
+export const MAX_TICK_ORDER_LAG = 6;    // tick-driven orders: ticks allowed between the intention and the buy
 export const PROPOSAL_TIMEOUT_MS = 4000;  // no proposal reply by then: nothing was bought, so the order is failed cleanly
 export const MAX_ORDERS_PER_SEC = 2;    // each order is two API calls (proposal + buy); no automatic retries
 export const STALE_REQUEST_MS = 20000;
