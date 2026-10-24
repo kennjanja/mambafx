@@ -4139,12 +4139,14 @@ function _findDiscoveredSymbol(list, marketKey){
   if (/^R_\d+$/.test(target) || /^1HZ\d+V$/.test(target)) {
     const number = target.match(/\d+/)?.[0] || "";
     const oneSec = target.startsWith("1HZ");
-    return rows.find(x => {
+    // exact symbol code first; the name match must be a whole number ("25" must not match "250", "50" not "150")
+    const numRe = new RegExp(`(^|[^0-9])${number}([^0-9]|$)`);
+    return rows.find(x => x._sym === target) || rows.find(x => {
       if (!x._name.includes("VOLATILITY")) return false;
-      if (!x._name.includes(number)) return false;
+      if (!numRe.test(x._name)) return false;
       if (oneSec) return x._name.includes("(1S)");
       return !x._name.includes("(1S)");
-    }) || rows.find(x => x._sym === target) || null;
+    }) || null;
   }
 
   // Generic exact-symbol fallback.
