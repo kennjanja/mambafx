@@ -1244,6 +1244,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <button class="gc-btn" id="ldpeAcctDemo">Demo</button>
         <button class="gc-btn" id="ldpeAcctReal">Real</button>
         <button class="gc-btn" id="ldpeStop" style="font-weight:800">⏹ Stop automatic trading</button>
+        <button class="gc-btn" id="ldpeResetTrades" onclick="digResetTradesAndPnl()" title="Clear the trade list and zero session P/L (open trades are kept)">↺ Reset trades &amp; P/L</button>
       </div>
       <details><summary>Settings (persisted)</summary><div id="ldpeSettings" class="gc-row" style="flex-wrap:wrap"></div></details>
       <details open><summary>Module scoreboard</summary>
@@ -2473,6 +2474,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <h3 style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">📊 Rise/Fall Autobot</h3>
         <div class="gc-sub" style="margin-bottom:10px">Scans every Volatility Index simultaneously, determines who controls each market, and trades Rise/Fall only at a significant zone with confirming rejection and candle-body signals. Uses the Trading Grid connection — connect there first.</div>
         <button id="rfaReversalBtn" class="gc-btn" onclick="rfaToggleReversal()" style="width:100%;margin-bottom:10px">▶ Start Reversal Auto</button>
+        <button id="rfaResetBtn" class="gc-btn" onclick="rfaResetTradesAndProfit()" style="width:100%;margin-bottom:10px" title="Clear trades, P/L, cycles and martingale">↺ Reset trades &amp; profit</button>
         <div id="rfaScanStatus" class="gc-sub" style="margin-bottom:12px">Not scanning.</div>
         <div class="grid-card" style="margin-bottom:12px;padding:10px">
           <div style="font-weight:700;margin-bottom:6px">Reversal Auto — selected market: <span id="rfaReversalMarket">—</span></div>
@@ -27092,6 +27094,17 @@ function rfaReversalMarket(sym){
   }
   return rfaReversal.markets[sym];
 }
+function rfaResetTradesAndProfit(){
+  if (rfaReversalAnyInFlight() || Object.keys(rfaOpenContracts).length){ alert("A trade is still open. Wait for it to settle before resetting."); return; }
+  if (!confirm("Reset all Rise/Fall bot trades, profit, cycles and martingale?")) return;
+  rfaTrades = [];
+  rfaStats = { won: 0, lost: 0, profit: 0, sessionStartBalance: gridBalance };
+  const running = rfaReversal.running;
+  Object.assign(rfaReversal, { cycleNumber: 0, pattern: "—", direction: "—", trades: 0, wins: 0, losses: 0, profit: 0, markets: {} });
+  rfaReversal.running = running;
+  rfaReversalSyncStatus();
+  rfaRenderAll();
+}
 function rfaReversalAnyInFlight(){
   return Object.values(rfaReversal.markets).some(m => m.slot.tradeInFlight);
 }
@@ -30761,6 +30774,13 @@ let digPnlResetAt = 0;
 let _resMult; function resMult(){ return _resMult || (_resMult = makeMultiplier(() => $("digResStake"), () => parseFloat(($("digResMultN") || {}).value))); }
 function digSetMultN(v){ if (typeof setMartingaleX === "function") setMartingaleX(v); }
 function digResetSessionPnl(){ digPnlResetAt = Date.now(); digRenderTrades(); }
+function digResetTradesAndPnl(){
+  if (!confirm("Clear the LDPE trade list and zero session P/L? Open trades are kept.")) return;
+  digTrades = digTrades.filter(t => t.status === "open" || /^(pricing|buying|proposal|unknown)/.test(String(t.status)));
+  digPnlResetAt = Date.now();
+  if (window.LDPE && window.LDPE.resetLog) window.LDPE.resetLog();
+  digRenderTrades();
+}
 function digRenderSessionPnl(net, any){
   const el = $("digSessionPnl"); if (!el) return;
   el.textContent = any ? (net>=0?"+":"\u2212") + Math.abs(net).toFixed(2) + " " + gridCurrency : "\u2014";

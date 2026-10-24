@@ -6,6 +6,7 @@ import { Executor } from "./exec.js";
 import { CycleManager } from "./cycle.js";
 import { StateStore, snapshotEngine, restoreEngine } from "./persist.js";
 
+const LS_LOGRESET = "ldpe_log_reset_v1";
 const LS_CFG = "ldpe_settings_v1", LS_EXEC = "ldpe_exec_v1", LS_CYC = "ldpe_cycles_v1";
 const $ = (id) => document.getElementById(id);
 const H = () => window.__ldpeHost || {};
@@ -136,6 +137,7 @@ function saveState(force) {
   try { store.save(snapshotEngine(engine)); } catch (_) {}
 }
 const releaseTimers = {};
+let logResetAt = Number(load(LS_LOGRESET, 0)) || 0;
 
 const api = {
   settings, FIELDS, executor, cycles,
@@ -231,6 +233,9 @@ const api = {
   toggleStop() { api.setStopped(!executor.stopped); },
   saveState,
 
+  // Display-only: hides earlier LDPE orders from the log. Executor order/forecast ids stay, so duplicate-order protection is untouched.
+  resetLog() { logResetAt = Date.now(); save(LS_LOGRESET, logResetAt); api.render(); },
+
   // Last-resort operator action for an order whose purchase could not be confirmed.
   resolveUnknown(orderId, contractId) { const ok = executor.resolveUnknown(orderId, contractId); persistExec(); api.render(); return ok; },
 
@@ -298,7 +303,7 @@ const api = {
 
     const recent = st.forecasts.slice(-12).reverse();
     set("ldpeHist", recent.map(x => `<tr><td class="l">${x.id}</td><td>${x.predictedDigit}</td><td>${(x.probability * 100).toFixed(1)}%</td><td>${x.decision}</td><td>${x.targetSeq}</td><td>${x.realized ?? "—"}</td><td class="${x.hit ? "cell-pos" : "cell-mut"}">${x.status === "scored" ? (x.hit ? "hit" : "miss") : x.status}</td><td>${x.llEnsemble != null ? x.llEnsemble.toFixed(3) + " / " + x.llUniform.toFixed(3) : "—"}</td></tr>`).join("") || `<tr><td colspan="8" class="sig-empty">No scored forecasts yet.</td></tr>`);
-    const orders = [...executor.orders.values()].sort((p, q) => q.createdAt - p.createdAt).slice(0, 12);
+    const orders = [...executor.orders.values()].filter(o => o.createdAt >= logResetAt).sort((p, q) => q.createdAt - p.createdAt).slice(0, 12);
     set("ldpeExecLog", orders.map(o => `<tr><td class="l">${new Date(o.createdAt).toLocaleTimeString()}</td><td>${o.isVirtual ? "demo" : "real"}/${o.mode}</td><td>${o.digit}</td><td>${o.stake}</td><td>${esc(o.contractId || "—")}</td><td>#${o.forecast.targetSeq}</td><td class="${o.result === "won" ? "cell-pos" : o.result === "lost" ? "cell-neg" : "cell-mut"}">${o.result || esc(o.state + (o.reason ? ": " + o.reason : ""))}</td></tr>`).join("") || `<tr><td colspan="7" class="sig-empty">No LDPE contracts yet.</td></tr>`);
     if (settings.executionMode !== "forecast") {
       const cs2 = cycles.status(sym), n = cs2.counts;
