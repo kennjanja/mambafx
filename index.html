@@ -2481,16 +2481,25 @@ table.an-table tbody tr:last-child td{border-bottom:none}
           <div class="gc-sub">Consecutive losses: <span id="rfaReversalLosses">0</span> · Trades: <span id="rfaReversalTrades">0</span> · Wins: <span id="rfaReversalWins">0</span> · Losses: <span id="rfaReversalLost">0</span> · Net P/L: <span id="rfaReversalProfit">0.00</span></div>
         </div>
 
-        <label for="rfaStake">Base Stake (USD)</label>
+        <label for="rfaStake">Stake (USD)</label>
         <input type="number" id="rfaStake" value="1.00" min="0.35" step="0.01" style="width:100%;margin-bottom:8px">
+
+        <label for="rfaMult">Martingale Multiplier (×, 1.0 – 10.0; applied after each loss)</label>
+        <input type="number" id="rfaMult" value="2.0" min="1" max="10" step="0.1" style="width:100%;margin-bottom:8px">
 
         <label for="rfaMaxLevel">Max Martingale Level (0 = safety cap of 5 losses)</label>
         <input type="number" id="rfaMaxLevel" value="0" min="0" step="1" style="width:100%;margin-bottom:8px">
 
+        <label for="rfaTargetProfit">Target Profit (USD, blank = off; stops the bot when session profit reaches it)</label>
+        <input type="number" id="rfaTargetProfit" min="0" step="0.01" style="width:100%;margin-bottom:8px">
+
         <label for="rfaStopLoss">Stop Loss (USD, blank = off)</label>
         <input type="number" id="rfaStopLoss" min="0" step="0.01" style="width:100%;margin-bottom:8px">
 
-        <div class="gc-sub" style="margin-top:6px">Reversal Auto scans every volatility market on live tick prices at once (unchanged-price ticks are ignored). Any market that makes five consecutive directional moves is reversed immediately, so several markets can trade in bulk. Each market runs its own independent cycle and martingale, with one unresolved contract per market. After a confirmed loss it keeps trading the same direction with the multiplied stake until a confirmed win ends the cycle; the stake then resets and it scans for a new 5R/5F pattern.</div>
+        <label for="rfaMaxBulk">Max Bulk Trades (markets trading at the same time)</label>
+        <input type="number" id="rfaMaxBulk" value="3" min="1" step="1" style="width:100%;margin-bottom:8px">
+
+        <div class="gc-sub" style="margin-top:6px">Reversal Auto scans every volatility market on live tick prices at once (unchanged-price ticks are ignored). Any market that makes five consecutive directional moves is reversed immediately, up to Max Bulk Trades at the same time; Target Profit or Stop Loss on the session total stops new trades. Each market runs its own independent cycle and martingale, with one unresolved contract per market. After a confirmed loss it keeps trading the same direction with the multiplied stake until a confirmed win ends the cycle; the stake then resets and it scans for a new 5R/5F pattern.</div>
       </div>
 
       <div class="grid-card">
@@ -27076,7 +27085,7 @@ function rfaReversalMarket(sym){
   if (!rfaReversal.markets[sym]){
     rfaReversal.markets[sym] = {
       symbol: sym, detector: window.MFXReversalAutoState.createReversalDetector(),
-      slot: { mult: makeMultiplier(() => $("rfaStake")), martingaleLevel: 0, currentStake: null, marketProfit: 0, tradeInFlight: false, waitingTicks: 0 },
+      slot: { mult: makeMultiplier(() => $("rfaStake"), () => parseFloat(($("rfaMult") || {}).value)), martingaleLevel: 0, currentStake: null, marketProfit: 0, tradeInFlight: false, waitingTicks: 0 },
       continueSignal: null, cycleId: null, consecutiveLosses: 0, cycleStatus: "Waiting for the Next Cycle",
       awaitingNextCycle: false, lossLimitReached: false, pattern: "—", direction: "—",
     };
@@ -27109,6 +27118,7 @@ function rfaReversalMaxLosses(){
   const configured = rfaMaxMartingaleLevel();
   return Number.isFinite(configured) ? configured : 5;
 }
+function rfaMaxBulk(){ const el = $("rfaMaxBulk"); const v = el ? parseInt(el.value, 10) : 3; return Number.isFinite(v) && v > 0 ? v : 3; }
 function rfaStopLoss(){ const el = $("rfaStopLoss"); const v = el ? parseFloat(el.value) : NaN; return Number.isFinite(v) && v > 0 ? v : null; }
 function rfaTargetProfit(){ const el = $("rfaTargetProfit"); const v = el ? parseFloat(el.value) : NaN; return Number.isFinite(v) && v > 0 ? v : null; }
 
@@ -27138,6 +27148,8 @@ function rfaPickTopMarkets(n, excludeSymbols){
 function rfaRiskLimitReached(){
   const sl = rfaStopLoss();
   if (sl != null && rfaStats.profit <= -sl) return 'Stop loss reached (' + rfaStats.profit.toFixed(2) + ')';
+  const tp = rfaTargetProfit();
+  if (tp != null && rfaStats.profit >= tp) return 'Target profit reached (+' + rfaStats.profit.toFixed(2) + ')';
   return null;
 }
 
@@ -27387,6 +27399,8 @@ function rfaOnTick(sym, price){
   const signal = mkt.continueSignal || fresh;
   if (!signal) return;
   if (slot.tradeInFlight) return;
+  const openNow = Object.values(rfaReversal.markets).filter(m => m.slot.tradeInFlight).length;
+  if (openNow >= rfaMaxBulk()) return;
 
   const limitHit = rfaRiskLimitReached();
   if (limitHit){
