@@ -16,7 +16,7 @@ export class GapTrader {
   constructor(executor, opts) {
     this.ex = executor; this.opts = opts;
     this.armed = false; this.pnl = 0; this.stopReason = null; this.cooldownLeft = 0; this.cycle = null; this.cycleSeq = 0; this.waiting = false;
-    this.lastSeq = -1; this.last = null;          // last tick seen: { symbol, seq, epoch, digit }
+    this.lastSeq = -1; this.seqBySymbol = new Map(); this.last = null;          // last tick seen: { symbol, seq, epoch, digit }
     this.intentions = []; this.byKey = new Map(); this.cycles = [];
     executor.on((o, ev) => this._onOrder(o, ev));
   }
@@ -64,7 +64,12 @@ export class GapTrader {
   // One call per accepted tick, after the research gaps were updated for that tick.
   // t = { symbol, seq, epoch, digit, active }
   onTick(t) {
-    if (t.seq <= this.lastSeq) return { ignored: "duplicate or out-of-order tick" };
+    // tick sequence numbers are per market, so duplicates are detected per market
+    const prev = this.seqBySymbol.has(t.symbol) ? this.seqBySymbol.get(t.symbol) : -1;
+    if (t.seq <= prev) return { ignored: "duplicate or out-of-order tick" };
+    this.seqBySymbol.set(t.symbol, t.seq);
+    // the market was switched mid-cycle: that cycle's target digit belongs to the old market
+    if (this.cycle && this.cycle.symbol !== t.symbol) { this._end("market changed"); this.cooldownLeft = 0; }
     this.lastSeq = t.seq; this.last = { symbol: t.symbol, seq: t.seq, epoch: t.epoch, digit: t.digit };
     if (!this.armed || !t.active) { this._end(this.armed ? "automatic trading stopped" : "disarmed"); this.waiting = false; this._changed(); return { idle: true }; }
     if (this.cycle) {
