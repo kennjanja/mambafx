@@ -633,7 +633,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     <button id="navAnalysis" onclick="showPage('analysis')">🔬 Analysis Tool</button>
     <button id="navFeatures" onclick="showPage('features')">🧠 ML Features</button>
     <button id="navPredBot" onclick="showPage('predbot')">🤖 Prediction Bot</button>
-    <button id="navOuBot" onclick="showPage('oubot')">⬆⬇ Only Ups/Downs Bot</button>
+    <button id="navOuBot" onclick="showPage('oubot')">⬆⬇ Consecutive Tick Bot</button>
     <button id="navTracker" onclick="showPage('tracker')">🔢 Digit Tracker</button>
     <button id="navDigits" onclick="showPage('digits')">🎲 LDPE</button>
     <button id="navDiag" onclick="showPage('diag')">🩺 API Diagnostics</button>
@@ -1847,6 +1847,8 @@ table.an-table tbody tr:last-child td{border-bottom:none}
 
   <!-- ============ ONLY UPS / ONLY DOWNS BOT PAGE ============ -->
   <div id="page-oubot" class="page">
+    <div id="ouConsecHost"></div>
+    <div id="ouLegacy" style="display:none">
 
     <!-- Header & fingerprint explanation -->
     <div class="grid-card" style="margin-bottom:14px">
@@ -2045,6 +2047,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     <footer>
       RUNHIGH (Only Ups) and RUNLOW (Only Downs) contracts require every single tick to move in the same direction. A 5-tick RUNHIGH needs six strictly-increasing price points B1→P1→P2→P3→P4→P5. The Martingale doubles stake after each loss and resets after each win. Use a <b>demo account</b> while testing — real accounts are subject to actual financial loss. All trades are placed through the connected Deriv account on the Trading Grid page.
     </footer>
+    </div><!-- /ouLegacy -->
   </div><!-- /page-oubot -->
 
   <!-- ============ PAGE 8: INDICATOR CHARTS ============ -->
@@ -26533,6 +26536,7 @@ function showPage(which){
     pbPageInit();  // also calls lmvPageInit
   }
   if (which === "oubot"){
+    if (window.CONSEC) window.CONSEC.start();
     ouPageInit();
   }
   if (which === "charts"){
@@ -33646,6 +33650,7 @@ try {
 <script type="module" src="src/bazu/page.js?v=22"></script>
 <script type="module" src="src/ldpe/bridge.js?v=12"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
+<script type="module" src="src/consec/consecAlert.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>
 <script type="module" src="src/trading/reversalAutoState.mjs"></script>
