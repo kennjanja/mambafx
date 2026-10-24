@@ -2497,7 +2497,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <label for="rfaTargetProfit">Target Profit Per Market (USD, blank = switch after every win)</label>
         <input type="number" id="rfaTargetProfit" min="0" step="0.01" style="width:100%;margin-bottom:8px">
 
-        <div class="gc-sub" style="margin-top:6px">The original scanner can trade up to Max Concurrent Markets at once, with an independent Martingale sequence per market. Duration is fixed at 1 tick. Each market's multiplier uses the shared setting above; target profit releases a market slot, and the session Stop Loss applies across active markets. Reversal Auto instead uses the Trading Grid selected symbol and actual live tick prices; unchanged-price ticks are ignored. It reverses after five consecutive directional moves, allows one unresolved contract, and ends a cycle only after confirmed settlement. In Reversal Auto, Max Martingale Level is always finite: 0 uses a safety cap of 5 losses.</div>
+        <div class="gc-sub" style="margin-top:6px">The original scanner can trade up to Max Concurrent Markets at once, with an independent Martingale sequence per market. Duration is fixed at 1 tick. Each market's multiplier uses the shared setting above; target profit releases a market slot, and the session Stop Loss applies across active markets. Reversal Auto instead uses the Trading Grid selected symbol and actual live tick prices; unchanged-price ticks are ignored. It reverses after five consecutive directional moves, allows one unresolved contract, and after a confirmed loss keeps trading the same direction with the multiplied stake until a confirmed win ends the cycle; the stake then resets and it scans for a new 5R/5F pattern. In Reversal Auto, Max Martingale Level is always finite: 0 uses a safety cap of 5 losses.</div>
       </div>
 
       <div class="grid-card">
@@ -2522,14 +2522,6 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     </div>
 
     <div class="grid-main">
-      <div class="grid-card" style="margin-bottom:16px">
-        <h3 style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Market Ranking — Who Controls Each Market Right Now</h3>
-        <table class="sig-table">
-          <thead><tr><th class="l">Market</th><th class="l">Direction</th><th class="l">Confidence</th><th class="l">Control</th><th class="l">Top Reasons</th></tr></thead>
-          <tbody id="rfaRankBody"><tr><td colspan="5" class="sig-empty">Not scanning yet.</td></tr></tbody>
-        </table>
-      </div>
-
       <div class="grid-card">
         <h3 style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Trade Log</h3>
         <table class="sig-table">
@@ -27288,6 +27280,8 @@ function rfaSettleContract(id, won){
     if (won){
       rfaReversal.wins++;
       window.MFXReversalAutoState.applyReversalSettlement(rfaReversal, true);
+      rfaReversal.continueSignal = null;
+      if (rfaReversal.detector) rfaReversal.detector.resetRun();
       slot.martingaleLevel = 0;
       slot.currentStake = null;
     } else {
@@ -27295,7 +27289,10 @@ function rfaSettleContract(id, won){
       window.MFXReversalAutoState.applyReversalSettlement(rfaReversal, false);
       slot.martingaleLevel++;
       slot.currentStake = null;
-      if (rfaReversal.cycleLosses >= rfaReversalMaxLosses()){
+      // Cycle stays open: keep trading the same direction (next stake via multiplier) until a confirmed win.
+      rfaReversal.continueSignal = { pattern: rfaReversal.pattern, direction: rfaReversal.direction };
+      if (rfaReversal.consecutiveLosses >= rfaReversalMaxLosses()){
+        rfaReversal.continueSignal = null;
         rfaReversal.lossLimitReached = true;
         rfaReversal.running = false;
         rfaReversal.status = 'Stopped — maximum consecutive losses reached';
@@ -27386,8 +27383,9 @@ function rfaOnTick(price){
     rfaReversal.symbol = SYMBOL;
     rfaReversal.detector.reset();
   }
-  const signal = rfaReversal.detector.observe(price);
+  const signal = rfaReversal.continueSignal || rfaReversal.detector.observe(price);
   if (!signal) return;
+  if (rfaReversal.continueSignal && rfaReversal.slot && rfaReversal.slot.tradeInFlight) return;
   rfaReversal.pattern = signal.pattern;
   rfaReversal.direction = signal.direction;
   if (rfaReversal.awaitingNextCycle){
@@ -27480,7 +27478,7 @@ function rfaRenderAll(){
   setTxt('rfaReversalCycleStatus', rfaReversal.cycleStatus);
   setTxt('rfaReversalBaseStake', Math.max(0.35, Number($('rfaStake') && $('rfaStake').value) || 1).toFixed(2));
   setTxt('rfaReversalStake', rfaReversal.slot ? (rfaReversal.slot.currentStake != null ? rfaReversal.slot.currentStake : rfaReversal.slot.mult.getNext('martingale')).toFixed(2) : (Math.max(0.35, Number($('rfaStake') && $('rfaStake').value) || 1)).toFixed(2));
-  setTxt('rfaReversalLosses', rfaReversal.cycleLosses);
+  setTxt('rfaReversalLosses', rfaReversal.consecutiveLosses || 0);
   setTxt('rfaReversalTrades', rfaReversal.trades);
   setTxt('rfaReversalWins', rfaReversal.wins);
   setTxt('rfaReversalLost', rfaReversal.losses);
