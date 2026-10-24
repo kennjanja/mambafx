@@ -2472,7 +2472,6 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       <div class="grid-card">
         <h3 style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">📊 Rise/Fall Autobot</h3>
         <div class="gc-sub" style="margin-bottom:10px">Scans every Volatility Index simultaneously, determines who controls each market, and trades Rise/Fall only at a significant zone with confirming rejection and candle-body signals. Uses the Trading Grid connection — connect there first.</div>
-        <button id="rfaArmBtn" class="gc-btn" onclick="rfaToggleArm()" style="width:100%;margin-bottom:10px">▶ Arm & Scan</button>
         <button id="rfaReversalBtn" class="gc-btn" onclick="rfaToggleReversal()" style="width:100%;margin-bottom:10px">▶ Start Reversal Auto</button>
         <div id="rfaScanStatus" class="gc-sub" style="margin-bottom:12px">Not scanning.</div>
         <div class="grid-card" style="margin-bottom:12px;padding:10px">
@@ -2485,19 +2484,13 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <label for="rfaStake">Base Stake (USD)</label>
         <input type="number" id="rfaStake" value="1.00" min="0.35" step="0.01" style="width:100%;margin-bottom:8px">
 
-        <label for="rfaMaxConcurrent">Max Concurrent Markets</label>
-        <input type="number" id="rfaMaxConcurrent" value="3" min="1" step="1" style="width:100%;margin-bottom:8px">
-
-        <label for="rfaMaxLevel">Max Martingale Level (0 = legacy unlimited; Reversal Auto uses 5)</label>
+        <label for="rfaMaxLevel">Max Martingale Level (0 = safety cap of 5 losses)</label>
         <input type="number" id="rfaMaxLevel" value="0" min="0" step="1" style="width:100%;margin-bottom:8px">
 
         <label for="rfaStopLoss">Stop Loss (USD, blank = off)</label>
         <input type="number" id="rfaStopLoss" min="0" step="0.01" style="width:100%;margin-bottom:8px">
 
-        <label for="rfaTargetProfit">Target Profit Per Market (USD, blank = switch after every win)</label>
-        <input type="number" id="rfaTargetProfit" min="0" step="0.01" style="width:100%;margin-bottom:8px">
-
-        <div class="gc-sub" style="margin-top:6px">The original scanner can trade up to Max Concurrent Markets at once, with an independent Martingale sequence per market. Duration is fixed at 1 tick. Each market's multiplier uses the shared setting above; target profit releases a market slot, and the session Stop Loss applies across active markets. Reversal Auto instead uses the Trading Grid selected symbol and actual live tick prices; unchanged-price ticks are ignored. It reverses after five consecutive directional moves, allows one unresolved contract, and after a confirmed loss keeps trading the same direction with the multiplied stake until a confirmed win ends the cycle; the stake then resets and it scans for a new 5R/5F pattern. In Reversal Auto, Max Martingale Level is always finite: 0 uses a safety cap of 5 losses.</div>
+        <div class="gc-sub" style="margin-top:6px">Reversal Auto uses the Trading Grid selected symbol and actual live tick prices; unchanged-price ticks are ignored. It reverses after five consecutive directional moves and allows one unresolved contract. After a confirmed loss it keeps trading the same direction with the multiplied stake until a confirmed win ends the cycle; the stake then resets and it scans for a new 5R/5F pattern.</div>
       </div>
 
       <div class="grid-card">
@@ -2510,14 +2503,6 @@ table.an-table tbody tr:last-child td{border-bottom:none}
           <div class="em-card"><div class="em-lab">ROI</div><div id="rfaStatROI" class="em-val">—</div></div>
           <div class="em-card"><div class="em-lab">Active Markets</div><div id="rfaStatActiveCount" class="em-val acc">0 / 3</div></div>
         </div>
-      </div>
-
-      <div class="grid-card">
-        <h3 style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Active Markets</h3>
-        <table class="sig-table">
-          <thead><tr><th class="l">Market</th><th class="l">Level</th><th class="l">Stake</th><th class="l">Market Profit</th></tr></thead>
-          <tbody id="rfaActiveBody"><tr><td colspan="4" class="sig-empty">No markets currently active.</td></tr></tbody>
-        </table>
       </div>
     </div>
 
