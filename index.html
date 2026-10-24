@@ -1425,7 +1425,6 @@ table.an-table tbody tr:last-child td{border-bottom:none}
 
         <div id="digResTrade" style="margin-top:14px;border-top:1px solid var(--line);padding-top:12px">
           <h3 style="margin:0 0 6px;font-size:13px">Gap trading (Matches)</h3>
-          <div class="dig-sub">Trades on the account chosen with the LDPE Demo | Real switch, with the Trade execution card's stake and progression. When armed, a cycle starts once any digit's current gap reaches the trigger and targets the digit with the highest gap; it buys on every tick until the target digit appears (or a win is confirmed). The next cycle starts only if the next highest-gap digit has also reached the trigger. No other analysis is done.</div>
           <div class="gc-row" style="margin:8px 0">
             <div class="gc-field"><label for="digResStake">Stake per trade</label><input type="number" id="digResStake" min="0.35" step="0.01" value="0.50"></div>
             <div class="gc-field"><label for="digResStrat">Stake multiplier</label>
@@ -1443,6 +1442,16 @@ table.an-table tbody tr:last-child td{border-bottom:none}
           <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;margin:8px 0">
             <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="digResArm" onchange="window.GAPRES && window.GAPRES.arm(this.checked)"> <b>Automated gap trading</b></label>
             <label style="display:flex;gap:6px;align-items:center">Trigger gap (ticks) <input type="number" id="digResTrigger" min="1" max="1000" step="1" value="30" style="width:70px"></label>
+          </div>
+          <div class="gc-row" style="margin:8px 0">
+            <div class="gc-field"><label for="digResTP">Target profit (0 = off)</label><input type="number" id="digResTP" min="0" step="0.01" value="0"></div>
+            <div class="gc-field"><label for="digResSL">Stop loss (0 = off)</label><input type="number" id="digResSL" min="0" step="0.01" value="0"></div>
+          </div>
+          <div class="gc-row" style="margin:8px 0" title="When the trading digit's gap reaches the gap value, skip the given number of ticks, then resume trading. 0 = off.">
+            <div class="gc-field"><label for="digResCd1Gap">Cooldown 1: at gap</label><input type="number" id="digResCd1Gap" min="0" step="1" value="0"></div>
+            <div class="gc-field"><label for="digResCd1Ticks">skip ticks</label><input type="number" id="digResCd1Ticks" min="0" step="1" value="0"></div>
+            <div class="gc-field"><label for="digResCd2Gap">Cooldown 2: at gap</label><input type="number" id="digResCd2Gap" min="0" step="1" value="0"></div>
+            <div class="gc-field"><label for="digResCd2Ticks">skip ticks</label><input type="number" id="digResCd2Ticks" min="0" step="1" value="0"></div>
           </div>
           <div id="digResStatus" class="cell-mut" style="margin-bottom:8px"></div>
           <div class="dig-sub" style="margin-bottom:4px">Manual: click a digit to buy Matches on it (current gap shown).</div>
