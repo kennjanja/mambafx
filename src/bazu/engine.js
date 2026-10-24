@@ -630,6 +630,8 @@ let pnlReset = { demo: 0, real: 0 };
 try { pnlReset = { ...pnlReset, ...JSON.parse(localStorage.getItem(PNL_KEY) || '{}') }; } catch { /* default */ }
 /** Zero the P/L counter of one account kind ('demo' | 'real'); trades stay in history. */
 export function resetPnl(kind) { if (kind !== 'demo' && kind !== 'real') return; pnlReset[kind] = Date.now(); try { localStorage.setItem(PNL_KEY, JSON.stringify(pnlReset)); } catch { /* quota */ } log('P/L reset (' + kind + ')', 'ok'); emit(); }
+/** Zero P/L and drop settled trades from history; open trades are kept. */
+export function resetTrades(kind) { resetPnl(kind); state.trades = state.trades.filter((t) => t.status === 'open' || (kind && !!t.isReal !== (kind === 'real'))); saveTrades(); log('Trades reset ('+kind+')', 'ok'); emit(); }
 const pnlOf = (isReal) => state.trades.filter((t) => t.status === 'closed' && !!t.isReal === isReal && t.ts >= pnlReset[isReal ? 'real' : 'demo']);
 
 function riskState() {
