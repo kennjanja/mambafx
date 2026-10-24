@@ -1,0 +1,72 @@
+{
+  "manifestVersion": "2.2.0",
+  "status": "APPROVED FOR OFFLINE EVALUATION ONLY - three-day window approved by user; holdout locked unless all preregistered gates pass",
+  "indices": ["R_100", "1HZ10V", "1HZ25V", "1HZ50V", "1HZ75V", "1HZ100V"],
+  "horizons": [1, 5, 10],
+  "references": ["uniform", "existingEnsemble(vectors.ensemble: full weighted 10-digit distribution before qualification/execution filters)"],
+  "candidateFamilies": [
+    { "id": "hdm", "name": "hierarchical Dirichlet-multinomial", "version": "1.0.0", "config": "base distribution estimated with +1 smoothing on the first half of the tuning segment; choose concentration from {0.5,1,2,5,10,20,50,100,200,500,1000} by Dirichlet-multinomial marginal likelihood on the second tuning half; then update local counts sequentially" },
+    { "id": "ddir", "name": "discounted Dirichlet (primary change-point model)", "version": "1.0.0", "config": "discount in {0.990,0.995,0.998,0.999} chosen by prequential log loss on tuning segment only; BOCPD NOT registered" },
+    { "id": "ctw", "name": "context-tree weighting depth 3", "version": "1.0.0", "config": "10-ary suffix context tree, maximum depth 3; each node uses symmetric Dirichlet(0.1) predictive smoothing; stop/split prior 1/2; direct target-horizon training pairs become available only after their targets are observed" },
+    { "id": "inc", "name": "modular increment-convolution", "version": "1.0.0", "config": "first-order Markov model on modulo-10 increments; transition rows and initial increment distribution use +0.5 smoothing; propagate the h-step sum state through the transition matrix and circularly shift from current digit. This explicitly assumes first-order Markov increments; do not describe independent repeated convolution as exact. Report tuning-only increment dependence and stability diagnostics." },
+    { "id": "lag", "name": "lag-specific conditional tables P(D[t+h]|D[t-k])", "version": "1.0.0", "config": "k in {0,1,2,3,4}; min support 200 per context; Dirichlet(+1) smoothing; supported tables combined by equal-weight log-pool; unsupported tables omitted and uniform returned if no lag has support" }
+  ],
+  "candidateCells": "5 families x 6 indices x 3 horizons = 90",
+  "primaryHypotheses": "90 cells x 2 references = 180 (one-sided H0: dLL <= 0)",
+  "primaryMetric": "paired log-loss difference dLL = mean(LL_reference - LL_candidate), nats/forecast; positive favours candidate",
+  "secondaryMetrics": ["hit rate and difference", "multiclass Brier", "reliability bins", "per-digit, per-day, per-period breakdown", "confidence distribution", "exclusions", "latency"],
+  "practicalThresholdX": 0.0005,
+  "planningEffect": 0.001,
+  "alpha": 0.05,
+  "multipleComparison": "Holm across all 180 hypotheses; simultaneous CIs by Bonferroni at 1-alpha/m (m=180 dev/eval; m=2k holdout)",
+  "bootstrap": { "type": "stationary", "meanBlockLengths": [10, 50, 200], "primaryBlockLength": 50, "replicates": 20000, "interval": "percentile; paired forecast origins resampled together", "pValues": "one-sided paired Diebold-Mariano test with Newey-West long-run variance, lag 200; stationary-bootstrap intervals are reported separately", "note": "block-length sensitivity is reported at all three values; bootstrap intervals are not mislabeled as Holm-adjusted" },
+  "splits": {
+    "method": "chronological per index/horizon: tuning | development-evaluation | final holdout",
+    "tuning": "first 20% of each index's chronological data; used for model configuration and variance/dependence estimates only",
+    "developmentEvaluation": "next 55% of each index's chronological data, with at least 100000 eligible paired forecasts in every index/horizon cell",
+    "holdout": "final 25%, locked until the selection and holdout power gates are met",
+    "purge": "10 ticks removed on both sides of every boundary (applied at max horizon for all horizons)",
+    "collectionWindowDays": 3,
+    "minCalendarDaysPerIndexBeforeHoldout": 7,
+    "maxCollectionWindowDays": 3,
+    "minimumForecastsPerIndexHorizon": 100000,
+    "minimumCollectedForecastOriginsAtTheseSplitShares": 181819,
+    "sampleNote": "181819 is the arithmetic minimum for a 55% development/evaluation share to contain 100000 origins; actual collection target must be larger to account for warm-up, the 10-tick purges, missing/invalid ticks, and forecast exclusions. The user limited collection to three days, so the seven-day calendar gate cannot pass and the holdout must remain locked."
+  },
+  "powerGates": {
+    "devEval": "estimated power >= 0.70 at dLL_plan=0.001 for the full decision rule (point est >= X AND Bonferroni/Holm-adjusted CI > 0 vs both references), using paired-loss variance and dependence (effective sample via block-bootstrap/long-run variance) from the tuning segment",
+    "holdout": ">= 0.70 at dLL_plan for full promotion rule over 2k hypotheses; diagnostic power at X also reported",
+    "extras": "effects for 80%/90% power; hit-rate power at +0.5, +1, +2 pp by planting"
+  },
+  "selection": {
+    "eligibility": "dLL >= X vs both references AND Holm-adjusted p <= 0.05 AND Bonferroni-HAC simultaneous CI lower bound > 0 vs both AND quality/leakage/calibration/stability gates pass AND sample minimum AND dev/eval power >= 0.70",
+    "dataQualityGate": "zero malformed rows, precision mismatches, duplicate epochs, and out-of-order rows within source pages; detected feed gaps are recorded, never interpolated, and every forecast crossing a gap is excluded",
+    "calibrationGate": "for each reference, candidate multiclass Brier degradation <= 0.001 and candidate 10-bin classwise ECE degradation <= 0.01; ECE bins are fixed probability intervals [0,.1),...,[.9,1]",
+    "stabilityGate": "at least 7 development calendar days with >=1000 eligible paired forecasts per day; positive daily DeltaLL on >=70% of those days; no single day contributes >50% of the sum of positive daily DeltaLL",
+    "maxCells": 3,
+    "rankingRule": "descending by min over the two references of the simultaneous-CI lower bound of dLL; ties by larger min point estimate; then lexicographic id",
+    "stopRule": "if none eligible, holdout is not opened; report underpowered/inconclusive as applicable"
+  },
+  "holdoutPass": "for each selected cell: dLL >= X vs both references, Holm across 2k hypotheses (alpha=0.05) and Bonferroni-HAC simultaneous CIs with lower bound > 0, calibration/data-quality/stability gates pass",
+  "gapStreakNull": { "null": "i.i.d. uniform digits (primary); exploratory only, outside the 180 family", "statistic": "incremental dLL of shadow gap/streak module over ensemble", "surrogate": "random permutation of digits within the tuning+eval segment preserving counts, 1000 replicates; serial-dependence nulls would need block surrogates and are not registered", "multiplicity": "classified exploratory; not used for selection" },
+  "gate2IncrementDiagnostics": "tuning segment only: empirical increment pmf, circular standard deviation sqrt(-2 ln R), lag-1 increment dependence, and stability across 4 equal tuning subdivisions; diagnostics do not select or remove registered candidates and create no additional predictive hypotheses",
+  "calibrationAndStability": {
+    "brierNonDegradation": 0.001,
+    "eceNonDegradation": 0.01,
+    "eceBins": 10,
+    "minimumEligibleDays": 7,
+    "minimumForecastsPerDay": 1000,
+    "minimumPositiveDayFraction": 0.7,
+    "maximumSingleDayPositiveGainShare": 0.5
+  },
+  "powerImplementation": "paired Newey-West long-run variances/covariance from tuning loss differences; Monte Carlo bivariate normal decision simulation (100000 draws) at the fixed planning effect; Bonferroni critical cutoff across the full relevant family as a conservative approximation to Holm power",
+  "liveProtection": "candidate implementations and forecasts exist only in the offline evaluation harness; no production shadow runner, no candidate code wired into the LDPE app, no import into bridge/exec/cycle/gap-trader, and no candidate can alter active forecasts or purchases. The existing eight-model ensemble remains active. Any later promotion requires separate explicit user approval after results are reported.",
+  "stackerOrFixedShare": "NOT registered; would require a new manifest version",
+  "unresolvedQuestions": [
+    "The three-day collection limit cannot satisfy the seven-calendar-day development stability gate or the holdout precondition; results may be descriptive or underpowered only.",
+    "R_100 has a slower tick cadence than the 1-s indices; actual eligible sample growth must be measured within the three-day window.",
+    "Deriv history API returns ~1000 ticks per request and only recent history (limits unknown); collection is restricted to the most recent three days.",
+    "Hit rate for horizon h is defined as top-1 forecast digit equals D[t+h]; confirm.",
+    "Existing ensemble yields a probability vector for horizon h only at forecast origins with sufficient warm-up; the shorter-warmup origins are logged as exclusions, not substituted."
+  ]
+}
