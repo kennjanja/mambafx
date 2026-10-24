@@ -29142,6 +29142,7 @@ function gridHandleMsg(msg){
     case "buy": {
       const cb = msg.req_id && gridPending[msg.req_id];
       if (cb){ cb(msg.buy, null); delete gridPending[msg.req_id]; }
+      gridBookStake(msg.buy);
       break;
     }
     case "proposal_open_contract": {
@@ -29372,11 +29373,8 @@ function diagFullBuyTrace(){
   gridWs.send(JSON.stringify(proposalMsg));
 }
 
-function gridUpdateContract(c){
-  // LDPE orders settle exactly once inside the executor (idempotent); other contracts are ignored by it.
-  if (window.LDPE) { try { window.LDPE.onContractUpdate(c); } catch(e){ console.warn("[ldpe] contract update failed", e); } }
-  const id = String(c.contract_id);
-  let row = gridOpenContracts[id]
+function gridFindRow(id){
+  return gridOpenContracts[id]
     || gridTrades.find(t => t.id === id)
     || digTrades.find(t => t.id === id)
     || (typeof engTrades !== 'undefined' ? engTrades.find(t => t.id === id) : null)
@@ -29384,6 +29382,26 @@ function gridUpdateContract(c){
     || (typeof ouTrades !== 'undefined' ? ouTrades.find(t => t.id === id) : null)
     || (typeof adxTrades !== 'undefined' ? adxTrades.find(t => t.id === id) : null)
     || (typeof rfaTrades !== 'undefined' ? rfaTrades.find(t => t.id === id) : null);
+}
+
+// Stake is booked as a loss the moment the buy is confirmed; a win later
+// credits the full return (stake + profit) back. Idempotent per contract.
+function gridBookStake(buy){
+  if (!buy || buy.contract_id == null) return;
+  const row = gridFindRow(String(buy.contract_id));
+  const stake = Number(buy.buy_price);
+  if (!row || row._stakeBooked || !Number.isFinite(stake)) return;
+  row._stakeBooked = true;
+  row.stake = stake;
+  if (row.status === "open" || row.status == null) row.pnl = -stake;
+  if (typeof acctOnBuy === 'function') acctOnBuy(gridLoginId, stake);
+}
+
+function gridUpdateContract(c){
+  // LDPE orders settle exactly once inside the executor (idempotent); other contracts are ignored by it.
+  if (window.LDPE) { try { window.LDPE.onContractUpdate(c); } catch(e){ console.warn("[ldpe] contract update failed", e); } }
+  const id = String(c.contract_id);
+  let row = gridFindRow(id);
   if (!row) return;
   if (c.buy_price != null) row.stake = Number(c.buy_price);
   if (c.entry_tick_display_value != null) row.entry = Number(c.entry_tick_display_value);
@@ -29394,7 +29412,7 @@ function gridUpdateContract(c){
     if (row.digit !== undefined) row.exitDigit = digLastDigit(row.exit);
   }
   if (c.payout != null) row.payout = Number(c.payout);
-  if (c.profit != null) row.pnl = Number(c.profit);
+  if (c.profit != null && (c.is_sold || c.is_expired)) row.pnl = Number(c.profit);
   if (c.is_sold || c.is_expired){
     const reversalRow = rfaOpenContracts[id];
     if (reversalRow && reversalRow.mode === 'reversal'){
@@ -29418,6 +29436,10 @@ function gridUpdateContract(c){
       reversalRow.pnl = settledPnl;
     } else {
       row.status = (c.profit != null && c.profit >= 0) ? "won" : "lost";
+      // Outcome-based P/L: a loss is exactly the stake; a win is the net gain.
+      const st = Number(row.stake);
+      if (row.status === "lost" && Number.isFinite(st)) row.pnl = -st;
+      else if (row.status === "won" && !Number.isFinite(row.pnl) && c.sell_price != null && Number.isFinite(st)) row.pnl = Number(c.sell_price) - st;
     }
     if (c.sell_price != null) row.payout = Number(c.sell_price);
     delete gridOpenContracts[id];
@@ -29457,8 +29479,9 @@ function gridUpdateContract(c){
       if (typeof rfaSettleContract === 'function') rfaSettleContract(id, won);
     // Accounts page P/L tracking
     if (typeof acctOnTrade === 'function'){
+      // The stake was already debited at buy; credit back the return on a win.
       const tradePnl = row.pnl != null ? row.pnl : (won ? (row.payout||0) - (row.stake||0) : -(row.stake||0));
-      acctOnTrade(gridLoginId, tradePnl);
+      acctOnTrade(gridLoginId, won ? (row.stake||0) + tradePnl : 0);
     }
   } else {
     row.status = "open";
@@ -29484,6 +29507,11 @@ function renderGridTrades(){
   let demoWon=0, demoLost=0, demoNet=0, demoAny=false;
   let realWon=0, realLost=0, realNet=0, realAny=false;
   gridTrades.forEach(t => {
+    if (t.pnl != null && t.status==="open"){
+      net += t.pnl; anyResolved = true;
+      const openDemo = t.isVirtual != null ? t.isVirtual : (gridIsVirtual !== false);
+      if (openDemo){ demoNet += t.pnl; demoAny = true; } else { realNet += t.pnl; realAny = true; }
+    }
     if (t.pnl != null && (t.status==="won"||t.status==="lost")){
       net += t.pnl; anyResolved = true;
       const isDemo = t.isVirtual !== false ? (gridIsVirtual !== false) : false;
@@ -29688,6 +29716,7 @@ function engRenderTrades(){
   if (wrap) wrap.style.display = "block";
   let won=0, lost=0, net=0, any=false;
   engTrades.forEach(t => {
+    if (t.status==="open" && t.pnl!=null){net+=t.pnl;any=true;}
     if (t.status==="won"){ won++; if(t.pnl!=null){net+=t.pnl;any=true;} }
     if (t.status==="lost"){ lost++; if(t.pnl!=null){net+=t.pnl;any=true;} }
   });
@@ -30738,7 +30767,7 @@ function digRenderTrades(){
     return;
   }
   let net = 0, any = false;
-  digTrades.forEach(t => { if (t.pnl != null && (t.status==="won"||t.status==="lost") && t.time*1000 >= digPnlResetAt){ net += t.pnl; any = true; } });
+  digTrades.forEach(t => { if (t.pnl != null && (t.status==="won"||t.status==="lost"||t.status==="open") && t.time*1000 >= digPnlResetAt){ net += t.pnl; any = true; } });
   digRenderSessionPnl(net, any);
   const dec = decimals;
   body.innerHTML = digTrades.map(t => {
@@ -32621,6 +32650,7 @@ function ouRenderTrades(){
 function ouRenderStats(){
   let won=0,lost=0,net=0,any=false;
   ouTrades.forEach(t=>{
+    if(t.status==='open' && t.pnl!=null){net+=t.pnl;any=true;}
     if(t.status==='won'){ won++; if(t.pnl!=null){net+=t.pnl;any=true;} }
     if(t.status==='lost'){ lost++; if(t.pnl!=null){net+=t.pnl;any=true;} }
   });
@@ -32663,6 +32693,13 @@ function acctOnBalance(accountId, balance, currency){
 }
 
 // Called by gridUpdateContract when a trade settles — update P/L for the account
+function acctOnBuy(accountId, stake){
+  if (!accountId || !Number.isFinite(stake)) return;
+  if (!_acctData[accountId]) _acctData[accountId] = { balance:null, currency:'USD', pnl:0, trades:0 };
+  _acctData[accountId].pnl = (_acctData[accountId].pnl || 0) - stake;
+  if (document.getElementById('page-accounts')?.classList.contains('active')) acctRenderPL();
+}
+
 function acctOnTrade(accountId, pnl){
   if (!accountId || pnl == null) return;
   if (!_acctData[accountId]) _acctData[accountId] = { balance:null, currency:'USD', pnl:0, trades:0 };
