@@ -87,7 +87,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const run = runs[sym], card = $("cs_" + sym); if (!card) return;
     const lvl = levelOf(run.len), word = run.dir > 0 ? "rise" : "fall";
     card.className = "cs-card" + (lvl === "warn" ? " cs-warn" : lvl === "signal" ? " cs-signal" : "");
-    $("csR_" + sym).textContent = run.len ? `${run.dir > 0 ? "▲" : "▼"} ${run.len}` : "—";
+    $("csR_" + sym).innerHTML = run.len ? `<span style="color:${run.dir > 0 ? "#22c55e" : "#ef4444"}">${run.dir > 0 ? "▲" : "▼"} ${run.len}</span>` : "—";
     $("csA_" + sym).innerHTML = lvl === "signal" ? `<b style="color:#22c55e">Place trade: ${adviceOf(run.dir).toUpperCase()}</b> (${run.len} ${word}s)`
       : lvl === "warn" ? `<b style="color:#ffb020">Warning: ${run.len} consecutive ${word}s</b>`
       : run.len ? `${run.len} consecutive ${word}${run.len > 1 ? "s" : ""}` : "no run";
