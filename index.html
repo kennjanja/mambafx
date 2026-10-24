@@ -2473,7 +2473,14 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <h3 style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">📊 Rise/Fall Autobot</h3>
         <div class="gc-sub" style="margin-bottom:10px">Scans every Volatility Index simultaneously, determines who controls each market, and trades Rise/Fall only at a significant zone with confirming rejection and candle-body signals. Uses the Trading Grid connection — connect there first.</div>
         <button id="rfaArmBtn" class="gc-btn" onclick="rfaToggleArm()" style="width:100%;margin-bottom:10px">▶ Arm & Scan</button>
+        <button id="rfaReversalBtn" class="gc-btn" onclick="rfaToggleReversal()" style="width:100%;margin-bottom:10px">▶ Start Reversal Auto</button>
         <div id="rfaScanStatus" class="gc-sub" style="margin-bottom:12px">Not scanning.</div>
+        <div class="grid-card" style="margin-bottom:12px;padding:10px">
+          <div style="font-weight:700;margin-bottom:6px">Reversal Auto — selected market: <span id="rfaReversalMarket">—</span></div>
+          <div class="gc-sub">Status: <span id="rfaReversalStatus">Stopped</span> · Pattern: <span id="rfaReversalPattern">—</span> · Direction: <span id="rfaReversalDirection">—</span></div>
+          <div class="gc-sub">Cycle: <span id="rfaReversalCycle">1</span> (<span id="rfaReversalCycleStatus">Waiting for the Next Cycle</span>) · Base stake: <span id="rfaReversalBaseStake">1.00</span> · Current stake: <span id="rfaReversalStake">1.00</span></div>
+          <div class="gc-sub">Consecutive losses: <span id="rfaReversalLosses">0</span> · Trades: <span id="rfaReversalTrades">0</span> · Wins: <span id="rfaReversalWins">0</span> · Losses: <span id="rfaReversalLost">0</span> · Net P/L: <span id="rfaReversalProfit">0.00</span></div>
+        </div>
 
         <label for="rfaStake">Base Stake (USD)</label>
         <input type="number" id="rfaStake" value="1.00" min="0.35" step="0.01" style="width:100%;margin-bottom:8px">
@@ -2481,7 +2488,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <label for="rfaMaxConcurrent">Max Concurrent Markets</label>
         <input type="number" id="rfaMaxConcurrent" value="3" min="1" step="1" style="width:100%;margin-bottom:8px">
 
-        <label for="rfaMaxLevel">Max Martingale Level (0 = no limit)</label>
+        <label for="rfaMaxLevel">Max Martingale Level (0 = legacy unlimited; Reversal Auto uses 5)</label>
         <input type="number" id="rfaMaxLevel" value="0" min="0" step="1" style="width:100%;margin-bottom:8px">
 
         <label for="rfaStopLoss">Stop Loss (USD, blank = off)</label>
@@ -2490,7 +2497,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <label for="rfaTargetProfit">Target Profit Per Market (USD, blank = switch after every win)</label>
         <input type="number" id="rfaTargetProfit" min="0" step="0.01" style="width:100%;margin-bottom:8px">
 
-        <div class="gc-sub" style="margin-top:6px">The bot can trade up to Max Concurrent Markets at once — each qualifying volatility index gets its own independent Martingale sequence, running simultaneously with the others. Duration is fixed at 1 tick; contract type is always Rise/Fall — neither is configurable. Each market's Martingale multiplier is shared with every other bot on this page — see the Martingale Multiplier control above. Tick-delay between trades is fixed at 1 tick, per spec, applied per-market. Target Profit is per-market: a market keeps trading — through as many win/reset Martingale cycles as it takes — until its own accumulated profit reaches this figure, then it's released and a fresh market fills the open slot. If a market hits Max Martingale Level, only that market is abandoned — the others keep running. Stop Loss is the one session-wide hard stop, checked against total profit across every active market.</div>
+        <div class="gc-sub" style="margin-top:6px">The original scanner can trade up to Max Concurrent Markets at once, with an independent Martingale sequence per market. Duration is fixed at 1 tick. Each market's multiplier uses the shared setting above; target profit releases a market slot, and the session Stop Loss applies across active markets. Reversal Auto instead uses the Trading Grid selected symbol and actual live tick prices; unchanged-price ticks are ignored. It reverses after five consecutive directional moves, allows one unresolved contract, and ends a cycle only after confirmed settlement. In Reversal Auto, Max Martingale Level is always finite: 0 uses a safety cap of 5 losses.</div>
       </div>
 
       <div class="grid-card">
@@ -2526,8 +2533,8 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       <div class="grid-card">
         <h3 style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Trade Log</h3>
         <table class="sig-table">
-          <thead><tr><th class="l">Time</th><th class="l">Market</th><th class="l">Dir</th><th class="l">Stake</th><th class="l">Conf.</th><th class="l">P/L</th><th class="l">Status</th></tr></thead>
-          <tbody id="rfaTradeBody"><tr><td colspan="7" class="sig-empty">No trades yet.</td></tr></tbody>
+          <thead><tr><th class="l">Time</th><th class="l">Market / Pattern</th><th class="l">Dir</th><th class="l">Stake</th><th class="l">Conf.</th><th class="l">Contract ID</th><th class="l">Cycle</th><th class="l">P/L</th><th class="l">Status</th></tr></thead>
+          <tbody id="rfaTradeBody"><tr><td colspan="9" class="sig-empty">No trades yet.</td></tr></tbody>
         </table>
       </div>
     </div>
@@ -4369,6 +4376,7 @@ function handleTick(price, epoch){
     }
   });
   _tickSafe("aggression", () => { if (typeof aggOnTick === "function") aggOnTick(price, epoch, dir); });
+  _tickSafe("rfa-reversal", () => { if (typeof rfaOnTick === "function") rfaOnTick(price); });
 
   // Persist the last 100 ticks (throttled: every 3rd tick, plus always on a signal)
   _saveThrottle++;
@@ -27075,6 +27083,13 @@ let rfaOpenContracts = {};     // id -> row, mirrors ouOpenContracts/adxOpenCont
 let rfaTrades = [];
 
 let rfaStats = { won: 0, lost: 0, profit: 0, sessionStartBalance: null };
+let rfaReversal = {
+  running: false, status: "Stopped", detector: null, cycleNumber: 1,
+  cycleLosses: 0, cycleStatus: "Waiting for the Next Cycle", awaitingNextCycle: false,
+  lossLimitReached: false,
+  pattern: "—", direction: "—", trades: 0, wins: 0, losses: 0, profit: 0,
+  slot: null,
+};
 
 const RFA_TICK_DELAY = 1;     // "wait exactly one tick" per spec — fixed, not user-configurable
 const RFA_DURATION_TICKS = 1; // duration is always 1 tick — fixed, not user-configurable, not shown in the UI
@@ -27088,6 +27103,10 @@ function rfaMaxMartingaleLevel(){
   const el = $("rfaMaxLevel");
   const v = el ? parseInt(el.value, 10) : 0;
   return Number.isFinite(v) && v > 0 ? v : Infinity; // 0 or blank = no limit
+}
+function rfaReversalMaxLosses(){
+  const configured = rfaMaxMartingaleLevel();
+  return Number.isFinite(configured) ? configured : 5;
 }
 function rfaStopLoss(){ const el = $("rfaStopLoss"); const v = el ? parseFloat(el.value) : NaN; return Number.isFinite(v) && v > 0 ? v : null; }
 function rfaTargetProfit(){ const el = $("rfaTargetProfit"); const v = el ? parseFloat(el.value) : NaN; return Number.isFinite(v) && v > 0 ? v : null; }
@@ -27165,12 +27184,18 @@ function rfaValidateProposal(p){
   return { ok: errors.length === 0, errors };
 }
 
-function rfaExecuteTrade(symbol, direction, confidenceInfo){
+function rfaExecuteTrade(symbol, direction, confidenceInfo, reversalMeta){
   if (typeof gridWs === 'undefined' || !gridWs || gridWs.readyState !== 1 || !gridAuthed){
     gridSet('rfaScanStatus', 'Connect on Trading Grid first.'); return;
   }
-  const slot = rfaGetSlot(symbol);
+  const slot = reversalMeta ? rfaReversal.slot : rfaGetSlot(symbol);
   const stake = Math.max(0.35, slot.currentStake != null ? slot.currentStake : slot.mult.getNext('martingale'));
+  if (reversalMeta && (!Number.isFinite(gridBalance) || stake > gridBalance)){
+    rfaReversal.status = 'Stopped — stake exceeds available account balance';
+    rfaReversal.running = false;
+    rfaRenderAll();
+    return;
+  }
   const contractType = direction === 'RISE' ? 'CALL' : 'PUT';
   const reqId = ++gridReqId;
 
@@ -27193,27 +27218,48 @@ function rfaExecuteTrade(symbol, direction, confidenceInfo){
 
   slot.currentStake = stake;
   slot.tradeInFlight = true; // cleared only in rfaSettleContract, or immediately below on a rejection/failure — never left stuck
-  const row = { id: 'pending-' + reqId, symbol, contractType, dir: direction, stake, status: 'proposal', time: Math.floor(Date.now()/1000), confidence: confidenceInfo ? confidenceInfo.confidence : null };
+  const row = { id: 'pending-' + reqId, symbol, contractType, dir: direction, stake, status: 'proposal', time: Math.floor(Date.now()/1000), confidence: confidenceInfo ? confidenceInfo.confidence : null,
+    mode: reversalMeta ? 'reversal' : 'legacy', pattern: reversalMeta ? reversalMeta.pattern : null, cycleNumber: reversalMeta ? rfaReversal.cycleNumber : null,
+    accountId: reversalMeta ? gridLoginId : null };
   rfaTrades.unshift(row);
 
   gridPending[reqId] = (proposal, err) => {
-    if (err){ row.status = 'rejected: ' + (err.message || err.code || 'error'); slot.tradeInFlight = false; rfaRenderAll(); return; }
-    if (!proposal || !proposal.id || proposal.ask_price == null){ row.status = 'rejected: no price'; slot.tradeInFlight = false; rfaRenderAll(); return; }
+    if (err){ row.status = 'rejected: ' + (err.message || err.code || 'error'); slot.tradeInFlight = false; if (reversalMeta && !rfaReversal.running) rfaReversal.status = 'Stopped'; rfaRenderAll(); return; }
+    if (!proposal || !proposal.id || proposal.ask_price == null){ row.status = 'rejected: no price'; slot.tradeInFlight = false; if (reversalMeta && !rfaReversal.running) rfaReversal.status = 'Stopped'; rfaRenderAll(); return; }
+    if (reversalMeta && !rfaReversal.running){
+      row.status = 'cancelled before buy';
+      slot.tradeInFlight = false;
+      rfaReversal.status = 'Stopped';
+      rfaRenderAll();
+      return;
+    }
     const buyReqId = ++gridReqId;
     row.status = 'open'; rfaRenderAll();
     gridPending[buyReqId] = (buy, buyErr) => {
-      if (buyErr){ row.status = 'buy failed: ' + (buyErr.message || buyErr.code || 'error'); slot.tradeInFlight = false; rfaRenderAll(); return; }
+      if (reversalMeta && row.buySubmitted && row.id !== 'pending-' + reqId){
+        if (buyErr) console.warn('[rfa reversal] buy response conflicted with recovered contract update', row.id, buyErr);
+        return;
+      }
+      if (buyErr){ row.buySubmitted = false; row.status = 'buy failed: ' + (buyErr.message || buyErr.code || 'error'); slot.tradeInFlight = false; if (reversalMeta && !rfaReversal.running) rfaReversal.status = 'Stopped'; rfaRenderAll(); return; }
       if (buy){
         row.id = String(buy.contract_id);
         row.buyPrice = buy.buy_price;
         row.status = 'open';
         rfaOpenContracts[row.id] = row;
+        if (reversalMeta){
+          if (!row.tradeCounted){ rfaReversal.trades++; row.tradeCounted = true; }
+          rfaReversal.status = rfaReversal.running ? 'Running' : 'Waiting for Settlement';
+        }
         rfaRenderAll();
       }
     };
-    gridWs.send(JSON.stringify({ buy: proposal.id, price: proposal.ask_price, req_id: buyReqId }));
+    row.buySubmitted = true;
+    row.status = 'buy pending confirmation';
+    try { gridWs.send(JSON.stringify({ buy: proposal.id, price: proposal.ask_price, req_id: buyReqId })); }
+      catch (e){ row.buySubmitted = false; row.status = 'buy failed: ' + (e.message || 'connection error'); slot.tradeInFlight = false; if (reversalMeta && !rfaReversal.running) rfaReversal.status = 'Stopped'; rfaRenderAll(); }
   };
-  gridWs.send(JSON.stringify(proposalMsg));
+  try { gridWs.send(JSON.stringify(proposalMsg)); }
+  catch (e){ row.status = 'proposal failed: ' + (e.message || 'connection error'); slot.tradeInFlight = false; if (reversalMeta && !rfaReversal.running) rfaReversal.status = 'Stopped'; rfaRenderAll(); }
   rfaRenderAll();
 }
 
@@ -27222,18 +27268,44 @@ function rfaSettleContract(id, won){
   const row = rfaOpenContracts[id];
   delete rfaOpenContracts[id];
   if (!row) return;
-  const slot = rfaActiveMarkets[row.symbol];
+  const slot = row.mode === 'reversal' ? rfaReversal.slot : rfaActiveMarkets[row.symbol];
   if (!slot) return; // shouldn't happen — defensive guard against a settlement for a market that's already been abandoned
 
   slot.tradeInFlight = false;
-  slot.waitingTicks = RFA_TICK_DELAY;
+  slot.waitingTicks = row.mode === 'reversal' ? 0 : RFA_TICK_DELAY;
 
   slot.mult.record(row.stake, won);
   rfaStats.won += won ? 1 : 0;
   rfaStats.lost += won ? 0 : 1;
-  const tradePnl = won ? ((row.payout != null ? row.payout : row.stake) - row.stake) : -row.stake;
+  const tradePnl = row.mode === 'reversal' && Number.isFinite(row.pnl)
+    ? row.pnl
+    : won ? ((row.payout != null ? row.payout : row.stake) - row.stake) : -row.stake;
   rfaStats.profit += tradePnl;
   slot.marketProfit += tradePnl;
+
+  if (row.mode === 'reversal'){
+    rfaReversal.profit += tradePnl;
+    if (won){
+      rfaReversal.wins++;
+      window.MFXReversalAutoState.applyReversalSettlement(rfaReversal, true);
+      slot.martingaleLevel = 0;
+      slot.currentStake = null;
+    } else {
+      rfaReversal.losses++;
+      window.MFXReversalAutoState.applyReversalSettlement(rfaReversal, false);
+      slot.martingaleLevel++;
+      slot.currentStake = null;
+      if (rfaReversal.cycleLosses >= rfaReversalMaxLosses()){
+        rfaReversal.lossLimitReached = true;
+        rfaReversal.running = false;
+        rfaReversal.status = 'Stopped — maximum consecutive losses reached';
+      }
+    }
+    if (!rfaReversal.running && rfaReversal.status === 'Waiting for Settlement') rfaReversal.status = 'Stopped';
+    else if (rfaReversal.running) rfaReversal.status = 'Running';
+    rfaRenderAll();
+    return;
+  }
 
   if (won) {
     slot.martingaleLevel = 0;
@@ -27258,10 +27330,90 @@ function rfaSettleContract(id, won){
 }
 
 function rfaToggleArm(){
+  if (rfaReversal.running){ gridSet('rfaScanStatus', 'Stop Reversal Auto before arming the legacy scanner.'); return; }
   rfaArmed = !rfaArmed;
   const btn = $("rfaArmBtn");
   if (btn) { btn.textContent = rfaArmed ? '⏸ Disarm' : '▶ Arm & Scan'; btn.classList.toggle('active', rfaArmed); }
   if (rfaArmed) { rfaStats.sessionStartBalance = gridBalance; rfaConnect(); }
+  rfaRenderAll();
+}
+
+function rfaToggleReversal(){
+  if (rfaReversal.running){
+    rfaReversal.running = false;
+    rfaReversal.status = rfaReversal.slot && rfaReversal.slot.tradeInFlight ? 'Waiting for Settlement' : 'Stopped';
+    rfaRenderAll();
+    return;
+  }
+  if (rfaReversal.lossLimitReached){
+    rfaReversal.status = 'Stopped — maximum consecutive losses reached; cycle remains locked';
+    rfaRenderAll();
+    return;
+  }
+  const legacyTradeInFlight = Object.values(rfaActiveMarkets).some(slot => slot.tradeInFlight);
+  if (rfaArmed || legacyTradeInFlight || Object.keys(rfaOpenContracts).length){
+    rfaReversal.status = 'Cannot start — stop the legacy scanner and settle its open trade(s) first';
+    rfaRenderAll();
+    return;
+  }
+  if (rfaReversal.slot && rfaReversal.slot.tradeInFlight){
+    rfaReversal.status = 'Waiting for Settlement';
+    rfaRenderAll();
+    return;
+  }
+  if (!window.MFXReversalAutoState){
+    rfaReversal.status = 'Unavailable — reversal state module did not load';
+    rfaRenderAll();
+    return;
+  }
+  rfaReversal.detector = window.MFXReversalAutoState.createReversalDetector();
+  rfaReversal.symbol = SYMBOL;
+  rfaReversal.accountId = gridAuthed ? gridLoginId : null;
+  if (!rfaReversal.slot) rfaReversal.slot = { mult: makeMultiplier(() => $("rfaStake")), martingaleLevel: 0, currentStake: null, marketProfit: 0, tradeInFlight: false, waitingTicks: 0 };
+  rfaReversal.running = true;
+  rfaReversal.status = 'Running';
+  if (rfaReversal.awaitingNextCycle){
+    rfaReversal.cycleNumber++;
+    rfaReversal.awaitingNextCycle = false;
+  }
+  rfaStats.sessionStartBalance = gridBalance;
+  rfaRenderAll();
+}
+
+function rfaOnTick(price){
+  if (!rfaReversal.running || !rfaReversal.detector) return;
+  if (rfaReversal.symbol !== SYMBOL){
+    rfaReversal.symbol = SYMBOL;
+    rfaReversal.detector.reset();
+  }
+  const signal = rfaReversal.detector.observe(price);
+  if (!signal) return;
+  rfaReversal.pattern = signal.pattern;
+  rfaReversal.direction = signal.direction;
+  if (rfaReversal.awaitingNextCycle){
+    rfaReversal.cycleNumber++;
+    rfaReversal.awaitingNextCycle = false;
+  }
+  rfaReversal.cycleStatus = 'Active';
+  const limitHit = rfaRiskLimitReached();
+  if (limitHit){
+    rfaReversal.running = false;
+    rfaReversal.status = 'Stopped — ' + limitHit;
+    rfaRenderAll();
+    return;
+  }
+  const symbol = SYMBOL;
+  if (!symbol || !rfaReversal.slot || rfaReversal.slot.tradeInFlight) return;
+  if (rfaReversal.accountId && gridLoginId !== rfaReversal.accountId){
+    rfaReversal.running = false;
+    rfaReversal.status = 'Stopped — selected account changed';
+    rfaRenderAll();
+    return;
+  }
+  if (!rfaReversal.accountId && gridAuthed) rfaReversal.accountId = gridLoginId;
+  if (rfaReversal.slot.waitingTicks > 0){ rfaReversal.slot.waitingTicks--; return; }
+  rfaReversal.status = 'Running';
+  rfaExecuteTrade(symbol, signal.direction, null, signal);
   rfaRenderAll();
 }
 
@@ -27320,23 +27472,40 @@ function rfaRenderAll(){
   setTxt('rfaStatProfit', (rfaStats.profit>=0?'+':'')+rfaStats.profit.toFixed(2));
   setTxt('rfaStatROI', rfaStats.sessionStartBalance ? ((rfaStats.profit/rfaStats.sessionStartBalance)*100).toFixed(2)+'%' : '—');
   setTxt('rfaStatActiveCount', Object.keys(rfaActiveMarkets).length + ' / ' + rfaMaxConcurrentMarkets());
+  setTxt('rfaReversalMarket', MARKETS[SYMBOL] || SYMBOL || '—');
+  setTxt('rfaReversalStatus', rfaReversal.status);
+  setTxt('rfaReversalPattern', rfaReversal.pattern);
+  setTxt('rfaReversalDirection', rfaReversal.direction);
+  setTxt('rfaReversalCycle', rfaReversal.cycleNumber);
+  setTxt('rfaReversalCycleStatus', rfaReversal.cycleStatus);
+  setTxt('rfaReversalBaseStake', Math.max(0.35, Number($('rfaStake') && $('rfaStake').value) || 1).toFixed(2));
+  setTxt('rfaReversalStake', rfaReversal.slot ? (rfaReversal.slot.currentStake != null ? rfaReversal.slot.currentStake : rfaReversal.slot.mult.getNext('martingale')).toFixed(2) : (Math.max(0.35, Number($('rfaStake') && $('rfaStake').value) || 1)).toFixed(2));
+  setTxt('rfaReversalLosses', rfaReversal.cycleLosses);
+  setTxt('rfaReversalTrades', rfaReversal.trades);
+  setTxt('rfaReversalWins', rfaReversal.wins);
+  setTxt('rfaReversalLost', rfaReversal.losses);
+  setTxt('rfaReversalProfit', (rfaReversal.profit >= 0 ? '+' : '') + rfaReversal.profit.toFixed(2));
+  const reversalBtn = $('rfaReversalBtn');
+  if (reversalBtn){ reversalBtn.textContent = rfaReversal.running ? '⏹ Stop Reversal Auto' : '▶ Start Reversal Auto'; reversalBtn.classList.toggle('active', rfaReversal.running); }
 
   // Trade log
   const body = $("rfaTradeBody");
   if (body){
     if (!rfaTrades.length){
-      body.innerHTML = '<tr><td colspan="7" class="sig-empty">No trades yet.</td></tr>';
+      body.innerHTML = '<tr><td colspan="9" class="sig-empty">No trades yet.</td></tr>';
     } else {
       body.innerHTML = rfaTrades.slice(0,50).map(t => {
         const dirCls = t.dir === 'RISE' ? 'cell-pos' : 'cell-neg';
         const pCls = t.pnl==null ? 'cell-mut' : t.pnl>=0 ? 'cell-pos' : 'cell-neg';
-        const sCls = t.status==='won' ? 'cell-pos' : t.status==='lost' ? 'cell-neg' : /reject|failed/.test(t.status) ? 'cell-warn' : 'cell-mut';
+        const sCls = t.status==='won' ? 'cell-pos' : t.status==='lost' ? 'cell-neg' : /reject|failed|unknown|interrupted|cancelled/.test(t.status) ? 'cell-warn' : 'cell-mut';
         return `<tr>
           <td class="l">${fmtTime(t.time)}</td>
-          <td class="l">${MARKETS[t.symbol]||t.symbol}</td>
+          <td class="l">${t.mode === 'reversal' ? (MARKETS[t.symbol]||t.symbol) + ' ' + t.pattern : (MARKETS[t.symbol]||t.symbol)}</td>
           <td class="${dirCls}" style="font-weight:700">${t.dir}</td>
           <td>${t.stake!=null?Number(t.stake).toFixed(2):'—'}</td>
           <td>${t.confidence!=null?(t.confidence*100).toFixed(0)+'%':'—'}</td>
+          <td class="l">${String(t.id).startsWith('pending-') ? 'Pending' : t.id}</td>
+          <td>${t.cycleNumber != null ? t.cycleNumber : '—'}</td>
           <td class="${pCls}">${t.pnl!=null?(t.pnl>=0?'+':'')+t.pnl.toFixed(2):'—'}</td>
           <td class="${sCls} l">${t.status}</td>
         </tr>`;
@@ -28739,6 +28908,11 @@ async function gridConnect(){
   const sel    = $("gridAcctPick");
   const acctId = sel && sel.value;
   if (!acctId){ if (!isAuto) alert("Pick an account first."); return; }
+  if (typeof rfaReversal !== 'undefined' && rfaReversal.slot && rfaReversal.slot.tradeInFlight &&
+      rfaReversal.accountId && acctId !== rfaReversal.accountId){
+    gridDiag("Cannot switch accounts while a Reversal Auto contract is unresolved. Reconnect to the original account to receive settlement updates.", true);
+    return;
+  }
 
   gridWantConn = true;
   gridDiag(null);
@@ -28823,6 +28997,22 @@ async function gridConnect(){
   gridWs.onerror = () => {};
   gridWs.onclose = ev => {
     gridConnecting = false; gridAuthed = false;
+    const unresolvedReversalBuy = rfaTrades.find(t => t.mode === 'reversal' && t.buySubmitted && t.id.startsWith('pending-'));
+    if (unresolvedReversalBuy){
+      unresolvedReversalBuy.status = 'buy outcome unknown — awaiting account reconciliation';
+      rfaReversal.running = false;
+      rfaReversal.status = 'Waiting for Settlement';
+      rfaRenderAll();
+    } else {
+      const interruptedProposal = rfaTrades.find(t => t.mode === 'reversal' && t.status === 'proposal' && t.id.startsWith('pending-'));
+      if (interruptedProposal){
+        interruptedProposal.status = 'proposal interrupted by connection loss';
+        if (rfaReversal.slot) rfaReversal.slot.tradeInFlight = false;
+      }
+      if (rfaReversal.slot && rfaReversal.slot.tradeInFlight) rfaReversal.status = 'Waiting for Settlement';
+      else if (!rfaReversal.running) rfaReversal.status = 'Stopped';
+      rfaRenderAll();
+    }
     if (window.LDPE) { try { window.LDPE.onDisconnect(); } catch(_){} }
     if (gridPing){ clearInterval(gridPing); gridPing = null; }
     gridConnState("off");
@@ -29206,7 +29396,29 @@ function gridUpdateContract(c){
   if (c.payout != null) row.payout = Number(c.payout);
   if (c.profit != null) row.pnl = Number(c.profit);
   if (c.is_sold || c.is_expired){
-    row.status = (c.profit != null && c.profit >= 0) ? "won" : "lost";
+    const reversalRow = rfaOpenContracts[id];
+    if (reversalRow && reversalRow.mode === 'reversal'){
+      const contractStatus = String(c.status || '').toLowerCase();
+      const reportedProfit = c.profit == null || c.profit === '' ? NaN : Number(c.profit);
+      const result = contractStatus === 'won' ? true : contractStatus === 'lost' ? false
+        : Number.isFinite(reportedProfit) && reportedProfit > 0 ? true
+        : Number.isFinite(reportedProfit) && reportedProfit < 0 ? false : null;
+      let settledPnl = reportedProfit;
+      if (!Number.isFinite(settledPnl) && result === false) settledPnl = -Number(reversalRow.stake);
+      else if (!Number.isFinite(settledPnl) && result === true && c.sell_price != null && Number.isFinite(Number(c.sell_price))){
+        settledPnl = Number(c.sell_price) - Number(reversalRow.stake);
+      }
+      if (result === null || !Number.isFinite(settledPnl)){
+        reversalRow.status = 'outcome unknown — awaiting confirmation';
+        rfaRenderAll();
+        renderGridTrades();
+        return;
+      }
+      reversalRow.status = result ? 'won' : 'lost';
+      reversalRow.pnl = settledPnl;
+    } else {
+      row.status = (c.profit != null && c.profit >= 0) ? "won" : "lost";
+    }
     if (c.sell_price != null) row.payout = Number(c.sell_price);
     delete gridOpenContracts[id];
     const won = row.status === "won";
@@ -33361,6 +33573,7 @@ try {
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>
+<script type="module" src="src/trading/reversalAutoState.mjs"></script>
 <script type="module" src="src/trading/gridSetHelper.js"></script>
 <script type="module" src="src/trading/gridStatusUi.js"></script>
 <script type="module" src="src/trading/gridSessionAuth.js?v=14"></script>

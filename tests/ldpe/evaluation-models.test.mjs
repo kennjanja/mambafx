@@ -1,6 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { CandidateForecaster, fitTuningParameters, normalizeProbabilities } from "../../src/ldpe/evaluation/models.mjs";
+import {
+  CandidateForecaster, EarnedWeightMixture, fitTuningParameters, GapRampForecaster,
+  normalizeProbabilities, SoftmaxRegressionForecaster,
+} from "../../src/ldpe/evaluation/models.mjs";
 
 function valid(v) {
   assert.equal(v?.length, 10);
@@ -75,4 +78,45 @@ test("increment context does not bridge a feed discontinuity", () => {
   assert.equal(model.incrementCounts[1][1], 0);
   model.observe(4);
   assert.equal(model.incrementCounts[1][1], 1);
+});
+
+test("softmax regression learns a deterministic first-order pattern without future targets", () => {
+  const model = new SoftmaxRegressionForecaster(1);
+  for (let i = 0; i < 1200; i++) model.observe(i % 10);
+  const forecast = model.predict();
+  valid(forecast);
+  assert.ok(forecast[(model.digits.at(-1) + 1) % 10] > 0.8);
+});
+
+test("gapRamp uses the configured 122-tick saturation scale", () => {
+  const model = new GapRampForecaster(1, 122);
+  model.observe(0);
+  const forecast = model.predict();
+  valid(forecast);
+  assert.ok(forecast[1] > forecast[0]);
+  assert.ok(Math.abs(forecast[1] / forecast[0] - ((1 + 2 / 122) / (1 + 1 / 122))) < 1e-10);
+});
+
+test("earned-weight mixture learns experts under cluster caps and retains a uniform floor", () => {
+  const clusters = { useful: "sequence", weak: "frequency", gap: "gap", streak: "streak" };
+  const mixture = new EarnedWeightMixture(clusters);
+  const forecasts = {
+    useful: [1, ...Array(9).fill(0)],
+    weak: Array(10).fill(0.1),
+    gap: Array(10).fill(0.1),
+    streak: Array(10).fill(0.1),
+  };
+  const before = mixture.getWeights();
+  for (let i = 0; i < 100; i++) mixture.observe(forecasts, 0);
+  const after = mixture.getWeights();
+  assert.ok(after.useful > before.useful);
+  assert.ok(Math.abs(Object.values(after).reduce((sum, weight) => sum + weight, 0) - 1) < 1e-10);
+  for (const cluster of new Set(Object.values(clusters))) {
+    const weight = Object.keys(clusters).filter((name) => clusters[name] === cluster)
+      .reduce((sum, name) => sum + after[name], 0);
+    assert.ok(weight <= 0.4 + 1e-10);
+  }
+  const prediction = mixture.predict(forecasts);
+  valid(prediction);
+  assert.ok(prediction.every((probability) => probability >= 0.005));
 });

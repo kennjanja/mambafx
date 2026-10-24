@@ -155,6 +155,7 @@ export class CandidateForecaster {
           node.logWeighted = logAdd(LOG_HALF + node.logKT, LOG_HALF + childEvidence);
         }
       }
+
       for (let lag = 0; lag <= 4; lag++) {
         const contextIndex = origin - lag;
         if (contextIndex < this.segmentStart) continue;
@@ -253,5 +254,222 @@ export class CandidateForecaster {
       pooled[d] = Math.exp(vectors.reduce((sum, vector) => sum + Math.log(Math.max(vector[d], 1e-12)), 0) / vectors.length);
     }
     return normalizeProbabilities(pooled);
+  }
+}
+
+const REGRESSION_LAGS = 4;
+const REGRESSION_GAP_OFFSET = 1 + REGRESSION_LAGS * DIGITS;
+const REGRESSION_RUN_OFFSET = REGRESSION_GAP_OFFSET + DIGITS;
+const REGRESSION_FREQ_OFFSET = REGRESSION_RUN_OFFSET + DIGITS;
+const REGRESSION_FEATURES = REGRESSION_FREQ_OFFSET + DIGITS;
+
+function regressionFeatures(digits) {
+  const features = [[0, 1]];
+  for (let lag = 1; lag <= REGRESSION_LAGS; lag++) {
+    const digit = digits[digits.length - lag];
+    if (digit !== undefined) features.push([1 + (lag - 1) * DIGITS + digit, 1]);
+  }
+
+  const gaps = Array(DIGITS).fill(digits.length + 1);
+  let unseen = DIGITS;
+  for (let i = digits.length - 1; i >= 0; i--) {
+    if (gaps[digits[i]] === digits.length + 1) {
+      gaps[digits[i]] = digits.length - i;
+      if (--unseen === 0) break;
+    }
+  }
+  for (let digit = 0; digit < DIGITS; digit++) {
+    features.push([REGRESSION_GAP_OFFSET + digit, Math.min(gaps[digit] / 122, 1)]);
+  }
+
+  const last = digits.at(-1);
+  if (last !== undefined) {
+    let runLength = 0;
+    for (let i = digits.length - 1; i >= 0 && digits[i] === last; i--) runLength++;
+    features.push([REGRESSION_RUN_OFFSET + last, Math.min(runLength / 5, 1)]);
+  }
+
+  const recent = digits.slice(-100);
+  const counts = Array(DIGITS).fill(0);
+  for (const digit of recent) counts[digit]++;
+  for (let digit = 0; digit < DIGITS; digit++) {
+    features.push([REGRESSION_FREQ_OFFSET + digit, counts[digit] / Math.max(1, recent.length) - 0.1]);
+  }
+  return features;
+}
+
+function regressionProbabilities(weights, features) {
+  const logits = Array(DIGITS).fill(0);
+  for (let digit = 0; digit < DIGITS; digit++) {
+    const offset = digit * REGRESSION_FEATURES;
+    for (const [feature, value] of features) logits[digit] += weights[offset + feature] * value;
+  }
+  const maximum = Math.max(...logits);
+  return normalizeProbabilities(logits.map((value) => Math.exp(value - maximum)));
+}
+
+function isValidProbabilityVector(values) {
+  if (!Array.isArray(values) || values.length !== DIGITS ||
+      values.some((value) => !Number.isFinite(value) || value < 0)) return false;
+  return Math.abs(values.reduce((sum, value) => sum + value, 0) - 1) <= 1e-8;
+}
+
+export class SoftmaxRegressionForecaster {
+  constructor(horizon, { learningRate = 0.03, l2 = 0.0005 } = {}) {
+    if (!Number.isInteger(horizon) || horizon < 1 || horizon > 10) throw new Error("horizon must be from 1 to 10");
+    if (!(learningRate > 0) || !Number.isFinite(learningRate)) throw new Error("learningRate must be positive");
+    if (!(l2 >= 0) || !Number.isFinite(l2)) throw new Error("l2 must be non-negative");
+    this.horizon = horizon;
+    this.learningRate = learningRate;
+    this.l2 = l2;
+    this.digits = [];
+    this.originFeatures = [];
+    this.weights = new Float64Array(DIGITS * REGRESSION_FEATURES);
+    this.currentFeatures = [[0, 1]];
+  }
+
+  observe(digit) {
+    if (!Number.isInteger(digit) || digit < 0 || digit >= DIGITS) throw new Error("digit must be an integer from 0 to 9");
+    this.digits.push(digit);
+    const origin = this.digits.length - 1 - this.horizon;
+    if (origin >= 0) this.#learn(this.originFeatures[origin], digit);
+    this.currentFeatures = regressionFeatures(this.digits);
+    this.originFeatures.push(this.currentFeatures);
+  }
+
+  predict() {
+    return regressionProbabilities(this.weights, this.currentFeatures);
+  }
+
+  #learn(features, actual) {
+    if (!features) return;
+    const probabilities = regressionProbabilities(this.weights, features);
+    for (let digit = 0; digit < DIGITS; digit++) {
+      const error = (digit === actual ? 1 : 0) - probabilities[digit];
+      const offset = digit * REGRESSION_FEATURES;
+      for (const [feature, value] of features) {
+        const index = offset + feature;
+        this.weights[index] += this.learningRate * (error * value - this.l2 * this.weights[index]);
+      }
+    }
+  }
+}
+
+export class GapRampForecaster {
+  constructor(horizon, limit = 122) {
+    if (!Number.isInteger(horizon) || horizon < 1 || horizon > 10) throw new Error("horizon must be from 1 to 10");
+    if (!(limit > 0) || !Number.isFinite(limit)) throw new Error("limit must be positive");
+    this.horizon = horizon;
+    this.limit = limit;
+    this.digits = [];
+  }
+
+  observe(digit) {
+    if (!Number.isInteger(digit) || digit < 0 || digit >= DIGITS) throw new Error("digit must be an integer from 0 to 9");
+    this.digits.push(digit);
+  }
+
+  predict() {
+    const gaps = Array(DIGITS).fill(this.digits.length + 1);
+    let unseen = DIGITS;
+    for (let i = this.digits.length - 1; i >= 0; i--) {
+      const digit = this.digits[i];
+      if (gaps[digit] === this.digits.length + 1) {
+        gaps[digit] = this.digits.length - i;
+        if (--unseen === 0) break;
+      }
+    }
+    return normalizeProbabilities(gaps.map((gap) => 1 + Math.min(gap / this.limit, 1)));
+  }
+}
+
+export class EarnedWeightMixture {
+  constructor(clusters, { eta = 0.02, uniformFloor = 0.05, clusterCap = 0.4 } = {}) {
+    if (!clusters || typeof clusters !== "object" || !Object.keys(clusters).length) {
+      throw new Error("at least one named model cluster is required");
+    }
+    const names = Object.keys(clusters);
+    if (names.some((name) => typeof clusters[name] !== "string" || !clusters[name])) {
+      throw new Error("every model must have a non-empty cluster name");
+    }
+    const clusterCount = new Set(Object.values(clusters)).size;
+    if (!(eta > 0) || !Number.isFinite(eta)) throw new Error("eta must be positive");
+    if (!(uniformFloor >= 0 && uniformFloor < 1) || !Number.isFinite(uniformFloor)) {
+      throw new Error("uniformFloor must be in [0, 1)");
+    }
+    if (!(clusterCap > 0 && clusterCap <= 1) || clusterCount * clusterCap < 1) {
+      throw new Error("clusterCap must be positive and provide enough total cluster capacity");
+    }
+    this.clusters = { ...clusters };
+    this.eta = eta;
+    this.uniformFloor = uniformFloor;
+    this.clusterCap = clusterCap;
+    this.relativeLoss = Object.fromEntries(names.map((name) => [name, 0]));
+  }
+
+  getWeights() {
+    const names = Object.keys(this.clusters);
+    const minimum = Math.min(...names.map((name) => this.relativeLoss[name]));
+    const raw = Object.fromEntries(names.map((name) =>
+      [name, Math.exp(Math.max(-700, -this.eta * (this.relativeLoss[name] - minimum)))]));
+    const clusterRaw = new Map();
+    for (const name of names) {
+      const cluster = this.clusters[name];
+      clusterRaw.set(cluster, (clusterRaw.get(cluster) || 0) + raw[name]);
+    }
+
+    const clusterWeights = new Map();
+    let active = [...clusterRaw.keys()];
+    let remaining = 1;
+    while (active.length) {
+      const total = active.reduce((sum, cluster) => sum + clusterRaw.get(cluster), 0);
+      const capped = active.filter((cluster) => remaining * clusterRaw.get(cluster) / total > this.clusterCap);
+      if (!capped.length) {
+        for (const cluster of active) clusterWeights.set(cluster, remaining * clusterRaw.get(cluster) / total);
+        break;
+      }
+      for (const cluster of capped) {
+        clusterWeights.set(cluster, this.clusterCap);
+        remaining -= this.clusterCap;
+      }
+      active = active.filter((cluster) => !capped.includes(cluster));
+    }
+
+    const weights = {};
+    for (const name of names) {
+      const cluster = this.clusters[name];
+      const withinCluster = raw[name] / clusterRaw.get(cluster);
+      weights[name] = clusterWeights.get(cluster) * withinCluster;
+    }
+    return weights;
+  }
+
+  predict(forecasts) {
+    const names = Object.keys(this.clusters);
+    const invalid = !forecasts ? names : names.filter((name) => !isValidProbabilityVector(forecasts[name]));
+    if (invalid.length) {
+      throw new Error(`mixture requires valid forecast vectors; invalid: ${invalid.join(", ")}`);
+    }
+    const weights = this.getWeights();
+    const result = Array(DIGITS).fill(0);
+    for (const name of names) {
+      for (let digit = 0; digit < DIGITS; digit++) result[digit] += weights[name] * forecasts[name][digit];
+    }
+    return normalizeProbabilities(result.map((probability) =>
+      (1 - this.uniformFloor) * probability + this.uniformFloor / DIGITS));
+  }
+
+  observe(forecasts, actual) {
+    if (!Number.isInteger(actual) || actual < 0 || actual >= DIGITS) {
+      throw new Error("actual digit must be an integer from 0 to 9");
+    }
+    const names = Object.keys(this.clusters);
+    const invalid = !forecasts ? names : names.filter((name) => !isValidProbabilityVector(forecasts[name]));
+    if (invalid.length) {
+      throw new Error(`mixture update requires valid forecast vectors; invalid: ${invalid.join(", ")}`);
+    }
+    for (const name of names) {
+      this.relativeLoss[name] += -Math.log(Math.max(forecasts[name][actual], 1e-12)) - Math.log(10);
+    }
   }
 }
