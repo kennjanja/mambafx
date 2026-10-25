@@ -8,7 +8,7 @@ const series = (n) => ({ prices: Array.from({ length: n }, (_, i) => 100 + i), e
 test('records at prediction time and scores horizons with next-tick entry', () => {
   const rec = createOutcomeRecorder(); const s = series(40);
   const row = rec.observe('R_10', pred(1009), s.prices.slice(0, 10), s.epochs.slice(0, 10));
-  assert.equal(row.filters.tickFlow, 'fail'); assert.equal(row.filters.intensity, 'n/a'); assert.equal(row.eligible, false);
+  assert.equal(row[0].filters.tickFlow, 'fail'); assert.equal(row[0].filters.intensity, 'n/a'); assert.equal(row[0].eligible, false);
   rec.resolve('R_10', s.prices, s.epochs);
   assert.equal(rec.all()[0].outcome.entry, 110);
   assert.equal(rec.all()[0].outcome.h[20], 'win');
@@ -37,5 +37,16 @@ test('eligible flag separates real signals; no direction means no row', () => {
   const rec = createOutcomeRecorder(); const s = series(10);
   assert.equal(rec.observe('R_10', pred(1009, { breakoutState: { state: 'approaching', direction: 0 } }), s.prices, s.epochs), null);
   const r = rec.observe('R_10', pred(1009, { wait: false, direction: 1, playbook: 'breakout' }), s.prices, s.epochs);
-  assert.equal(r.eligible, true);
+  assert.equal(r[0].eligible, true);
+});
+
+test('records every playbook, including gated candidates', () => {
+  const rec = createOutcomeRecorder(); const s = series(40);
+  const p = { decisionTs: 1009, wait: true, direction: 1, playbook: 'range fade', strength: 0.8, vetoes: ['rr'], breakoutState: null };
+  const rows = rec.observe('R_10', p, s.prices.slice(0, 10), s.epochs.slice(0, 10));
+  assert.equal(rows.length, 1); assert.equal(rows[0].kind, 'playbook'); assert.equal(rows[0].eligible, false);
+  rec.resolve('R_10', s.prices, s.epochs);
+  const rep = rec.report({ kind: 'playbook', groupBy: (r) => r.playbook });
+  assert.equal(rep['range fade'].horizons[5].accuracy, 1);
+  assert.deepEqual(rec.report({ kind: 'playbook', eligibleOnly: true, groupBy: (r) => r.playbook }), {});
 });

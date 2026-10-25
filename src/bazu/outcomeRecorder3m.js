@@ -19,6 +19,7 @@ export function snapshot(symbol, pred, price) {
   const traded = pred && !pred.wait && pred.playbook === 'breakout';
   if (!b || !b.direction) return null;
   return {
+    kind: 'breakout-state',
     symbol, at: pred.decisionTs, price, dir: b.direction, state: b.state, edge: b.edge,
     strength: b.strength, confirmation: b.confirmation, context: b.context || null,
     filters: filterSnapshot(pred.breakoutFilters),
@@ -29,6 +30,19 @@ export function snapshot(symbol, pred, price) {
   };
 }
 
+/** Snapshot of the top playbook candidate, whether or not it survived the gates (eligible = it did). */
+export function playbookSnapshot(symbol, pred, price) {
+  if (!pred?.playbook || !(pred.direction === 1 || pred.direction === -1)) return null;
+  return {
+    kind: 'playbook',
+    symbol, at: pred.decisionTs, price, dir: pred.direction, state: pred.wait ? 'gated' : 'signal', playbook: pred.playbook,
+    filters: filterSnapshot(pred.breakoutFilters),
+    score: pred.strength ?? null, eligible: !pred.wait, gate: (pred.vetoes && pred.vetoes[0]) || (pred.reasons && pred.reasons[0]) || null,
+    regime: pred.regime?.type || null, families: pred.families || null,
+    familyAgreement: pred.familyAgreement ?? null,
+  };
+}
+
 export function createOutcomeRecorder({ keep = 3000, storage = null, key = 'bazu_outcomes_v1' } = {}) {
   let rows = [], seq = 0;
   const lastBy = new Map();
@@ -36,17 +50,19 @@ export function createOutcomeRecorder({ keep = 3000, storage = null, key = 'bazu
   const save = () => { try { storage?.setItem(key, JSON.stringify(rows.slice(-keep))); } catch { /* quota */ } };
 
   return {
-    /** Record one observation per (symbol, state, direction) unless one was taken in the last MIN_GAP_TICKS ticks. */
+    /** Records one breakout-state row and one playbook row per scan, each deduped per (symbol, kind, state, dir) for MIN_GAP_TICKS ticks. */
     observe(symbol, pred, prices, epochs) {
-      const snap = snapshot(symbol, pred, prices[prices.length - 1]);
-      if (!snap) return null;
-      const k = `${symbol}|${snap.state}|${snap.dir}`, prev = lastBy.get(k);
-      const idx = epochs.length - 1;
-      if (prev != null && idx - prev < MIN_GAP_TICKS) return null;
-      lastBy.set(k, idx);
-      const row = { id: `${symbol}-${snap.at}-${snap.state}-${snap.dir}`, n: ++seq, ...snap, outcome: null };
-      rows.push(row); if (rows.length > keep) rows = rows.slice(-keep);
-      return row;
+      const price = prices[prices.length - 1], idx = epochs.length - 1, added = [];
+      for (const snap of [snapshot(symbol, pred, price), playbookSnapshot(symbol, pred, price)]) {
+        if (!snap) continue;
+        const k = `${snap.kind}|${symbol}|${snap.playbook && snap.kind === 'playbook' ? snap.playbook : snap.state}|${snap.dir}`, prev = lastBy.get(k);
+        if (prev != null && idx - prev < MIN_GAP_TICKS) continue;
+        lastBy.set(k, idx);
+        const row = { id: `${symbol}-${snap.at}-${snap.kind}-${snap.playbook || snap.state}-${snap.dir}`, n: ++seq, ...snap, outcome: null };
+        rows.push(row); added.push(row);
+      }
+      if (rows.length > keep) rows = rows.slice(-keep);
+      return added.length ? added : null;
     },
     /** Resolve whatever has matured; a row is complete once the longest horizon is known. */
     resolve(symbol, prices, epochs) {
@@ -64,15 +80,15 @@ export function createOutcomeRecorder({ keep = 3000, storage = null, key = 'bazu
     all: () => rows,
     clear() { rows = []; lastBy.clear(); save(); },
     /** Accuracy per breakout state and horizon; `eligibleOnly` restricts to observations that were real signals. */
-    report({ eligibleOnly = false, groupBy = (r) => r.state } = {}) {
-      const obs = rows.filter((r) => r.outcome && (!eligibleOnly || r.eligible));
+    report({ eligibleOnly = false, kind = null, groupBy = (r) => r.state } = {}) {
+      const obs = rows.filter((r) => r.outcome && (!eligibleOnly || r.eligible) && (!kind || (r.kind || 'breakout-state') === kind));
       const out = {};
       for (const h of HORIZONS) { const g = byGroup(obs, groupBy, h); for (const [k, v] of Object.entries(g)) (out[k] = out[k] || { n: 0, horizons: {} }, out[k].n = Math.max(out[k].n, v.n), out[k].horizons[h] = v); }
       return out;
     },
     /** Compare accuracy of observations where a filter passed, failed or was unavailable. */
     filterAudit(h = 5) {
-      const obs = rows.filter((r) => r.outcome && r.filters);
+      const obs = rows.filter((r) => r.outcome && r.filters && (r.kind || 'breakout-state') === 'breakout-state');
       const res = {};
       for (const f of Object.keys(obs[0]?.filters || {})) {
         res[f] = {};
