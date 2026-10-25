@@ -23,7 +23,7 @@ test('legacy mode is bit-identical to the pre-CO8 engine', () => {
     const w = regimeWalk(40000, seed), allowed = allowedFor(cfg), full = remoteFrom(w, 40000, cfg);
     for (let k = 12000; k < 40000; k += 97) {
       const remote = {}; for (const f of Object.keys(full)) remote[f] = full[f].filter((c) => c.epoch + FR[f] <= w.e[k]);
-      const r = predict3m({ symbol: 'R_100', prices: w.p.slice(0, k + 1), epochs: w.e.slice(0, k + 1), remote, decisionEpoch: w.e[k], allowed, overrides: { CONFLUENCE_MODE: 'legacy' } });
+      const r = predict3m({ symbol: 'R_100', prices: w.p.slice(0, k + 1), epochs: w.e.slice(0, k + 1), remote, decisionEpoch: w.e[k], allowed,       overrides: { CONFLUENCE_MODE: 'legacy', BREAKOUT_FILTERS: { penetration: false, closeConfirm: false, retestHold: false, tickFlow: false, distance: false, intensity: false } } });
       rows.push([r.wait, r.direction, r.strength.toFixed(6), r.playbook, r.vetoes.join('|'), r.duration?.key || null, r.durationSec].join(','));
     }
   }

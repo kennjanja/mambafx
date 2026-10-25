@@ -20,6 +20,7 @@ import { momentumReading, oscillatorExtreme, zoneTouchExtreme, confirmedTurn, op
 import { sigmaPerTick, tickFlowProxy } from './expiry3m.js?v=15';
 import { breakoutFilters, failedFilters, rangeFadeExp, roomChecks, volatilityFilter } from './filters3m.js?v=15';
 import { regimeOf, familyVotes, agreement, momentumGate, VERDICT } from './confluence3m.js?v=15';
+import { classifyBreakouts, summarize as summarizeBreakout } from './breakoutStates3m.js?v=15';
 
 const MIN_BARS = { trigger: 30, setup: 30, context: 20 };
 
@@ -105,7 +106,7 @@ const keyOf = (d) => D.durationLabel(d);
  * allowed = allowed durations for the market [{unit,n,secs}] (default: config grid, no contracts_for filter).
  * manualKey = a duration label (e.g. '5m') chosen by the user; it overrides the lifetime duration and is tagged manual.
  */
-export function predict3m({ symbol, prices, epochs, remote = {}, decisionEpoch, overrides, logPatterns = true, allowed = null, manualKey = null, wallNow = null }) {
+export function predict3m({ symbol, prices, epochs, remote = {}, decisionEpoch, overrides, logPatterns = true, allowed = null, manualKey = null, wallNow = null, calibrator = null }) {
   const lap = lapTimer('predict'), cfg = configFor(symbol, overrides), now = decisionEpoch ?? epochs[epochs.length - 1];
   const blank = () => ({ wait: true, direction: 0, strength: 0, up: 0, down: 0, total: 0, drivers: [], proxy: false, decisionTs: now, durationSec: null, duration: null, manual: false, lifetime: null, playbook: null, vetoes: [], reasons: [], factors: {}, patterns: [], provisional: false, minStrength: cfg.SCORE_MIN, marketClass: marketClass(symbol),   bucket: null, record: null, verdicts: [], setup: null, regime: null, momentum: null, families: null, votes: [], mode: cfg.CONFLUENCE_MODE });
     const fam = cfg.CONFLUENCE_MODE === 'families';
@@ -290,6 +291,9 @@ export function predict3m({ symbol, prices, epochs, remote = {}, decisionEpoch, 
       lifetime: top.life, duration: d ? { unit: d.unit, n: d.n, secs: d.secs, key: keyOf(d) } : null, durationSec: d ? d.secs : null, manual: top.life.manual,
       decisionPrice: price, sigmaT: expectedMove(stat.sigmaPerSec, T), invalid: top.life.invalid, target: top.life.target, candleId: frames.trigger.at(-1).epoch,
     });
+    out.breakoutState = summarizeBreakout(classifyBreakouts(frames.setup, zones, cfg, price));
+    out.breakoutFilters = brkF;
+    if (calibrator) out.calibratedProb = calibrator.prob(finalScore);
     if (fam) {
       const q = !verdicts.some((v) => v.kind === VERDICT.REJECTED || v.kind === VERDICT.DATA), delayed = verdicts.filter((v) => v.kind === VERDICT.DELAYED);
       out.setup = { dir, playbook: top.playbook, qualifies: q, triggered: q && !delayed.length, trigger: out.entry.trigger, delayReason: delayed.map((v) => v.reason).join('; ') || null };

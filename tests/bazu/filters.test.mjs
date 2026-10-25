@@ -10,8 +10,8 @@ const cfg = BASE_CONFIG;
 const cd = (o, h, l, c) => ({ open: o, high: h, low: l, close: c, atr: 1, upperFrac: 0, lowerFrac: 0, bodyRange: 0.8 });
 const zone = { low: 99, high: 100, kind: 'resistance', mid: 99.5 };
 
-test('flags default OFF', () => {
-  assert.ok(Object.values(cfg.BREAKOUT_FILTERS).every((v) => v === false));
+test('breakout filters default ON; other experimental flags default OFF', () => {
+  assert.ok(Object.values(cfg.BREAKOUT_FILTERS).every((v) => v === true));
   for (const k of ['RANGE_FADE_EXP', 'ADVERSE_VETO', 'ROOM_NAMED', 'VOL_FILTER', 'COOLDOWN_ON']) assert.equal(cfg[k], false, k);
 });
 
@@ -26,7 +26,7 @@ test('breakout filters on hand-built candles, on and off', () => {
   assert.equal(f.retestHold.pass, null, 'no retest yet is not a pass');
   const f2 = F.breakoutFilters({ cs, zone, dir: 1, atr: 1, prices, epochs, zones: [zone, { low: 101.5, high: 102, kind: 'resistance' }], price: 101.1, cfg });
   assert.equal(f2.distance.pass, false);
-  assert.deepEqual(F.failedFilters(f2, cfg.BREAKOUT_FILTERS), [], 'flags off: nothing vetoes');
+  assert.deepEqual(F.failedFilters(f2, {}), [], 'flags off: nothing vetoes');
   assert.deepEqual(F.failedFilters(f2, { distance: true }), ['distance']);
   const shallow = [cd(99, 99.5, 98.8, 99.2), cd(99.2, 100.4, 99.1, 100.2)];
   assert.equal(F.breakoutFilters({ cs: shallow, zone, dir: 1, atr: 1, prices, epochs, zones: [], price: 100.2, cfg }).penetration.pass, false);
