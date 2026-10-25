@@ -1419,11 +1419,12 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       <!-- Under 2 / Over 7 bot -->
       <div class="dig-card" id="uoCard" style="margin:0">
         <h2>🎯 Under 2 / Over 7 bot</h2>
-        <div class="dig-sub">Buys <b>Under 2</b> on every tick while gap(0) + gap(1) is above the trigger, and <b>Over 7</b> on every tick while gap(9) + gap(8) is above the trigger (a gap = ticks since the digit last appeared). Stake follows the page's Martingale multiplier (×<b id="uoMultX">2.0</b>, set in Settings); a win resets it to the base stake.</div>
+        <div class="dig-sub">Buys <b>Under 2</b> on every tick while gap(0) + gap(1) is above the trigger, and <b>Over 7</b> on every tick while gap(9) + gap(8) is above the trigger (a gap = ticks since the digit last appeared). After a loss the stake is multiplied by the Martingale multiplier below (editable, 1.0–10.0); a win resets it to the base stake.</div>
         <div class="gc-row" style="margin:8px 0">
           <div class="gc-field"><label for="uoStake">Base stake</label><input type="number" id="uoStake" min="0.35" step="0.01" value="0.50"></div>
           <div class="gc-field"><label for="uoStrat">Stake progression</label>
             <select id="uoStrat"><option value="martingale" selected>Martingale (x N on loss, base after a win)</option><option value="flat">Flat (no progression)</option></select></div>
+          <div class="gc-field"><label for="uoMultN">Martingale multiplier (×)</label><input type="number" id="uoMultN" min="1" max="10" step="0.1" value="2.0"></div>
           <div class="gc-field"><label for="uoThreshold">Trigger: gap total over</label><input type="number" id="uoThreshold" min="1" step="1" value="30"></div>
           <div class="gc-field"><label for="uoDur">Duration (ticks)</label><input type="number" id="uoDur" min="1" max="10" step="1" value="1"></div>
         </div>
@@ -30362,7 +30363,7 @@ window.__ldpeHost = {
   uoNextStake: (pending) => { const m = uoMult(); m._strat = uoStrat(); return Math.max(0.35, m.getNext(m._strat, pending)); },
   uoResetStake: () => { uoMult().reset(); },
   uoRecord: (stk, won) => { const m = uoMult(); m._strat = uoStrat(); m.record(stk, won); },
-  uoMultX: () => MARTINGALE_X,
+  uoMultX: () => parseFloat(($("uoMultN")||{}).value) || MARTINGALE_X,
   resRecord: (stk, won) => { const m = resMult(); m._strat = ($("digResStrat") || {}).value || "flat"; m.record(stk, won); },
   nextStake: (pending) => { const st = digMultStrat(); digMult()._strat = st; return Math.max(0.35, digMult().getNext(st, pending)); },
   // the user's own Auto-panel settings (cooldown in ticks, stop after N trades)
@@ -30816,7 +30817,7 @@ function digPlaceTrade(digit, source, opts){
 
 let digPnlResetAt = 0;
 let _resMult; function resMult(){ return _resMult || (_resMult = makeMultiplier(() => $("digResStake"), () => parseFloat(($("digResMultN") || {}).value))); }
-let _uoMult; function uoMult(){ return _uoMult || (_uoMult = makeMultiplier(() => $("uoStake"))); }
+let _uoMult; function uoMult(){ return _uoMult || (_uoMult = makeMultiplier(() => $("uoStake"), () => parseFloat(($("uoMultN")||{}).value))); }
 function uoStrat(){ return ($("uoStrat") || {}).value || "martingale"; }
 function digSetMultN(v){ if (typeof setMartingaleX === "function") setMartingaleX(v); }
 function digResetSessionPnl(){ digPnlResetAt = Date.now(); digRenderTrades(); }
@@ -33693,7 +33694,7 @@ try {
 <script type="module" src="src/bazu/page.js?v=27"></script>
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
-<script type="module" src="src/ldpe/under-over-bot.js?v=1"></script>
+<script type="module" src="src/ldpe/under-over-bot.js?v=2"></script>
 <script type="module" src="src/consec/consecAlert.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>
