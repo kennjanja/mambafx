@@ -3,7 +3,7 @@
  * BAZU page view. Sends commands to engine.js and renders its state — NO trading rules here.
  */
 import { start as perfStart } from './perf3m.js?v=15';
-import * as E from './engine.js?v=35';
+import * as E from './engine.js?v=36';
 import { clusterZones } from './structure.js?v=15';
 import { TIMEFRAMES, timeframe, fmtPrice, localCandles, mergeLive } from './timeframes.js?v=15';
 import { findSwingPoints } from '../../mtf/src/analysis/swingPoints.js';
@@ -283,12 +283,17 @@ function brkOutcomesHtml() {
   const o = { eligibleOnly: brkOpt.eligibleOnly };
   const stateRep = R.report({ ...o, kind: 'breakout-state' }), pbRep = R.report({ ...o, kind: 'playbook', groupBy: (r) => r.playbook });
   const audit = R.filterAudit(brkOpt.h);
+  const gc = R.gateComparison(brkOpt.h);
+  const gcRows = Object.entries(gc).map(([pb, v]) => `<tr><td>${esc(pb)}</td><td>${cell(v.real)}</td><td>${cell(v.rejected)}</td><td>${v.verdict === 'insufficient' ? `insufficient: need ${v.needReal} more real signals` : esc(v.verdict)}</td></tr>`).join('');
   const fRows = Object.entries(audit).map(([f, v]) => `<tr><td>${esc(f)}</td><td>${cell(v.pass)}</td><td>${cell(v.fail)}</td><td>${cell(v['n/a'])}</td></tr>`).join('');
   const total = R.all().length, done = R.all().filter((r) => r.outcome && r.outcome.h[20]).length;
   return `<div class="panel"><h3>Shadow outcomes <span class="mu">recorded at prediction time, never changes signals</span></h3>
 <div class="note">Accuracy = price moved in the predicted direction after the next-tick entry (ties count as incorrect). ${total} observations, ${done} fully matured. Small samples are not reliable evidence. Playbook rows include signals that were rejected or delayed unless "Real signals only" is ticked.</div>
 <div style="margin:8px 0"><label><input type="checkbox" id="bzBrkElig" ${brkOpt.eligibleOnly ? 'checked' : ''}> Real signals only</label> <select id="bzBrkH">${H.map((h) => `<option value="${h}" ${h === brkOpt.h ? 'selected' : ''}>Filter audit @ ${h} ticks</option>`).join('')}</select> <button id="bzBrkJson">Export JSON</button> <button id="bzBrkClear">Reset</button></div>
-${table(pbRep, 'Playbook')}${table(stateRep, 'Breakout state')}
+${table(pbRep, 'Playbook')}
+<table class="bz-table" style="margin-top:10px"><thead><tr><th>Playbook (@ ${brkOpt.h} ticks)</th><th>Real signals</th><th>Rejected / delayed</th><th>Do the gates help?</th></tr></thead><tbody>${gcRows || '<tr><td colspan="4">No data yet.</td></tr>'}</tbody></table>
+<div class="note">A verdict needs at least 100 matured real signals per playbook; "gate helps" means real signals are clearly more accurate than rejected ones (95% intervals do not overlap).</div>
+${table(stateRep, 'Breakout state (every zone; "failed-wick" = break candle closed back inside, "failed-close" = closed beyond, then failed)')}
 <table class="bz-table" style="margin-top:10px"><thead><tr><th>Breakout filter</th><th>Passed</th><th>Failed</th><th>Unavailable</th></tr></thead><tbody>${fRows || '<tr><td colspan="4">No data yet.</td></tr>'}</tbody></table></div>`;
 }
 function bindBrkOutcomes() {
