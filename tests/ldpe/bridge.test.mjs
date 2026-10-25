@@ -290,7 +290,7 @@ test("Digits page layout: distribution, then trade execution, then frequency tab
   }
   assert.match(page, /Automated Match/);
   assert.match(html, /function digResetSessionPnl\(\)/);
-  assert.match(html, /nextStake: \(\) =>/);
+  assert.match(html, /nextStake: \(pending\) =>/);
 });
 test("auto-order stake is rounded to at most 2 decimals before the proposal is sent", async () => {
   const p = await page({ armed: true });
