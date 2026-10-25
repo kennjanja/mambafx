@@ -3,7 +3,7 @@
  * BAZU page view. Sends commands to engine.js and renders its state — NO trading rules here.
  */
 import { start as perfStart } from './perf3m.js?v=15';
-import * as E from './engine.js?v=34';
+import * as E from './engine.js?v=35';
 import { clusterZones } from './structure.js?v=15';
 import { TIMEFRAMES, timeframe, fmtPrice, localCandles, mergeLive } from './timeframes.js?v=15';
 import { findSwingPoints } from '../../mtf/src/analysis/swingPoints.js';
@@ -249,40 +249,54 @@ function vetoHtml0(S, T) {
     <table><tr><th>Veto reason</th><th>Count</th><th>Share of evaluations</th></tr>${top.slice(0, 12).map(([k, v]) => `<tr><td>${esc(k)}</td><td class="num">${v}</td><td class="num">${pct(v / T.evals, 1)}</td></tr>`).join('') || '<tr><td colspan="3" class="mu">no evaluations yet</td></tr>'}</table>
     <div class="scroll" style="max-height:220px"><table><tr><th>Market</th><th>Evals</th><th>Tradable rate</th><th>Top vetoes</th></tr>${perMarket.map((m) => `<tr><td>${esc(m.sym)}</td><td class="num">${m.evals}</td><td class="num">${pct(m.tradable / m.evals, 1)}</td><td class="mu">${m.top.map(([k, v]) => `${esc(k)} (${v})`).join('; ')}</td></tr>`).join('')}</table></div></div>`;
 }
-function renderDist(S) {
+function renderDist(S, force = false) {
+  const nowMs = Date.now();
+  if (!force && nowMs - distLast < 2000) return;
+  distLast = nowMs;
   const rows = distributionRows(S.markets), pc = (v) => (v == null ? '-' : (v * 100).toFixed(1) + '%'), n2 = (v, d = 3) => (v == null || Number.isNaN(v) ? '-' : v.toFixed(d));
   const body = rows.map((r) => {
     const all = r.windows[r.windows.length - 1], w100 = r.windows[0], c1 = r.candles[0], t = r.trend;
     return `<tr><td>${esc(r.symbol)}</td><td>${r.ticks}</td><td>${pc(w100.riseShare)}</td><td>${pc(all.riseShare)} <span class="mu">(${pc(all.lo)}-${pc(all.hi)})</span></td><td>${all.up}/${all.down}/${all.flat}</td><td>${all.longestUp}/${all.longestDown}</td><td>${pc(c1.riseShare)} <span class="mu">(n=${c1.n})</span></td><td>${n2(t.varianceRatio)}</td><td>${n2(t.autocorr1)}</td><td>${n2(t.runsZ, 2)}</td><td>${n2(t.hurst)}</td></tr>`;
   }).join('');
-  $('bzDist').innerHTML = `<div class="panel"><h3>Market Rise/Fall distribution <span class="mu">descriptive only - no trading decision uses this</span></h3>
+  const html = `<div class="panel"><h3>Market Rise/Fall distribution <span class="mu">descriptive only - no trading decision uses this</span></h3>
 <div class="note">Share of up ticks among non-flat ticks with Wilson 95% interval, over buffered ticks. VR(5) below 1 suggests mean reversion, above 1 persistence.</div>
 <div style="margin:8px 0"><button id="bzDistCsv">Export CSV</button> <button id="bzDistJson">Export JSON</button></div>
-<table class="bz-table"><thead><tr><th>Market</th><th>Ticks</th><th>Rise% last 100</th><th>Rise% all (95% CI)</th><th>Up/Down/Flat</th><th>Longest up/down</th><th>Rise% 1m candles</th><th>VR(5)</th><th>AC(1)</th><th>Runs z</th><th>Hurst</th></tr></thead><tbody>${body || '<tr><td colspan="11">No tick data yet.</td></tr>'}</tbody></table></div>`;
+<table class="bz-table"><thead><tr><th>Market</th><th>Ticks</th><th>Rise% last 100</th><th>Rise% all (95% CI)</th><th>Up/Down/Flat</th><th>Longest up/down</th><th>Rise% 1m candles</th><th>VR(5)</th><th>AC(1)</th><th>Runs z</th><th>Hurst</th></tr></thead><tbody>${body || '<tr><td colspan="11">No tick data yet.</td></tr>'}</tbody></table></div>` + brkOutcomesHtml();
+  const host = $('bzDist');
+  if (host.dataset.html !== html) {
+    const y = window.scrollY;
+    host.style.minHeight = host.offsetHeight + 'px';
+    host.innerHTML = html; host.dataset.html = html;
+    host.style.minHeight = '';
+    if (window.scrollY !== y) window.scrollTo(window.scrollX, y);
+  }
   $('bzDistCsv').onclick = () => downloadBlob('distribution.csv', 'text/csv', distributionCsv(rows));
   $('bzDistJson').onclick = () => downloadBlob('distribution.json', 'application/json', JSON.stringify(rows, null, 1));
-  renderBrkOutcomes();
+  bindBrkOutcomes();
 }
+let distLast = 0;
 const brkOpt = { eligibleOnly: false, h: 5 };
-function renderBrkOutcomes() {
+function brkOutcomesHtml() {
   const R = E.outcomeRecorder, H = [1, 3, 5, 10, 20], pc = (v) => (v == null ? '-' : (v * 100).toFixed(0) + '%');
-  const rep = R.report({ eligibleOnly: brkOpt.eligibleOnly }), audit = R.filterAudit(brkOpt.h);
   const cell = (a) => (a && a.n ? `${pc(a.accuracy)} <span class="mu">n=${a.n}${a.ci95 ? ` (${pc(a.ci95.lo)}-${pc(a.ci95.hi)})` : ''}</span>` : '-');
-  const stateRows = Object.entries(rep).map(([s, v]) => `<tr><td>${esc(s)}</td>${H.map((h) => `<td>${cell(v.horizons[h])}</td>`).join('')}</tr>`).join('');
+  const table = (rep, label) => `<table class="bz-table" style="margin-top:10px"><thead><tr><th>${label}</th>${H.map((h) => `<th>${h} tick${h > 1 ? 's' : ''}</th>`).join('')}</tr></thead><tbody>${Object.entries(rep).map(([s, v]) => `<tr><td>${esc(s)}</td>${H.map((h) => `<td>${cell(v.horizons[h])}</td>`).join('')}</tr>`).join('') || '<tr><td colspan="6">No matured observations yet.</td></tr>'}</tbody></table>`;
+  const o = { eligibleOnly: brkOpt.eligibleOnly };
+  const stateRep = R.report({ ...o, kind: 'breakout-state' }), pbRep = R.report({ ...o, kind: 'playbook', groupBy: (r) => r.playbook });
+  const audit = R.filterAudit(brkOpt.h);
   const fRows = Object.entries(audit).map(([f, v]) => `<tr><td>${esc(f)}</td><td>${cell(v.pass)}</td><td>${cell(v.fail)}</td><td>${cell(v['n/a'])}</td></tr>`).join('');
   const total = R.all().length, done = R.all().filter((r) => r.outcome && r.outcome.h[20]).length;
-  const box = document.createElement('div');
-  box.className = 'panel';
-  box.innerHTML = `<h3>Breakout outcomes <span class="mu">shadow only - recorded at prediction time, never changes signals</span></h3>
-<div class="note">Accuracy = price moved in the predicted direction after the next-tick entry (ties count as incorrect). ${total} observations, ${done} fully matured. Small samples are not reliable evidence.</div>
+  return `<div class="panel"><h3>Shadow outcomes <span class="mu">recorded at prediction time, never changes signals</span></h3>
+<div class="note">Accuracy = price moved in the predicted direction after the next-tick entry (ties count as incorrect). ${total} observations, ${done} fully matured. Small samples are not reliable evidence. Playbook rows include signals that were rejected or delayed unless "Real signals only" is ticked.</div>
 <div style="margin:8px 0"><label><input type="checkbox" id="bzBrkElig" ${brkOpt.eligibleOnly ? 'checked' : ''}> Real signals only</label> <select id="bzBrkH">${H.map((h) => `<option value="${h}" ${h === brkOpt.h ? 'selected' : ''}>Filter audit @ ${h} ticks</option>`).join('')}</select> <button id="bzBrkJson">Export JSON</button> <button id="bzBrkClear">Reset</button></div>
-<table class="bz-table"><thead><tr><th>Breakout state</th>${H.map((h) => `<th>${h} tick${h > 1 ? 's' : ''}</th>`).join('')}</tr></thead><tbody>${stateRows || '<tr><td colspan="6">No matured observations yet.</td></tr>'}</tbody></table>
-<table class="bz-table" style="margin-top:10px"><thead><tr><th>Filter</th><th>Passed</th><th>Failed</th><th>Unavailable</th></tr></thead><tbody>${fRows || '<tr><td colspan="4">No data yet.</td></tr>'}</tbody></table>`;
-  $('bzDist').appendChild(box);
-  $('bzBrkElig').onchange = (e) => { brkOpt.eligibleOnly = e.target.checked; renderDist(E.state); };
-  $('bzBrkH').onchange = (e) => { brkOpt.h = Number(e.target.value); renderDist(E.state); };
-  $('bzBrkJson').onclick = () => downloadBlob('breakout-outcomes.json', 'application/json', JSON.stringify(R.all(), null, 1));
-  $('bzBrkClear').onclick = () => { if (confirm('Reset all recorded breakout observations?')) { R.clear(); renderDist(E.state); } };
+${table(pbRep, 'Playbook')}${table(stateRep, 'Breakout state')}
+<table class="bz-table" style="margin-top:10px"><thead><tr><th>Breakout filter</th><th>Passed</th><th>Failed</th><th>Unavailable</th></tr></thead><tbody>${fRows || '<tr><td colspan="4">No data yet.</td></tr>'}</tbody></table></div>`;
+}
+function bindBrkOutcomes() {
+  const R = E.outcomeRecorder;
+  $('bzBrkElig').onchange = (e) => { brkOpt.eligibleOnly = e.target.checked; renderDist(E.state, true); };
+  $('bzBrkH').onchange = (e) => { brkOpt.h = Number(e.target.value); renderDist(E.state, true); };
+  $('bzBrkJson').onclick = () => downloadBlob('shadow-outcomes.json', 'application/json', JSON.stringify(R.all(), null, 1));
+  $('bzBrkClear').onclick = () => { if (confirm('Reset all recorded shadow observations?')) { R.clear(); renderDist(E.state, true); } };
 }
 function renderCalib(S) {
   const range = reportFilters.calib, inRange = (ts) => withinDateRange(ts * 1000, range);
