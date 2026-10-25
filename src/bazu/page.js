@@ -226,7 +226,7 @@ function reasoningHtml(sig) {
   const mo = sig.momentum, fa = sig.familyAgreement, st = sig.signalState;
   const fam = Object.entries(sig.families || {}).map(([k, f]) => `${esc(k)} ${f.available === false ? 'n/a' : (f.vote > 0 ? '+' : f.vote < 0 ? '-' : '0')}`).join(', ');
   const ver = (sig.verdicts || []).map((v) => `${esc(v.kind)}: ${esc(v.reason)}`).join('; ');
-  return `<div class="note"><b>Momentum</b> ${mo ? esc(mo.state) + (mo.available === false ? ' (unavailable)' : '') : 'n/a'}${mo?.opposes60s ? ' · opposes the last 60 s' : ''} · <b>Regime</b> ${esc(sig.regime || 'n/a')} · <b>State</b> ${esc(st || 'none')}${sig.entry?.trigger ? ' · trigger ' + esc(sig.entry.trigger) : ''}${sig.provisional ? ' (provisional)' : ''}</div>`
+  return `<div class="note"><b>Momentum</b> ${mo ? esc(mo.state) + (mo.available === false ? ' (unavailable)' : '') : 'n/a'}${mo?.opposes60s ? ' · opposes the last 60 s' : ''} · <b>Regime</b> ${esc(typeof sig.regime === 'object' && sig.regime ? sig.regime.type || 'n/a' : sig.regime || 'n/a')} · <b>State</b> ${esc(st || 'none')}${sig.entry?.trigger ? ' · trigger ' + esc(sig.entry.trigger) : ''}${sig.provisional ? ' (provisional)' : ''}</div>`
     + `<div class="note">Families: ${fam || 'n/a'}${fa ? ` · ${fa.agree}/${fa.available} agree, ${fa.oppose} oppose` : ''}</div>${ver ? `<div class="note">${ver}</div>` : ''}`;
 }
 function syncDur(S) {
@@ -415,7 +415,7 @@ function renderLive(S) {
   const sig = m.signal;
   $('bzSignal').innerHTML = sig && sig.direction ? `<div class="sig ${sig.gate === GATE.OK ? (sig.direction === 'Rise' ? 'ok' : 'bad') : ''}">
       <div class="row"><b class="${sig.direction === 'Rise' ? 'up' : 'dn'}" style="font-size:18px">${esc(sig.direction)}</b><span class="pill">${esc(sig.duration)}${sig.manual ? ' · manual duration' : ''}</span><span class="pill ${sig.gate === GATE.OK ? (sig.direction === 'Rise' ? 'ok' : 'bad') : 'warn'}">${esc(sig.gate)}</span>${sig.proxy ? '<span class="pill proxy">uses proxy</span>' : ''}</div>
-      <div class="note num">Signal strength ${pct(sig.strength, 0)} · ${sig.agree}/${sig.total} analysis features agree${sig.quote ? ` · Deriv quote: stake ${sig.quote.ask}, payout ${sig.quote.payout}` : ''}</div>
+      <div class="note num">Signal strength ${pct(sig.strength, 0)} <span class="mu">(rule score, not a probability${sig.gate === GATE.OK ? '' : '; signal NOT tradable: ' + esc(sig.gate)})</span> · ${sig.agree}/${sig.total} analysis features agree${sig.quote ? ` · Deriv quote: stake ${sig.quote.ask}, payout ${sig.quote.payout}` : ''}</div>
       ${lifetimeHtml(sig)}${reasoningHtml(sig)}${roomHtml(sig)}<div class="note"><b>${esc(sig.playbook || 'analysis')}</b>${sig.provisional ? ' (provisional trigger)' : ''} · ${esc(sig.reason || '')}</div>${(sig.reasons || []).length ? `<div class="note">${sig.reasons.map(esc).join('; ')}</div>` : ''}<div class="note">Drivers: ${(sig.drivers || []).map(esc).join(', ') || '-'}. Decided ${sig.decisionTs ? new Date(sig.decisionTs * 1000).toLocaleTimeString() : ''} for a ${esc(sig.duration)} Rise/Fall (exit vs entry; a tie loses). Score is a rule-based confluence, not a win probability.</div></div>`
     : `<div class="sig"><b>${esc(E.marketGate(m).label)}</b><div class="note">Collecting ticks to analyse this market.</div></div>`;
   $('bzSignal').insertAdjacentHTML('beforeend', mtfHtml(m, sig) + crtHtml(m));
