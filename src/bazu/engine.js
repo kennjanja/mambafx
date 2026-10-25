@@ -13,7 +13,7 @@ import { buildTradeSignal, modeMayAct, GATE } from './decision.js?v=16';
 import { predict3m } from './predict3m.js?v=17';
 import { configFor } from './config3m.js?v=17';
 import { hysteresisPass } from './filters3m.js?v=15';
-import { createOutcomeRecorder } from './outcomeRecorder3m.js?v=19';
+import { createOutcomeRecorder } from './outcomeRecorder3m.js?v=20';
 export const outcomeRecorder = createOutcomeRecorder({ storage: typeof localStorage !== 'undefined' ? localStorage : null });
 import { allowedDurations, durationLabel } from './duration3m.js?v=15';
 import { resolveRecord } from './calibration3m.js?v=15';
