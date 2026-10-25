@@ -566,6 +566,10 @@ table.an-table tbody tr:last-child td{border-bottom:none}
   background:rgba(167,139,250,.1); border:1px solid rgba(167,139,250,.3); padding:4px 10px; border-radius:999px; margin-bottom:14px}#page-mtf .analysis-panel{display:grid; grid-template-columns:1fr 1fr; gap:1px; background:var(--mtf-line); border-top:1px solid var(--mtf-line); max-height:170px; flex-shrink:0}#page-mtf .analysis-col{background:var(--mtf-panel2); display:flex; flex-direction:column; min-height:0}#page-mtf .analysis-head{font-size:10px; letter-spacing:.1em; text-transform:uppercase; color:var(--mtf-muted); padding:7px 12px; border-bottom:1px solid var(--mtf-line); flex-shrink:0}#page-mtf .finding-list{flex:1; overflow-y:auto; padding:4px 8px; min-height:0}#page-mtf .finding-row{display:flex; align-items:center; gap:8px; padding:5px 6px; border-radius:6px; cursor:pointer; font-size:11px}#page-mtf .finding-row:hover{background:var(--mtf-panel)}#page-mtf .finding-icon{width:16px; text-align:center; flex-shrink:0; font-size:11px}#page-mtf .finding-label{flex:1; color:var(--mtf-text)}#page-mtf .finding-label.up{color:var(--mtf-up)}#page-mtf .finding-label.down{color:var(--mtf-down)}#page-mtf .finding-time{color:var(--mtf-muted); font-size:9.5px; font-variant-numeric:tabular-nums; flex-shrink:0}#page-mtf .finding-empty{color:var(--mtf-muted); font-size:11px; padding:12px; text-align:center}#page-mtf .hint-foot{font-size:9px; color:#2a3650; text-align:center; padding:6px}
 @keyframes mtfPulse{0%{box-shadow:0 0 0 0 rgba(31,223,155,.45)}70%{box-shadow:0 0 0 7px rgba(31,223,155,0)}100%{box-shadow:0 0 0 0 rgba(31,223,155,0)}}
 @keyframes gapBlink { 0%,100% { background:#7c3aed; box-shadow:0 0 10px #a855f7; color:#fff; } 50% { background:transparent; box-shadow:none; } }
+.uo-banner{margin:8px 0;padding:10px 12px;border-radius:8px;font-weight:800;font-size:14px}
+.uo-tp{background:rgba(34,197,94,.15);border:1px solid #22c55e;color:#22c55e}
+.uo-sl{background:rgba(239,68,68,.15);border:1px solid #ef4444;color:#ef4444}
+.uo-hit{color:#a855f7;font-weight:800}
 .dig-digit-btn.gap-active { animation: gapBlink 1s ease-in-out infinite; border-color:#a855f7; }
 </style>
 <link rel="stylesheet" href="src/bazu/bazu.css">
@@ -1411,6 +1415,26 @@ table.an-table tbody tr:last-child td{border-bottom:none}
           <tbody id="digFreqBody"></tbody>
         </table>
         <div class="chi-bar"><div id="digChiBar" class="chi-fill" style="width:0"></div></div>
+      </div>
+      <!-- Under 2 / Over 7 bot -->
+      <div class="dig-card" id="uoCard" style="margin:0">
+        <h2>🎯 Under 2 / Over 7 bot</h2>
+        <div class="dig-sub">Buys <b>Under 2</b> on every tick while gap(0) + gap(1) is above the trigger, and <b>Over 7</b> on every tick while gap(9) + gap(8) is above the trigger (a gap = ticks since the digit last appeared). Stake follows the page's Martingale multiplier (×<b id="uoMultX">2.0</b>, set in Settings); a win resets it to the base stake.</div>
+        <div class="gc-row" style="margin:8px 0">
+          <div class="gc-field"><label for="uoStake">Base stake</label><input type="number" id="uoStake" min="0.35" step="0.01" value="0.50"></div>
+          <div class="gc-field"><label for="uoStrat">Stake progression</label>
+            <select id="uoStrat"><option value="martingale" selected>Martingale (x N on loss, base after a win)</option><option value="flat">Flat (no progression)</option></select></div>
+          <div class="gc-field"><label for="uoThreshold">Trigger: gap total over</label><input type="number" id="uoThreshold" min="1" step="1" value="30"></div>
+          <div class="gc-field"><label for="uoDur">Duration (ticks)</label><input type="number" id="uoDur" min="1" max="10" step="1" value="1"></div>
+        </div>
+        <div class="gc-row" style="margin:8px 0">
+          <div class="gc-field"><label for="uoTP">Target profit (0 = off)</label><input type="number" id="uoTP" min="0" step="0.01" value="0"></div>
+          <div class="gc-field"><label for="uoSL">Stop loss (0 = off)</label><input type="number" id="uoSL" min="0" step="0.01" value="0"></div>
+        </div>
+        <label style="display:flex;gap:6px;align-items:center;margin:8px 0"><input type="checkbox" id="uoArm" onchange="window.UOBOT && window.UOBOT.arm(this.checked)"> <b>Automated Under 2 / Over 7 trading</b></label>
+        <div id="uoBanner" class="uo-banner" style="display:none"></div>
+        <div id="uoGaps" class="cell-mut" style="margin-bottom:6px"></div>
+        <div id="uoStatus" class="cell-mut"></div>
       </div>
 
       <!-- Research: longest completed digit gaps for the current market -->
@@ -29500,7 +29524,7 @@ function gridUpdateContract(c){
     if (gridTrades.some(t => t.id === id) && typeof gridMult === 'function')
       gridMult().record(stk, won);
     if (typeof digTrades !== 'undefined' && digTrades.some(t => t.id === id) && typeof digMult === 'function')
-      { if (window.GAPRES && window.GAPRES.recordResult && window.GAPRES.recordResult(id, stk, won)) { /* digit research order: own progression */ } else if (!(window.LDPE && window.LDPE.stakeCounts) || window.LDPE.stakeCounts(id)) digMult().record(stk, won); }
+      { if (window.UOBOT && window.UOBOT.recordResult && window.UOBOT.recordResult(id, stk, won)) { /* Under 2 / Over 7 bot: own progression */ } else if (window.GAPRES && window.GAPRES.recordResult && window.GAPRES.recordResult(id, stk, won)) { /* digit research order: own progression */ } else if (!(window.LDPE && window.LDPE.stakeCounts) || window.LDPE.stakeCounts(id)) digMult().record(stk, won); }
     if (typeof engTrades !== 'undefined' && engTrades.some(t => t.id === id) && typeof engMult === 'function')
       engMult().record(stk, won);
     // Mamba FX bot and Deriv Auto Bot multipliers are handled inside their own IIFEs
@@ -30335,6 +30359,10 @@ window.__ldpeHost = {
   // Digit research trading has its own stake / progression / multiplier inputs
   resNextStake: () => { const m = resMult(); const st = ($("digResStrat") || {}).value || "flat"; m._strat = st; return Math.max(0.35, m.getNext(st)); },
   resResetStake: () => { resMult().reset(); },
+  uoNextStake: (pending) => { const m = uoMult(); m._strat = uoStrat(); return Math.max(0.35, m.getNext(m._strat, pending)); },
+  uoResetStake: () => { uoMult().reset(); },
+  uoRecord: (stk, won) => { const m = uoMult(); m._strat = uoStrat(); m.record(stk, won); },
+  uoMultX: () => MARTINGALE_X,
   resRecord: (stk, won) => { const m = resMult(); m._strat = ($("digResStrat") || {}).value || "flat"; m.record(stk, won); },
   nextStake: (pending) => { const st = digMultStrat(); digMult()._strat = st; return Math.max(0.35, digMult().getNext(st, pending)); },
   // the user's own Auto-panel settings (cooldown in ticks, stop after N trades)
@@ -30477,6 +30505,7 @@ function digOnTick(price, epoch){
     const raw = (rq && fracLen === decimals) ? rq : Number(price).toFixed(decimals);
     _tickSafe("ldpe", () => window.LDPE.ingest(SYMBOL, raw, decimals, epoch));
     _tickSafe("gap trader", () => { if (window.GAPRES && window.GAPRES.afterTick) window.GAPRES.afterTick(SYMBOL, d, epoch); });
+    _tickSafe("under/over bot", () => { if (window.UOBOT && window.UOBOT.afterTick) window.UOBOT.afterTick(SYMBOL, d, epoch); });
   } else {
     digCheckAuto();
   }
@@ -30787,6 +30816,8 @@ function digPlaceTrade(digit, source, opts){
 
 let digPnlResetAt = 0;
 let _resMult; function resMult(){ return _resMult || (_resMult = makeMultiplier(() => $("digResStake"), () => parseFloat(($("digResMultN") || {}).value))); }
+let _uoMult; function uoMult(){ return _uoMult || (_uoMult = makeMultiplier(() => $("uoStake"))); }
+function uoStrat(){ return ($("uoStrat") || {}).value || "martingale"; }
 function digSetMultN(v){ if (typeof setMartingaleX === "function") setMartingaleX(v); }
 function digResetSessionPnl(){ digPnlResetAt = Date.now(); digRenderTrades(); }
 function digResetTradesAndPnl(){
@@ -30853,6 +30884,7 @@ function digToggleAuto(){
 function digDisarmAuto(reason){
   digAutoArmed = false;
   if (window.GAPRES && window.GAPRES.disarm) window.GAPRES.disarm();
+  if (window.UOBOT && window.UOBOT.disarm) window.UOBOT.disarm();
   const t = $("digAutoArm"); if (t) t.checked = false;
   const l = $("digAutoLabel"); if (l) l.textContent = "Automated Match: OFF";
   gridSet("digAutoStatus", "Disarmed" + (reason ? " — " + reason + "." : "."));
@@ -33661,6 +33693,7 @@ try {
 <script type="module" src="src/bazu/page.js?v=27"></script>
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
+<script type="module" src="src/ldpe/under-over-bot.js?v=1"></script>
 <script type="module" src="src/consec/consecAlert.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>
