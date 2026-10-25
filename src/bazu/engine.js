@@ -13,6 +13,8 @@ import { buildTradeSignal, modeMayAct, GATE } from './decision.js?v=16';
 import { predict3m } from './predict3m.js?v=16';
 import { configFor } from './config3m.js?v=17';
 import { hysteresisPass } from './filters3m.js?v=15';
+import { createOutcomeRecorder } from './outcomeRecorder3m.js?v=17';
+export const outcomeRecorder = createOutcomeRecorder({ storage: typeof localStorage !== 'undefined' ? localStorage : null });
 import { allowedDurations, durationLabel } from './duration3m.js?v=15';
 import { resolveRecord } from './calibration3m.js?v=15';
 import { backfill, mergeCandles, parseCandles } from './backfill3m.js?v=16';
@@ -561,6 +563,7 @@ export async function signalTick() {
       let r;
       const endP = perfStart('predict3m'); try { r = predictFor(m); } catch (e) { endP(); log('predict ' + m.symbol + ': ' + e.message, 'warn'); continue; } endP();
       recordEval(m.symbol, r);
+      try { outcomeRecorder.observe(m.symbol, r, m.prices, m.epochs); outcomeRecorder.resolve(m.symbol, m.prices, m.epochs); } catch { /* shadow only */ }
       applyHysteresis(m.symbol, r);
       const obs = book.observe(m.symbol, r, r.decisionTs); logEvents(obs.events);
       r = { result: r, lastEpoch: r.decisionTs };
