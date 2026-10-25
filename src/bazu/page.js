@@ -3,7 +3,7 @@
  * BAZU page view. Sends commands to engine.js and renders its state — NO trading rules here.
  */
 import { start as perfStart } from './perf3m.js?v=15';
-import * as E from './engine.js?v=36';
+import * as E from './engine.js?v=37';
 import { clusterZones } from './structure.js?v=15';
 import { TIMEFRAMES, timeframe, fmtPrice, localCandles, mergeLive } from './timeframes.js?v=15';
 import { findSwingPoints } from '../../mtf/src/analysis/swingPoints.js';
@@ -251,7 +251,7 @@ function vetoHtml0(S, T) {
 }
 function renderDist(S, force = false) {
   const nowMs = Date.now();
-  if (!force && nowMs - distLast < 2000) return;
+  if (!force && nowMs - distLast < 8000) return;
   distLast = nowMs;
   const rows = distributionRows(S.markets), pc = (v) => (v == null ? '-' : (v * 100).toFixed(1) + '%'), n2 = (v, d = 3) => (v == null || Number.isNaN(v) ? '-' : v.toFixed(d));
   const body = rows.map((r) => {

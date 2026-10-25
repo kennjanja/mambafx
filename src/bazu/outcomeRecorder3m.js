@@ -53,13 +53,17 @@ const bucketOf = (r) => `${r.kind || 'breakout-state'}|${r.kind === 'playbook' ?
 
 export function createOutcomeRecorder({ keep = 4000, bucketCap = BUCKET_CAP, storage = null, key = 'bazu_outcomes_v2' } = {}) {
   let rows = [], seq = 0;
+  try { storage?.removeItem('bazu_outcomes_v1'); } catch { /* ignore */ }
   const lastBy = new Map();
   try { rows = storage ? JSON.parse(storage.getItem(key) || '[]') : []; seq = rows.reduce((m, r) => Math.max(m, r.n || 0), 0); } catch { rows = []; }
   const save = () => {
-    for (let n = rows.length; n >= 0; n = Math.floor(n * 0.75)) {
+    for (let n = Math.min(rows.length, 1500); n >= 0; n = Math.floor(n * 0.75)) {
       try { storage?.setItem(key, JSON.stringify(rows.slice(-n))); return; } catch { /* quota: retry smaller */ }
     }
   };
+  /** Persisting is debounced: stringifying thousands of rows on every scan froze the page. */
+  let saveTimer = null;
+  const saveSoon = () => { if (!storage || saveTimer) return; saveTimer = setTimeout(() => { saveTimer = null; save(); }, 20000); };
   /** Drop the oldest rows of any bucket above its cap, then the oldest overall above `keep`, so common rows never evict rare ones. */
   const trim = () => {
     const count = new Map();
@@ -81,20 +85,22 @@ export function createOutcomeRecorder({ keep = 4000, bucketCap = BUCKET_CAP, sto
         const row = { id: `${symbol}-${snap.at}-${snap.kind}-${snap.playbook || snap.state}-${snap.dir}-${zone}`, n: ++seq, ...snap, outcome: null };
         rows.push(row); added.push(row);
       }
-      if (added.length) trim();
+      if (added.length) { trim(); saveSoon(); }
       return added.length ? added : null;
     },
     /** Resolve whatever has matured; a row is complete once the longest horizon is known. */
     resolve(symbol, prices, epochs) {
       let changed = false;
+      const last = HORIZONS[HORIZONS.length - 1], tail = epochs[epochs.length - 1];
       for (const r of rows) {
-        if (r.symbol !== symbol || (r.outcome && r.outcome.h[HORIZONS[HORIZONS.length - 1]])) continue;
+        if (r.symbol !== symbol || (r.outcome && r.outcome.h[last] !== undefined && r.outcome.h[last] !== null)) continue;
+        if (!(tail > r.at)) continue;
         const k = lastIdxAtOrBefore(epochs, r.at);
         if (k < 0) continue;
         const o = outcomeAt(prices, k, r.dir);
         if (o) { r.outcome = o; changed = true; }
       }
-      if (changed) save();
+      if (changed) saveSoon();
       return changed;
     },
     all: () => rows,
