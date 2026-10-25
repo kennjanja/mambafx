@@ -3,7 +3,7 @@
  * BAZU page view. Sends commands to engine.js and renders its state — NO trading rules here.
  */
 import { start as perfStart } from './perf3m.js?v=15';
-import * as E from './engine.js?v=33';
+import * as E from './engine.js?v=34';
 import { clusterZones } from './structure.js?v=15';
 import { TIMEFRAMES, timeframe, fmtPrice, localCandles, mergeLive } from './timeframes.js?v=15';
 import { findSwingPoints } from '../../mtf/src/analysis/swingPoints.js';
@@ -261,6 +261,28 @@ function renderDist(S) {
 <table class="bz-table"><thead><tr><th>Market</th><th>Ticks</th><th>Rise% last 100</th><th>Rise% all (95% CI)</th><th>Up/Down/Flat</th><th>Longest up/down</th><th>Rise% 1m candles</th><th>VR(5)</th><th>AC(1)</th><th>Runs z</th><th>Hurst</th></tr></thead><tbody>${body || '<tr><td colspan="11">No tick data yet.</td></tr>'}</tbody></table></div>`;
   $('bzDistCsv').onclick = () => downloadBlob('distribution.csv', 'text/csv', distributionCsv(rows));
   $('bzDistJson').onclick = () => downloadBlob('distribution.json', 'application/json', JSON.stringify(rows, null, 1));
+  renderBrkOutcomes();
+}
+const brkOpt = { eligibleOnly: false, h: 5 };
+function renderBrkOutcomes() {
+  const R = E.outcomeRecorder, H = [1, 3, 5, 10, 20], pc = (v) => (v == null ? '-' : (v * 100).toFixed(0) + '%');
+  const rep = R.report({ eligibleOnly: brkOpt.eligibleOnly }), audit = R.filterAudit(brkOpt.h);
+  const cell = (a) => (a && a.n ? `${pc(a.accuracy)} <span class="mu">n=${a.n}${a.ci95 ? ` (${pc(a.ci95.lo)}-${pc(a.ci95.hi)})` : ''}</span>` : '-');
+  const stateRows = Object.entries(rep).map(([s, v]) => `<tr><td>${esc(s)}</td>${H.map((h) => `<td>${cell(v.horizons[h])}</td>`).join('')}</tr>`).join('');
+  const fRows = Object.entries(audit).map(([f, v]) => `<tr><td>${esc(f)}</td><td>${cell(v.pass)}</td><td>${cell(v.fail)}</td><td>${cell(v['n/a'])}</td></tr>`).join('');
+  const total = R.all().length, done = R.all().filter((r) => r.outcome && r.outcome.h[20]).length;
+  const box = document.createElement('div');
+  box.className = 'panel';
+  box.innerHTML = `<h3>Breakout outcomes <span class="mu">shadow only - recorded at prediction time, never changes signals</span></h3>
+<div class="note">Accuracy = price moved in the predicted direction after the next-tick entry (ties count as incorrect). ${total} observations, ${done} fully matured. Small samples are not reliable evidence.</div>
+<div style="margin:8px 0"><label><input type="checkbox" id="bzBrkElig" ${brkOpt.eligibleOnly ? 'checked' : ''}> Real signals only</label> <select id="bzBrkH">${H.map((h) => `<option value="${h}" ${h === brkOpt.h ? 'selected' : ''}>Filter audit @ ${h} ticks</option>`).join('')}</select> <button id="bzBrkJson">Export JSON</button> <button id="bzBrkClear">Reset</button></div>
+<table class="bz-table"><thead><tr><th>Breakout state</th>${H.map((h) => `<th>${h} tick${h > 1 ? 's' : ''}</th>`).join('')}</tr></thead><tbody>${stateRows || '<tr><td colspan="6">No matured observations yet.</td></tr>'}</tbody></table>
+<table class="bz-table" style="margin-top:10px"><thead><tr><th>Filter</th><th>Passed</th><th>Failed</th><th>Unavailable</th></tr></thead><tbody>${fRows || '<tr><td colspan="4">No data yet.</td></tr>'}</tbody></table>`;
+  $('bzDist').appendChild(box);
+  $('bzBrkElig').onchange = (e) => { brkOpt.eligibleOnly = e.target.checked; renderDist(E.state); };
+  $('bzBrkH').onchange = (e) => { brkOpt.h = Number(e.target.value); renderDist(E.state); };
+  $('bzBrkJson').onclick = () => downloadBlob('breakout-outcomes.json', 'application/json', JSON.stringify(R.all(), null, 1));
+  $('bzBrkClear').onclick = () => { if (confirm('Reset all recorded breakout observations?')) { R.clear(); renderDist(E.state); } };
 }
 function renderCalib(S) {
   const range = reportFilters.calib, inRange = (ts) => withinDateRange(ts * 1000, range);
