@@ -161,7 +161,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     const thr = num("uoThreshold", 30), d = decide(cur, thr);
     const gapsEl = $("uoGaps");
     if (gapsEl) gapsEl.innerHTML = `<span class="${d.under != null && d.under > thr ? "uo-hit" : ""}">gap 0 + gap 1 = <b>${d.under ?? "—"}</b> → Under 2</span> &nbsp;·&nbsp; <span class="${d.over != null && d.over > thr ? "uo-hit" : ""}">gap 9 + gap 8 = <b>${d.over ?? "—"}</b> → Over 7</span> &nbsp;·&nbsp; trigger &gt; ${thr}`;
-    const mx = $("uoMultX"); if (mx && H().uoMultX) mx.textContent = Number(H().uoMultX()).toFixed(1);
     if (!tr) { st.textContent = "Bot unavailable: LDPE executor not loaded."; return; }
     const box = $("uoArm"); if (box) box.checked = tr.armed;
     if (banner) {
@@ -198,7 +197,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
   };
 
   // Persist the inputs (not the armed state).
-  const IDS = ["uoStake", "uoStrat", "uoThreshold", "uoTP", "uoSL", "uoDur"];
+  const IDS = ["uoStake", "uoStrat", "uoMultN", "uoThreshold", "uoTP", "uoSL", "uoDur"];
   try {
     const s = JSON.parse(window.localStorage.getItem(LS_SET) || "{}");
     for (const id of IDS) if (s[id] != null && $(id)) $(id).value = s[id];
