@@ -84,7 +84,20 @@ export class CycleManager {
     const o = this.ex.byContract.get(String(contractId));
     if (!o || !o.intent || typeof o.intent.cycleId !== "number") return true;   // not an LDPE-cycle order
     const c = this._s(o.symbol).cycle;
-    return !!c && c.id === o.intent.cycleId;
+    const counts = !!c && c.id === o.intent.cycleId;
+    if (counts) o.stakeRecorded = true;   // the caller records this result right after this check
+    return counts;
+  }
+
+  // Orders of this cycle already placed whose result is not in the stake progression yet. A win ends the
+  // cycle and resets the stake, so while the cycle runs each of them is treated as a loss.
+  _pendingInCycle(c) {
+    let n = 0;
+    for (const o of this.ex.orders.values()) {
+      if (!o.intent || o.intent.cycleId !== c.id || o.state === "rejected" || o.stakeRecorded) continue;
+      n++;
+    }
+    return n;
   }
 
   _eligible(f, t) {
@@ -129,7 +142,7 @@ export class CycleManager {
     const it = { key, cycleId: c.id, symbol: t.symbol, tickSeq: t.seq, tickEpoch: t.epoch, tickDigit: t.digit, target: c.target, at: Date.now(), status: "intended", reason: null, contractId: null };
     this.intentions.push(it); keep(this.intentions, 300); this.byKey.set(key, it);
     c.intentions++;
-    const r = this.ex.placeTick({ symbol: t.symbol, digit: c.target, k: this.opts.k(), contractType: CONTRACT, stake: this.opts.stake(), tickSeq: t.seq, tickEpoch: t.epoch, tickDigit: t.digit, cycleId: c.id, forecast: c.forecast });
+    const r = this.ex.placeTick({ symbol: t.symbol, digit: c.target, k: this.opts.k(), contractType: CONTRACT, stake: this.opts.stake(this._pendingInCycle(c)), tickSeq: t.seq, tickEpoch: t.epoch, tickDigit: t.digit, cycleId: c.id, forecast: c.forecast });
     if (!r.ok) { it.status = "failed"; it.reason = r.reason; }
     else { if (it.status === "intended") it.status = "submitted"; if (this.opts.noteOrder) this.opts.noteOrder(); }
     this._changed();

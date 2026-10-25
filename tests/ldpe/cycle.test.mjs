@@ -205,3 +205,12 @@ test("duplicate settlement events do not end another cycle or change the stake",
   assert.equal(h.cm.status("S").cycle.id, 2);
   h.tick(6); assert.equal(h.orders()[1].stake, 0.5);
 });
+test("overlapping unsettled orders still step the stake (pending orders projected as losses)", () => {
+  const h = stakeHarness();
+  const base = 0.5, X = 1.8;
+  h.cm.opts.stake = (pending) => Math.round(base * Math.pow(X, pending) * 100) / 100;
+  h.tick(0, 2);
+  const st = [];
+  for (const d of [3, 4, 6]) { h.tick(d); st.push(h.orders().at(-1).stake); }   // nothing settles in between
+  assert.deepEqual(st, [0.5, 0.9, 1.62]);
+});

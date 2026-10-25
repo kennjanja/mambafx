@@ -84,7 +84,7 @@ const persistExec = () => save(LS_EXEC, executor.serialize());
 // Tick-driven cycles: one DIGITMATCH intention per non-target tick, through the executor only.
 const cycles = new CycleManager(executor, {
   k: () => settings.k,
-  stake: () => (H().nextStake ? H().nextStake() : settings.stake),
+  stake: (pending) => (H().nextStake ? H().nextStake(pending) : settings.stake),
   limits: () => (H().autoSettings ? H().autoSettings() : { max: 0, count: 0 }),
   resetStake: () => { if (H().resetStake) H().resetStake(); },
   noteOrder: () => { if (H().noteAutoOrder) H().noteAutoOrder(true); },

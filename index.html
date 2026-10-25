@@ -30336,7 +30336,7 @@ window.__ldpeHost = {
   resNextStake: () => { const m = resMult(); const st = ($("digResStrat") || {}).value || "flat"; m._strat = st; return Math.max(0.35, m.getNext(st)); },
   resResetStake: () => { resMult().reset(); },
   resRecord: (stk, won) => { const m = resMult(); m._strat = ($("digResStrat") || {}).value || "flat"; m.record(stk, won); },
-  nextStake: () => { const st = digMultStrat(); digMult()._strat = st; return Math.max(0.35, digMult().getNext(st)); },
+  nextStake: (pending) => { const st = digMultStrat(); digMult()._strat = st; return Math.max(0.35, digMult().getNext(st, pending)); },
   // the user's own Auto-panel settings (cooldown in ticks, stop after N trades)
   autoSettings: () => ({
     cooldown: Math.max(0, parseInt(($("digAutoCooldown") || {}).value || "0", 10) || 0),
@@ -31141,7 +31141,16 @@ function makeMultiplier(getStakeEl, getMultN){
     }
   }
   return {
-    getNext(strat){ return nextStake(strat||'flat'); },
+    // `pending` = orders placed but not yet settled; they are projected as losses so overlapping orders still step the progression.
+    getNext(strat, pending){
+      const s=strat||'flat', n=Math.max(0,pending|0);
+      if(!n||s==='flat') return nextStake(s);
+      const h=history.slice(), sq=seq, gp=grindProfit;
+      for(let i=0;i<n;i++){ const st=nextStake(s); history.push({stake:st,won:false}); grindProfit-=st; }
+      const out=nextStake(s);
+      history=h; seq=sq; grindProfit=gp;
+      return out;
+    },
     record(stake,won){
       history.push({stake,won}); if(history.length>50)history.shift();
       grindProfit+=won?stake:-stake;
@@ -33650,7 +33659,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=27"></script>
-<script type="module" src="src/ldpe/bridge.js?v=12"></script>
+<script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module" src="src/consec/consecAlert.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
