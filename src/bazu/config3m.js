@@ -115,7 +115,7 @@ export const BASE_CONFIG = Object.freeze({
   EXPIRY_LEARNED: false,   // P2 flag (default OFF): use the shipped learned expiry model instead of the analytic baseline for the decision-time record
   EXPIRY_N_MIN: 200,       // live-contract probability is labelled 'uncalibrated' until this many (probability, outcome) pairs exist
   // P4-P9 (all default OFF; verdicts are always recorded in record.filters for shadow analysis)
-  BREAKOUT_FILTERS: { penetration: false, closeConfirm: false, retestHold: false, tickFlow: false, distance: false, intensity: false },
+  BREAKOUT_FILTERS: { penetration: true, closeConfirm: true, retestHold: true, tickFlow: true, distance: true, intensity: true }, // unavailable data (pass: null) never vetoes
   BRK_PENETRATION_ATR: 0.5, BRK_FLOW_TICKS: 60, BRK_FLOW_MIN: 0.1, BRK_ROOM_ATR: 1, BRK_INTENSITY_MIN: 1.2,
   RANGE_FADE_EXP: false,   // P5: experimental playbook 'range fade exp'
   RFX_ADX_MAX: 20, RFX_EDGE_FRAC: 0.2, RFX_WICK: 0.5,
@@ -129,7 +129,7 @@ export const BASE_CONFIG = Object.freeze({
   zoneK: 0.5,              // zone band width = zoneK * ATR
   EXTENDED_ATR: 1.5, EXTENDED_N: 6,
   SPIKE_ATR: 4, SPIKE_COOLDOWN: 3, SPIKE_DUE_FRAC: 0.6,
-  BREAKOUT_MIN_ATR: 0.25, BREAKOUT_MAX_ATR: 0.5, BREAKOUT_BODY: 0.6,
+  BREAKOUT_MIN_ATR: 0.25, BREAKOUT_MAX_ATR: 0.5, BREAKOUT_BODY: 0.6, BREAKOUT_RETEST_ATR: 0.25, BREAKOUT_FOLLOW_MIN: 2,
   RETEST_BARS: 4, FAKEOUT_BARS: 3,
   PULLBACK_MIN: 0.382, PULLBACK_MAX: 0.618,
   RSI_OB: 65, RSI_OS: 35, STOCH_OB: 80, STOCH_OS: 20, ADX_TREND: 22,

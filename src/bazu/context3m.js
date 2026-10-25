@@ -119,8 +119,8 @@ export function breakoutState(cs, zones, cfg) {
           return { state: 'fakeout', direction: up ? -1 : 1, zone: z, reason: `fakeout beyond ${up ? 'resistance' : 'support'}: closed back inside` };
         if (closeBeyond >= cfg.BREAKOUT_MIN_ATR * a && c.bodyRange >= cfg.BREAKOUT_BODY && !backInside) {
           const follow = after.length > 0 && after.every((x) => (up ? x.close > edge : x.close < edge));
-          const retest = after.some((x) => (up ? x.low <= edge + 0.25 * a && x.close >= edge : x.high >= edge - 0.25 * a && x.close <= edge));
-          if (follow && (retest || after.length >= 2)) return { state: 'confirmed', direction: up ? 1 : -1, zone: z, reason: `breakout ${up ? 'above' : 'below'} zone, follow-through${retest ? ' and retest held' : ''}` };
+          const retest = after.some((x) => (up ?           x.low <= edge + (cfg.BREAKOUT_RETEST_ATR ?? 0.25) * a && x.close >= edge : x.high >= edge - (cfg.BREAKOUT_RETEST_ATR ?? 0.25) * a && x.close <= edge));
+                    if (follow && (retest || after.length >= (cfg.BREAKOUT_FOLLOW_MIN ?? 2))) return { state: 'confirmed', direction: up ? 1 : -1, zone: z, reason: `breakout ${up ? 'above' : 'below'} zone, follow-through${retest ? ' and retest held' : ''}` };
         }
       }
     }
