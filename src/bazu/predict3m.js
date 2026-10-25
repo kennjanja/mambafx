@@ -20,7 +20,7 @@ import { momentumReading, oscillatorExtreme, zoneTouchExtreme, confirmedTurn, op
 import { sigmaPerTick, tickFlowProxy } from './expiry3m.js?v=15';
 import { breakoutFilters, failedFilters, rangeFadeExp, roomChecks, volatilityFilter } from './filters3m.js?v=15';
 import { regimeOf, familyVotes, agreement, momentumGate, VERDICT } from './confluence3m.js?v=15';
-import { classifyBreakouts, summarize as summarizeBreakout } from './breakoutStates3m.js?v=15';
+import { classifyBreakouts, summarize as summarizeBreakout } from './breakoutStates3m.js?v=16';
 
 const MIN_BARS = { trigger: 30, setup: 30, context: 20 };
 

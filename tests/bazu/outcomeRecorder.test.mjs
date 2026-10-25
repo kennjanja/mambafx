@@ -50,3 +50,33 @@ test('records every playbook, including gated candidates', () => {
   assert.equal(rep['range fade'].horizons[5].accuracy, 1);
   assert.deepEqual(rec.report({ kind: 'playbook', eligibleOnly: true, groupBy: (r) => r.playbook }), {});
 });
+
+test('every breakout event is recorded; failed splits into wick and close; zone dedupe over 60 ticks', () => {
+  const rec = createOutcomeRecorder(); const s = series(200);
+  const ev = (state, edge, extra = {}) => ({ state, direction: 1, edge, context: { zoneTf: 'M5' }, ...extra });
+  const p = pred(1099, { breakoutState: { ...ev('confirmed', 100), list: [ev('confirmed', 100), ev('failed', 120, { failKind: 'wick' }), ev('failed', 130, { failKind: 'close' })] } });
+  const rows = rec.observe('R_10', p, s.prices.slice(0, 100), s.epochs.slice(0, 100));
+  assert.deepEqual(rows.filter((r) => r.kind === 'breakout-state').map((r) => r.state), ['confirmed', 'failed-wick', 'failed-close']);
+  assert.equal(rec.observe('R_10', pred(1130, { breakoutState: p.breakoutState }), s.prices.slice(0, 131), s.epochs.slice(0, 131)), null);
+  assert.ok(rec.observe('R_10', pred(1170, { breakoutState: p.breakoutState }), s.prices.slice(0, 171), s.epochs.slice(0, 171)));
+});
+
+test('per-bucket cap keeps rare rows when a common bucket overflows', () => {
+  const rec = createOutcomeRecorder({ bucketCap: 5 }); const s = series(2000);
+  const fade = { decisionTs: 1009, wait: true, direction: 1, playbook: 'range fade', strength: 0.6, breakoutState: null };
+  rec.observe('R_10', fade, s.prices.slice(0, 10), s.epochs.slice(0, 10));
+  for (let i = 0; i < 20; i++) rec.observe('R_10', pred(1000 + i * 70, { breakoutState: { state: 'failed', direction: 1, edge: 100 + i, failKind: 'wick', context: { zoneTf: 'M5' } } }), s.prices.slice(0, 70 * i + 10), s.epochs.slice(0, 70 * i + 10));
+  const all = rec.all();
+  assert.equal(all.filter((r) => r.state === 'failed-wick').length, 5);
+  assert.equal(all.filter((r) => r.playbook === 'range fade').length, 1);
+});
+
+test('gate comparison stays insufficient until enough real signals', () => {
+  const rec = createOutcomeRecorder(); const s = series(40);
+  const mk = (wait) => ({ decisionTs: 1009, wait, direction: 1, playbook: 'range fade', strength: 0.6, breakoutState: null });
+  rec.observe('R_10', mk(false), s.prices.slice(0, 10), s.epochs.slice(0, 10));
+  rec.resolve('R_10', s.prices, s.epochs);
+  const g = rec.gateComparison(5);
+  assert.equal(g['range fade'].verdict, 'insufficient'); assert.equal(g['range fade'].needReal, 99);
+  assert.equal(rec.gateComparison(5, 1)['range fade'].real.n, 1);
+});

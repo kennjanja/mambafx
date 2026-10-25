@@ -52,4 +52,7 @@ export function classifyBreakouts(cs, zones, cfg = {}, price = cs?.at(-1)?.close
 }
 
 /** Compact, serialisable form for logs (no zone object references). */
-export const summarize = (r) => (r.top ? { state: r.top.state, direction: r.top.direction, edge: r.top.edge, reason: r.top.reason || null, strength: r.top.strength || null, confirmation: r.top.confirmation || null, ageBars: r.top.ageBars, extensionATR: r.top.extensionATR ?? null, context: r.top.context, all: r.events.length } : null);
+export const summarize = (r) => (r.top ? { state: r.top.state, direction: r.top.direction, edge: r.top.edge, reason: r.top.reason || null, strength: r.top.strength || null, confirmation: r.top.confirmation || null, ageBars: r.top.ageBars, extensionATR: r.top.extensionATR ?? null, context: r.top.context, all: r.events.length, list: r.events.slice(0, 12).map(compactEvent) } : null);
+
+/** One event without zone references. failKind separates a wick-only poke (break candle closed inside) from a close-beyond that later failed. */
+export const compactEvent = (e) => ({ state: e.state, direction: e.direction, edge: e.edge, strength: e.strength || null, confirmation: e.confirmation || null, ageBars: e.ageBars, extensionATR: e.extensionATR ?? null, context: e.context, failKind: e.state === 'failed' ? (e.confirmation?.closesBeyond > 0 || (e.strength?.penetrationATR ?? 0) > 0 ? 'close' : 'wick') : null });

@@ -13,7 +13,7 @@ import { shadowOutcome } from './calibration3m.js?v=15';
 import { tickGapsConstant, roomChecks } from './filters3m.js?v=15';
 import { bucketCandles } from './timeframes.js?v=15';
 import { settle, marketClass } from './config3m.js?v=17';
-import { spikeContext } from './predict3m.js?v=16';
+import { spikeContext } from './predict3m.js?v=17';
 import { expiryProbBaseline, sigmaPerTick } from './expiry3m.js?v=15';
 import { analyseMtf } from './mtf3m.js?v=18';
 
