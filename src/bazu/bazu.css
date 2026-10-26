@@ -82,3 +82,22 @@ dialog#bzRealDlg::backdrop{background:rgba(0,0,0,.6)}
 #tfBazuBody .pill.ok{color:var(--bz-buy);border-color:var(--bz-buy)}#tfBazuBody .pill.bad{color:var(--bz-sell);border-color:var(--bz-sell)}#tfBazuBody .pill.warn,#tfBazuBody .pill.proxy{color:var(--bz-amber);border-color:var(--bz-amber)}
 #tfBazuBody .up{color:var(--bz-buy)}#tfBazuBody .dn{color:var(--bz-sell)}#tfBazuBody .mu{color:var(--bz-muted)}#tfBazuBody .num{font-variant-numeric:tabular-nums}
 #tfBazuBody .bar{height:8px;border-radius:999px;background:var(--bz-line);overflow:hidden}#tfBazuBody .bar>i{display:block;height:100%;background:var(--bz-blue)}
+
+/* Combined evidence + Bazu signal panel and the signal monitor (Candle Charts page) */
+.ev-combo{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:16px;margin-top:10px}
+@media(max-width:1000px){.ev-combo{grid-template-columns:1fr}}
+#sigMonitor{--bz-line:#2B3139;--bz-card:#1E2329;--bz-muted:#848E9C;--bz-buy:#2EBD85;--bz-sell:#F6465D;--bz-blue:#4C8DFF}
+#sigMonitor .sm-head{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;margin-bottom:8px}
+#sigMonitor .sm-sub{color:var(--bz-muted);font-size:11px}
+#sigMonitor .sm-body{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:8px}
+#sigMonitor .note{color:var(--bz-muted);font-size:11px}
+#sigMonitor .sm-row{border:1px solid var(--bz-line);border-radius:10px;background:var(--bz-card);padding:9px 11px;cursor:pointer;font-size:12px}
+#sigMonitor .sm-row:hover{border-color:var(--bz-blue)}
+#sigMonitor .sm-row.closed{opacity:.6}
+#sigMonitor .sm-top,#sigMonitor .sm-bot{display:flex;justify-content:space-between;gap:8px;flex-wrap:wrap}
+#sigMonitor .sm-bot{font-size:11px;color:var(--bz-muted);margin-top:6px}
+#sigMonitor .sm-bar{height:6px;border-radius:999px;background:var(--bz-line);overflow:hidden;margin-top:7px}
+#sigMonitor .sm-bar>i{display:block;height:100%;background:var(--bz-buy)}
+#sigMonitor .up{color:var(--bz-buy)}#sigMonitor .dn{color:var(--bz-sell)}#sigMonitor .mu{color:var(--bz-muted)}
+#sigMonitor .pill{display:inline-flex;padding:1px 7px;border-radius:999px;font-size:10px;font-weight:700;border:1px solid var(--bz-line);color:var(--bz-muted)}
+#sigMonitor .num{font-variant-numeric:tabular-nums}
