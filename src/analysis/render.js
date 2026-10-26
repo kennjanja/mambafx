@@ -99,7 +99,7 @@ export function renderCandlePatterns(pat, g, { max = 12 } = {}) {
 
 export function renderChartPatterns(pat, g, { max = 4, live = true } = {}) {
   const last = g.start + g.count - 1;
-  const list = pat.chart.filter((p) => (!live || ['forming', 'confirmed'].includes(p.status)) && p.pivots[p.pivots.length - 1].index <= last && p.pivots[0].index >= g.start - 40)
+  const list = pat.chart.filter((p) => (!live || ['potential', 'developing', 'forming', 'confirmed'].includes(p.status)) && p.pivots[p.pivots.length - 1].index <= last && p.pivots[0].index >= g.start - 40)
     .sort((a, b) => b.formedIndex - a.formedIndex).slice(0, max);
   let s = '';
   for (const p of list) {
@@ -114,6 +114,7 @@ export function renderChartPatterns(pat, g, { max = 4, live = true } = {}) {
     }
     if (p.neckline != null && !p.necklinePts && p.neckline >= g.lo && p.neckline <= g.hi) s += `<line x1="${g.xAt(p.pivots[0].index).toFixed(1)}" y1="${g.clampY(p.neckline).toFixed(1)}" x2="${g.chartRight}" y2="${g.clampY(p.neckline).toFixed(1)}" stroke="${col}" stroke-width="0.6" stroke-dasharray="4,2"/>`;
     const lp = p.pivots[p.pivots.length - 1];
+    if (p.projectedD != null && p.projectedD >= g.lo && p.projectedD <= g.hi) s += `<line x1="${g.xAt(lp.index).toFixed(1)}" y1="${g.clampY(lp.price).toFixed(1)}" x2="${g.chartRight}" y2="${g.clampY(p.projectedD).toFixed(1)}" stroke="${col}" stroke-width="0.6" stroke-dasharray="1,2"/><text x="${g.chartRight - 2}" y="${(g.clampY(p.projectedD) - 2).toFixed(1)}" fill="${col}" font-size="6" text-anchor="end" font-family="monospace">D?</text>`;
     s += `<text x="${g.xAt(lp.index).toFixed(1)}" y="${(g.clampY(lp.price) + (lp.type === 'high' ? -4 : 9)).toFixed(1)}" fill="${col}" font-size="6.5" font-family="monospace" text-anchor="middle">${p.kind} (${p.status})</text></g>`;
   }
   return s;
@@ -132,7 +133,7 @@ export function renderRegime(pat, g) {
   const v = pat.volatility.series[g.start + g.count - 1];
   if (!v) return '';
   const pct = v.atrPercentile == null ? 'n/a' : Math.round(v.atrPercentile * 100) + 'p';
-  return `<text class="eng-reg" x="${g.padL + 2}" y="9" fill="#9aa7bd" font-size="6.5" font-family="monospace">vol ${v.regime} (ATR ${pct})${v.squeeze ? ' · squeeze' : ''}</text>`;
+  return `<text class="eng-reg" x="${g.padL + 2}" y="9" fill="#9aa7bd" font-size="6.5" font-family="monospace">vol ${v.regime} (ATR ${pct})${v.squeeze ? ' ï¿½ squeeze' : ''}</text>`;
 }
 
 export function renderLevels(L, g, { showSR = true, showSD = true, showPD = true, showFib = true, showTL = true, showMA = true, showRef = true, showProfile = true, showAMD = true, srMax = 6, sdMax = 6 } = {}) {
@@ -146,7 +147,7 @@ export function renderLevels(L, g, { showSR = true, showSD = true, showPD = true
     for (const z of act) {
       if (z.high < g.lo || z.low > g.hi) continue;
       const yt = g.clampY(z.high), yb = g.clampY(z.low), col = z.role === 'resistance' ? '255,77,94' : '22,224,139';
-      s += `<g class="lv-sr"><rect x="${g.padL}" y="${yt.toFixed(1)}" width="${(g.chartRight - g.padL).toFixed(1)}" height="${Math.max(1.5, yb - yt).toFixed(1)}" fill="rgba(${col},0.08)" stroke="rgba(${col},0.4)" stroke-width="0.5"/><text x="${g.padL + 2}" y="${(yt - 2).toFixed(1)}" fill="rgb(${col})" font-size="6.5" font-family="monospace">${z.role === 'resistance' ? 'R' : 'S'} ×${z.touches}${z.flips ? ' flip' + z.flips : ''}</text></g>`;
+      s += `<g class="lv-sr"><rect x="${g.padL}" y="${yt.toFixed(1)}" width="${(g.chartRight - g.padL).toFixed(1)}" height="${Math.max(1.5, yb - yt).toFixed(1)}" fill="rgba(${col},0.08)" stroke="rgba(${col},0.4)" stroke-width="0.5"/><text x="${g.padL + 2}" y="${(yt - 2).toFixed(1)}" fill="rgb(${col})" font-size="6.5" font-family="monospace">${z.role === 'resistance' ? 'R' : 'S'} ï¿½${z.touches}${z.flips ? ' flip' + z.flips : ''}</text></g>`;
     }
   }
   if (showSD) {
@@ -154,7 +155,7 @@ export function renderLevels(L, g, { showSR = true, showSD = true, showPD = true
       .sort((a, b) => b.confirmedIndex - a.confirmedIndex).slice(0, sdMax);
     for (const z of sd) {
       const yt = g.clampY(z.top), yb = g.clampY(z.bottom), col = z.dir === 1 ? '60,200,255' : '255,140,60', x0 = Math.max(g.padL, g.xAt(z.createdIndex));
-      s += `<g class="lv-sd"><rect x="${x0.toFixed(1)}" y="${yt.toFixed(1)}" width="${(g.chartRight - x0).toFixed(1)}" height="${Math.max(1.5, yb - yt).toFixed(1)}" fill="rgba(${col},0.13)" stroke="rgba(${col},0.6)" stroke-width="0.6"/><text x="${(x0 + 2).toFixed(1)}" y="${(yt + 7).toFixed(1)}" fill="rgb(${col})" font-size="6.5" font-family="monospace">${z.kind === 'DEMAND' ? 'DEM' : 'SUP'}${z.testCount ? ' ×' + z.testCount : ''}</text></g>`;
+      s += `<g class="lv-sd"><rect x="${x0.toFixed(1)}" y="${yt.toFixed(1)}" width="${(g.chartRight - x0).toFixed(1)}" height="${Math.max(1.5, yb - yt).toFixed(1)}" fill="rgba(${col},0.13)" stroke="rgba(${col},0.6)" stroke-width="0.6"/><text x="${(x0 + 2).toFixed(1)}" y="${(yt + 7).toFixed(1)}" fill="rgb(${col})" font-size="6.5" font-family="monospace">${z.kind === 'DEMAND' ? 'DEM' : 'SUP'}${z.testCount ? ' ï¿½' + z.testCount : ''}</text></g>`;
     }
   }
   if (showPD && L.premiumDiscount) {

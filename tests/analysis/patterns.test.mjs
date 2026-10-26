@@ -74,7 +74,8 @@ for (const seed of [11, 12, 13]) {
       assert.equal(f(pre.candle), f(full.candle));
       assert.equal(f(pre.wyckoff), f(full.wyckoff));
       assert.equal(JSON.stringify(pre.volatility.series.slice(0, k)), JSON.stringify(full.volatility.series.slice(0, k)));
-      const stat = (a) => JSON.stringify(a.filter((p) => p.formedIndex < k).map((p) => [p.id, p.history.filter((h) => h.index < k).map((h) => h.status + h.index)]));
+      // 'potential' objects describe the live edge of the data (incomplete geometry), so only resolved patterns are compared
+      const stat = (a) => JSON.stringify(a.filter((p) => p.formedIndex < k && p.status !== 'potential').map((p) => [p.id, p.history.filter((h) => h.index < k).map((h) => h.status + h.index)]));
       assert.equal(stat(pre.chart), stat(full.chart));
     }
   });
