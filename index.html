@@ -26598,7 +26598,7 @@ function showPage(which){
     document.getElementById(pages[k]).classList.toggle("active", k===which);
     const nav = document.getElementById(navs[k]); if (nav) nav.classList.toggle("active", k===which);
   });
-  if (which === "bazu" && typeof window.bazuPageInit === "function"){ window.bazuPageInit(); }
+  if ((which === "bazu" || which === "candles") && typeof window.bazuPageInit === "function"){ window.bazuPageInit(); } // candles shows the live Bazu signal card
   else if (typeof window.bazuPageLeave === "function"){ window.bazuPageLeave(); }
   const moduleSwitches = window.mfxModuleSwitches;
   const pageElement = document.getElementById(pages[which]);
