@@ -432,12 +432,18 @@ function renderLive(S) {
   $('bzSelTitle').textContent = `${m.symbol} · ${m.name}`;
   drawChart(m);
   const sig = m.signal;
-  $('bzSignal').innerHTML = sig && sig.direction ? `<div class="sig ${sig.gate === GATE.OK ? (sig.direction === 'Rise' ? 'ok' : 'bad') : ''}">
+  $('bzSignal').innerHTML = signalHtml(m);
+  $('bzSignal').insertAdjacentHTML('beforeend', mtfHtml(m, sig) + crtHtml(m));
+}
+
+// Shared by the Bazu page and the read-only copy on the Candle Charts page.
+function signalHtml(m) {
+  const sig = m.signal;
+  return sig && sig.direction ? `<div class="sig ${sig.gate === GATE.OK ? (sig.direction === 'Rise' ? 'ok' : 'bad') : ''}">
       <div class="row"><b class="${sig.direction === 'Rise' ? 'up' : 'dn'}" style="font-size:18px">${esc(sig.direction)}</b><span class="pill">${esc(sig.duration)}${sig.manual ? ' · manual duration' : ''}</span><span class="pill ${sig.gate === GATE.OK ? (sig.direction === 'Rise' ? 'ok' : 'bad') : 'warn'}">${esc(sig.gate)}</span>${sig.proxy ? '<span class="pill proxy">uses proxy</span>' : ''}</div>
       <div class="note num">Signal strength ${pct(sig.strength, 0)} <span class="mu">(rule score, not a probability${sig.gate === GATE.OK ? '' : '; signal NOT tradable: ' + esc(sig.gate)})</span> · ${sig.agree}/${sig.total} analysis features agree${sig.quote ? ` · Deriv quote: stake ${sig.quote.ask}, payout ${sig.quote.payout}` : ''}</div>
       ${lifetimeHtml(sig)}${reasoningHtml(sig)}${roomHtml(sig)}<div class="note"><b>${esc(sig.playbook || 'analysis')}</b>${sig.provisional ? ' (provisional trigger)' : ''} · ${esc(sig.reason || '')}</div>${(sig.reasons || []).length ? `<div class="note">${sig.reasons.map(esc).join('; ')}</div>` : ''}<div class="note">Drivers: ${(sig.drivers || []).map(esc).join(', ') || '-'}. Decided ${sig.decisionTs ? new Date(sig.decisionTs * 1000).toLocaleTimeString() : ''} for a ${esc(sig.duration)} Rise/Fall (exit vs entry; a tie loses). Score is a rule-based confluence, not a win probability.</div></div>`
     : `<div class="sig"><b>${esc(E.marketGate(m).label)}</b><div class="note">Collecting ticks to analyse this market.</div></div>`;
-  $('bzSignal').insertAdjacentHTML('beforeend', mtfHtml(m, sig) + crtHtml(m));
 }
 
 function crtHtml(m) {
@@ -481,6 +487,23 @@ function crtHtml(m) {
     ${rows ? `<table class="bz-table"><thead><tr><th>Frame</th><th>Range</th><th>Sweep</th><th>Status</th><th>Reason</th><th>MSS level</th><th>Transitions</th></tr></thead><tbody>${rows}</tbody></table>` : ''}</div>`;
 }
 
+// Read-only copy of the Bazu "Trade signal" panel on the Candle Charts page (card #tfBazuBody).
+// It reads engine state only; it never starts the engine or places orders, and the engine pauses when
+// the Bazu page is left (unless the bot is running), so a stale signal is flagged.
+let _mirrorHtml = '';
+function renderSignalMirror() {
+  const host = $('tfBazuBody'); if (!host || document.hidden) return;
+  const S = E.state, m = S.markets.get(S.selected) || [...S.markets.values()][0];
+  let html;
+  if (!m) html = '<div class="note">Bazu has not analysed any market yet. Open the Bazu page once to start its analysis.</div>';
+  else {
+    const age = m.signal && m.signal.decisionTs ? Math.round(Date.now() / 1000 - m.signal.decisionTs) : null;
+    const stale = age != null && age > 20 ? `<div class="note" style="color:var(--bz-amber)">Last signal is ${age}s old - Bazu analysis pauses when its page is not open. Open the Bazu page to refresh.</div>` : '';
+    html = `<div class="note"><b>${esc(m.symbol)} &middot; ${esc(m.name)}</b> (market selected on the Bazu page)</div>` + signalHtml(m) + stale;
+  }
+  if (html !== _mirrorHtml) { _mirrorHtml = html; host.innerHTML = html; }
+}
+setInterval(renderSignalMirror, 1000);
 const mtfCache = new Map();
 function mtfHtml(m, sig) {
   const cfg = configFor(m.symbol);

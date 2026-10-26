@@ -71,3 +71,14 @@
 #page-bazu .bz-real-banner.off{background:#4a3b00;color:#ffd866;font-weight:700}
 dialog#bzRealDlg{background:var(--bz-card,#14181f);color:inherit;border:2px solid #b00020;border-radius:8px;max-width:440px}
 dialog#bzRealDlg::backdrop{background:rgba(0,0,0,.6)}
+
+/* Read-only Bazu signal card on the Candle Charts page */
+#tfBazuBody{--bz-panel:#12161A;--bz-card:#1E2329;--bz-line:#2B3139;--bz-text:#EAECEF;--bz-muted:#848E9C;--bz-buy:#2EBD85;--bz-sell:#F6465D;--bz-amber:#F0B90B;--bz-blue:#4C8DFF;font-size:12px;max-height:620px;overflow:auto}
+#tfBazuBody .note{color:var(--bz-muted);font-size:11px;line-height:1.5}
+#tfBazuBody .sig{border:1px solid var(--bz-line);border-radius:10px;padding:10px;background:var(--bz-card);margin-bottom:8px}
+#tfBazuBody .sig.ok{border-color:var(--bz-buy)}#tfBazuBody .sig.bad{border-color:var(--bz-sell)}
+#tfBazuBody .row{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+#tfBazuBody .pill{display:inline-flex;padding:2px 8px;border-radius:999px;font-size:11px;font-weight:700;border:1px solid var(--bz-line);color:var(--bz-muted)}
+#tfBazuBody .pill.ok{color:var(--bz-buy);border-color:var(--bz-buy)}#tfBazuBody .pill.bad{color:var(--bz-sell);border-color:var(--bz-sell)}#tfBazuBody .pill.warn,#tfBazuBody .pill.proxy{color:var(--bz-amber);border-color:var(--bz-amber)}
+#tfBazuBody .up{color:var(--bz-buy)}#tfBazuBody .dn{color:var(--bz-sell)}#tfBazuBody .mu{color:var(--bz-muted)}#tfBazuBody .num{font-variant-numeric:tabular-nums}
+#tfBazuBody .bar{height:8px;border-radius:999px;background:var(--bz-line);overflow:hidden}#tfBazuBody .bar>i{display:block;height:100%;background:var(--bz-blue)}
