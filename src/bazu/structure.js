@@ -28,7 +28,7 @@ export function toCandles(prices, epochs, ticksPerCandle = 10) {
   return { candles, closeIdx };
 }
 
-function atrSeries(c, n = 14) {
+export function atrSeries(c, n = 14) {
   const out = new Array(c.length).fill(NaN);
   let prev = null;
   for (let i = 0; i < c.length; i++) {
