@@ -14,6 +14,16 @@ test('active symbols filtered to open synthetic indices', () => {
   assert.deepEqual(r.map((x) => x.symbol), ['R_100']);
 });
 
+test('jump and step indices are excluded; all volatility indices are kept', () => {
+  const syn = (underlying_symbol, extra = {}) => ({ underlying_symbol, market: 'synthetic_index', ...extra });
+  const r = parseActiveSymbols([
+    syn('R_10'), syn('R_75'), syn('1HZ10V'), syn('1HZ150V'), syn('1HZ250V'),
+    syn('JD10', { submarket: 'jump_index' }), syn('JD100'), syn('stpRNG', { submarket: 'step_index' }), syn('stpRNG3'), syn('STP200'),
+    syn('X', { underlying_symbol_name: 'Step Index 500' }),
+  ]);
+  assert.deepEqual(r.map((x) => x.symbol), ['R_10', 'R_75', '1HZ10V', '1HZ150V', '1HZ250V']);
+});
+
 test('skips symbols without Rise/Fall', () => {
   assert.equal(parseContractsFor(cf([{ contract_category: 'accumulator', contract_type: 'ACCU' }])), null);
 });

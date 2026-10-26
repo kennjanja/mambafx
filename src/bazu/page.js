@@ -3,7 +3,7 @@
  * BAZU page view. Sends commands to engine.js and renders its state — NO trading rules here.
  */
 import { start as perfStart } from './perf3m.js?v=15';
-import * as E from './engine.js?v=37';
+import * as E from './engine.js?v=38';
 import { clusterZones } from './structure.js?v=15';
 import { TIMEFRAMES, timeframe, fmtPrice, localCandles, mergeLive } from './timeframes.js?v=15';
 import { findSwingPoints } from '../../mtf/src/analysis/swingPoints.js';
@@ -515,10 +515,19 @@ function monitorTick() {
   for (const m of E.state.markets.values()) {
     const sig = m.signal;
     if (!sig || !sig.direction || sig.gate !== GATE.OK || !(sig.durationSec > 0) || !(m.last > 0)) continue;
-    const key = sig.signalId || `${m.symbol}|${sig.direction}`;
-    const seen = monitor.find((x) => x.key === key && (sig.signalId ? true : !x.closedAt));
-    if (seen) continue;
-    monitor.push({ key, symbol: m.symbol, name: m.name, direction: sig.direction, dur: sig.duration, durMs: sig.durationSec * 1000, strength: sig.strength, entry: m.last, dp: m.dp, startedAt: now, closedAt: null, exit: null });
+    const key = sig.signalId || `${m.symbol}|${sig.direction}|${sig.duration}`;
+    const nkey = `${sig.direction}|${sig.duration}`;
+    if (monitor.some((x) => x.key === key || (x.noteKeys || []).includes(`${m.symbol}|${key}`))) continue;
+    // One signal per market at a time: a later, different signal is only a note on the active one.
+    const active = monitor.find((x) => x.symbol === m.symbol && !x.closedAt);
+    if (active) {
+      if (active.direction === sig.direction && active.dur === sig.duration) continue;
+      active.noteKeys = active.noteKeys || []; active.notes = active.notes || [];
+      active.noteKeys.push(`${m.symbol}|${key}`);
+      if (!active.notes.some((n) => n.k === nkey)) active.notes.push({ k: nkey, direction: sig.direction, dur: sig.duration, strength: sig.strength, at: now });
+      continue;
+    }
+    monitor.push({ key, symbol: m.symbol, name: m.name, direction: sig.direction, dur: sig.duration, durMs: sig.durationSec * 1000, strength: sig.strength, entry: m.last, dp: m.dp, startedAt: now, closedAt: null, exit: null, notes: [], noteKeys: [] });
   }
   for (const x of monitor) {
     if (x.closedAt || now < x.startedAt + x.durMs) continue;
@@ -534,8 +543,10 @@ function moveHtml(x, price) {
   const cls = d > 0 ? 'up' : d < 0 ? 'dn' : 'mu';
   return `<span class="${cls} num">${d > 0 ? 'in favour' : d < 0 ? 'against' : 'level'} ${d >= 0 ? '+' : ''}${d.toFixed(x.dp ?? 2)}</span>`;
 }
+let _ensuredN = 0;
 function renderMonitor() {
   monitorTick();
+  if (typeof window.mfxEnsureVolatility === 'function' && E.state.markets.size !== _ensuredN) { _ensuredN = E.state.markets.size; window.mfxEnsureVolatility([...E.state.markets.values()]); }
   const host = $('sigMonitorBody'); if (!host || document.hidden || !host.offsetParent) return;
   const now = Date.now();
   const rows = monitor.slice().sort((a, b) => (a.closedAt ? 1 : 0) - (b.closedAt ? 1 : 0) || a.startedAt - b.startedAt).map((x) => {
@@ -545,7 +556,7 @@ function renderMonitor() {
     return `<div class="sm-row ${x.closedAt ? 'closed' : ''}" data-sym="${esc(x.symbol)}" title="Open ${esc(x.symbol)} on Candle Charts and Bazu">
       <div class="sm-top"><span><b>${esc(x.symbol)}</b> <span class="mu">${esc(x.name || '')}</span></span><span><b class="${x.direction === 'Rise' ? 'up' : 'dn'}">${esc(x.direction)}</b> <span class="pill">${esc(x.dur)}</span> ${status}</span></div>
       <div class="sm-bar"><i style="width:${(frac * 100).toFixed(1)}%"></i></div>
-      <div class="sm-bot num"><span>${x.closedAt ? 'closed ' + new Date(x.closedAt).toLocaleTimeString() : 'remaining <b class="up">' + fmtClock((x.startedAt + x.durMs - now) / 1000) + '</b>'}</span><span>strength ${pct(x.strength, 0)}</span><span>entry ${x.entry.toFixed(x.dp ?? 2)} &rarr; ${spot.toFixed(x.dp ?? 2)}</span>${moveHtml(x, spot)}</div></div>`;
+      <div class="sm-bot num"><span>${x.closedAt ? 'closed ' + new Date(x.closedAt).toLocaleTimeString() : 'remaining <b class="up">' + fmtClock((x.startedAt + x.durMs - now) / 1000) + '</b>'}</span><span>strength ${pct(x.strength, 0)}</span><span>entry ${x.entry.toFixed(x.dp ?? 2)} &rarr; ${spot.toFixed(x.dp ?? 2)}</span>${moveHtml(x, spot)}</div>${(x.notes || []).length ? `<div class="sm-notes">${x.notes.map((n, i) => `${i + 2}${['nd', 'rd'][i] || 'th'} signal: ${esc(n.direction)} ${esc(n.dur)} (${pct(n.strength, 0)}) - queued, shown only as a note until this one expires`).join('<br>')}</div>` : ''}</div>`;
   }).join('');
   const html = rows || '<div class="note">No active Bazu signals. Signals appear here when Bazu marks one tradable and stay until their predicted duration lapses.</div>';
   if (host._html !== html) { host._html = html; host.innerHTML = html; }
