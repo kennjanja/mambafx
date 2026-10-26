@@ -1,4 +1,5 @@
 import { CRT_CONFIG } from "./crtConfig3m.js";
+import { atrSeries } from "../analysis/core.js";
 import { crtConfigStamp } from "./crtOutcome3m.js";
 
 const DAY_S = 86400;
@@ -27,20 +28,7 @@ export function wilderAtr(candles, period = CRT_CONFIG.atr_period) {
   if (!Array.isArray(candles) || candles.some((c) => !c || ![c.epoch, c.open, c.high, c.low, c.close].every(finite) || c.high < c.low)) {
     throw new TypeError("ATR requires candles with finite OHLC values.");
   }
-  const result = Array(candles.length).fill(null);
-  if (candles.length < period) return result;
-  const tr = candles.map((c, i) => {
-    if (i === 0) return barRange(c);
-    const priorClose = candles[i - 1].close;
-    return Math.max(barRange(c), Math.abs(c.high - priorClose), Math.abs(c.low - priorClose));
-  });
-  let atr = tr.slice(0, period).reduce((sum, value) => sum + value, 0) / period;
-  result[period - 1] = atr;
-  for (let i = period; i < tr.length; i++) {
-    atr = ((atr * (period - 1)) + tr[i]) / period;
-    result[i] = atr;
-  }
-  return result;
+  return atrSeries(candles, period); // shared Wilder ATR (proven bit-identical in tests/analysis/bazu-atr-parity.test.mjs)
 }
 
 export function atrRatio(candles, period = CRT_CONFIG.atr_period, averagePeriod = CRT_CONFIG.atr_ratio_sma_period) {

@@ -4,7 +4,7 @@
  * Reuses the existing CRT primitives (ATR, sweep rule, POI scoring, MSS, risk geometry) and never changes them.
  * Own config version and own enable switches; defaults: detect-and-log on, trading off.
  */
-import { atrRatio, buildCrtFrames, closedAsOf, confirmedStructureBias, findMss, htfBiasAllows, scorePoiConfluence, applyRiskGeometry } from "./crt3m.js?v=7";
+import { atrRatio, buildCrtFrames, closedAsOf, confirmedStructureBias, findMss, htfBiasAllows, scorePoiConfluence, applyRiskGeometry } from "./crt3m.js?v=8";
 import { CRT_CONFIG } from "./crtConfig3m.js";
 
 export const CRT_LTF_CONFIG = Object.freeze({
