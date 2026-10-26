@@ -129,8 +129,13 @@ export function chartPatterns(candles, atr, opts = {}) {
     out.push(resolve(candles, pat, start, trig, inv, P));
   };
   const hist = [];
-  for (const p of confirmed) {
-    hist.push(p);
+  // Pivots confirmed on the same bar (e.g. an outside bar gives a high and a low) join history together,
+  // so results do not depend on their arbitrary order (mirror symmetry).
+  for (let gi = 0; gi < confirmed.length; gi++) {
+    const p = confirmed[gi];
+    if (gi === 0 || confirmed[gi - 1].confirmedIndex !== p.confirmedIndex) {
+      for (let k = gi; k < confirmed.length && confirmed[k].confirmedIndex === p.confirmedIndex; k++) hist.push(confirmed[k]);
+    }
     const a = atr[p.confirmedIndex];
     if (a == null) continue;
     const tol = P.patternTolAtr * a;
@@ -189,7 +194,7 @@ export function chartPatterns(candles, atr, opts = {}) {
         else if (conv && sH < 0 && sL > 0) kind = 'symmetrical-triangle';
         else if (conv && sH > 0 && sL > 0) kind = 'rising-wedge';
         else if (conv && sH < 0 && sL < 0) kind = 'falling-wedge';
-        else if (!conv && gapEnd > 0.8 * gapStart && Math.abs(sH - sL) < P.wedgeSlopeAtr && !flat(sH)) kind = 'channel';
+        else if (!conv && gapEnd > 0.8 * gapStart && Math.abs(sH - sL) < P.wedgeSlopeAtr && !flat((sH + sL) / 2)) kind = 'channel';
       }
       if (kind) {
         const dir = kind === 'ascending-triangle' || kind === 'falling-wedge' ? 1 : kind === 'descending-triangle' || kind === 'rising-wedge' ? -1 : 0;
