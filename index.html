@@ -26393,7 +26393,8 @@ function tfIngestTick(g, epoch, price){
 function buildTfCards(){
   const grid = document.getElementById("tfGrid");
   if (!grid || grid.dataset.built) return;
-  grid.innerHTML = TIMEFRAMES.map(tf => `
+  // Highest timeframe first, 30s last; the Bazu signal card follows the last (30s) card.
+  grid.innerHTML = [...TIMEFRAMES].reverse().map(tf => `
     <div class="tf-card" id="tf-card-${tf.g}" data-g="${tf.g}">
       <div class="tf-head" data-g="${tf.g}" title="Click to expand / collapse" style="cursor:pointer">
         <div class="tf-name"><b>${tf.num}</b> ${tf.unit}</div>
@@ -26423,7 +26424,7 @@ function buildTfCards(){
         <div class="of-cell"><div class="of-label">Imbalance</div><div id="tf-imb-${tf.g}" class="of-val of-neutral">—</div></div>
         <div class="of-cell"><div class="of-label">Absorption</div><div id="tf-abs-${tf.g}" class="of-val of-neutral">—</div></div>
       </div>
-    </div>`).join("");
+    </div>`).join("") + `<div class="tf-card tf-bazu" id="tfBazuCard"><div class="tf-head" style="cursor:default"><div class="tf-name"><b>Bazu</b> trade signal</div><span class="tf-status">read-only</span></div><div id="tfBazuBody" class="tf-bazu-body"><div class="note">Loading...</div></div></div>`;
   grid.dataset.built = "1";
   attachTfNav();
   attachTfExpand();
@@ -33616,7 +33617,7 @@ try {
   </div>
 </div>
 
-<script type="module" src="src/bazu/page.js?v=27"></script>
+<script type="module" src="src/bazu/page.js?v=28"></script>
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>
