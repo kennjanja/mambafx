@@ -744,6 +744,11 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <label class="pa-chip on"><input type="checkbox" id="pa-ote" checked><span class="sw ote"></span> OTE (ICT)</label>
         <label class="pa-chip on"><input type="checkbox" id="pa-trend" checked><span class="sw trend"></span> Trendline</label>
         <label class="pa-chip on"><input type="checkbox" id="pa-amd" checked><span class="sw amd"></span> AMD (Power of 3)</label>
+        <span class="pa-sep" style="color:var(--muted);font-size:11px;margin:0 4px 0 10px">Engine:</span>
+        <label class="pa-chip"><input type="checkbox" id="pe-zones"><span class="sw fvg"></span> Zones (OB / FVG / BPR / RB)</label>
+        <label class="pa-chip"><input type="checkbox" id="pe-struct"><span class="sw bos"></span> Structure (BOS / CHoCH / MSS)</label>
+        <label class="pa-chip"><input type="checkbox" id="pe-liq"><span class="sw liq"></span> Liquidity pools &amp; sweeps</label>
+        <select id="pe-states" title="Zone lifecycle filter" style="background:var(--panel2,#111827);color:var(--text);border:1px solid #243049;border-radius:6px;font-size:11px;padding:2px 4px"><option value="live">live zones only</option><option value="all">include ended zones</option></select>
       </div>
       <div class="pa-note">
         <b style="color:var(--accent)">ICT / Smart-Money structure:</b> support/resistance · demand &amp; supply zones · order blocks (OB+/OB−) · unmitigated fair-value gaps · liquidity at equal highs/lows · <b>BOS / CHoCH</b> · <b>premium/discount</b> equilibrium · <b>OTE</b> (0.62–0.79 entry) · <b>trendlines</b> (auto, from swing pivots) · <b>AMD</b> (accumulation → manipulation → distribution, ICT Power of 3).<br>
@@ -26640,7 +26645,7 @@ window.addEventListener("mfx:modules-changed", () => {
 });
 
 // Overlay toggles redraw every timeframe chart; chips also reflect on/off styling
-["pa-sr","pa-zones","pa-ob","pa-fvg","pa-liq","pa-bos","pa-eq","pa-vp","pa-ote","pa-trend","pa-amd"].forEach(id => {
+["pa-sr","pa-zones","pa-ob","pa-fvg","pa-liq","pa-bos","pa-eq","pa-vp","pa-ote","pa-trend","pa-amd","pe-zones","pe-struct","pe-liq"].forEach(id => {
   const el = document.getElementById(id);
   const key = "mfx_overlay_" + id;
   if (el){
@@ -28566,6 +28571,18 @@ function drawTfCandles(g){
       const dcol = amd.dist.dir === 1 ? "var(--up)" : "var(--down)";
       out += `<line x1="${xd0.toFixed(1)}" y1="${yd0.toFixed(1)}" x2="${xd1.toFixed(1)}" y2="${yd1.toFixed(1)}" stroke="${dcol}" stroke-width="1.3" opacity="0.85"/>`;
       out += `<text x="${xd1.toFixed(1)}" y="${(amd.dist.dir===1?yd1-4:yd1+10).toFixed(1)}" fill="${dcol}" font-size="7.5" text-anchor="end" font-family="monospace">D · distribution</text>`;
+    }
+  }
+
+  // Shared engine layer (src/analysis): lifecycle zones, structure, liquidity. Off by default.
+  if (window.MFXEngine && (want("pe-zones") || want("pe-struct") || want("pe-liq"))){
+    const an = tfAnalysis(g, arr, "engine", a => window.MFXEngine.analyzeAll(a));
+    if (an && an.dropped === 0){
+      const geom = { start, count, lo, hi, xAt, y, clampY, chartRight, padL, dec };
+      const states = ($("pe-states") || {}).value || "live";
+      if (want("pe-zones")) out += window.MFXEngine.renderZones(an.zones, geom, { states });
+      if (want("pe-struct")) out += window.MFXEngine.renderStructure(an, geom, { scale: "swing" });
+      if (want("pe-liq")) out += window.MFXEngine.renderLiquidity(an.liquidity, geom);
     }
   }
 
@@ -33476,6 +33493,7 @@ try {
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>
+<script type="module">import * as E from "./src/analysis/all.js?v=1"; window.MFXEngine = E; if (typeof TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
 <script type="module" src="src/ldpe/under-over-bot.js?v=2"></script>
 <script type="module" src="src/consec/consecAlert.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
