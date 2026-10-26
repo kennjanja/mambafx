@@ -70,3 +70,22 @@ test('collectEvents is deterministic and sorted by confirmation', () => {
   assert.deepEqual(a, b);
   for (let i = 1; i < a.length; i++) assert.ok(a[i].confirmedIndex >= a[i - 1].confirmedIndex);
 });
+
+test('baseline and direction groups are reported; verdicts vs baseline obey minN', () => {
+  const r = validateEvents(walk(9, 2500));
+  assert.ok(r.baseline[1].test[5].n > 500);
+  const b = r.baseline[1].test[5], s = r.baseline[-1].test[5];
+  assert.ok(Math.abs(b.hits / b.n + s.hits / s.n - 1) < 0.02); // up + down + ties ~ 1
+  const dirRows = r.summary.filter((x) => x.dir !== 0);
+  assert.ok(dirRows.length > 0);
+  for (const row of dirRows) for (const h of Object.values(row.horizons)) {
+    if (h.insufficient) assert.equal(h.verdictVsBaseline, 'insufficient');
+    else assert.ok(h.baseline && h.baseline.test > 0.3 && h.baseline.test < 0.7);
+  }
+});
+test('zone retest events are emitted at the touch bar, never before the zone is confirmed', () => {
+  const { events } = collectEvents(walk(11, 1200));
+  const rt = events.filter((e) => e.kind.endsWith('-retest'));
+  assert.ok(rt.length > 0);
+  for (const e of rt) assert.equal(e.index, e.confirmedIndex);
+});
