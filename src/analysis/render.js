@@ -82,3 +82,55 @@ export function renderLiquidity(liq, g, { max = 8 } = {}) {
   }
   return s;
 }
+
+const ABBR = { 'pin-bar': 'PIN', engulfing: 'ENG', 'inside-bar': 'IB', 'outside-bar': 'OB', 'three-bar-reversal': '3BR' };
+export function renderCandlePatterns(pat, g, { max = 12 } = {}) {
+  const ev = pat.candle.filter((e) => ABBR[e.kind] && e.index >= g.start && e.index < g.start + g.count).slice(-max);
+  let s = '';
+  for (const e of ev) {
+    const c = pat.candles[e.index];
+    const x = g.xAt(e.index), up = e.dir >= 0;
+    const yy = g.clampY(up ? c.low : c.high) + (up ? 9 : -4);
+    const col = e.dir === 1 ? '#16e08b' : e.dir === -1 ? '#ff4d5e' : '#9aa7bd';
+    s += `<text class="eng-cp" data-kind="${e.kind}" x="${x.toFixed(1)}" y="${yy.toFixed(1)}" fill="${col}" font-size="6" text-anchor="middle" font-family="monospace">${e.name === 'shooting-star' ? 'SS' : e.name === 'hammer' ? 'HAM' : ABBR[e.kind]}</text>`;
+  }
+  return s;
+}
+
+export function renderChartPatterns(pat, g, { max = 4, live = true } = {}) {
+  const last = g.start + g.count - 1;
+  const list = pat.chart.filter((p) => (!live || ['forming', 'confirmed'].includes(p.status)) && p.pivots[p.pivots.length - 1].index <= last && p.pivots[0].index >= g.start - 40)
+    .sort((a, b) => b.formedIndex - a.formedIndex).slice(0, max);
+  let s = '';
+  for (const p of list) {
+    const col = p.status === 'confirmed' ? (p.dir === 1 ? '#16e08b' : '#ff4d5e') : '#9aa7bd';
+    const pts = p.pivots.map((q) => `${g.xAt(q.index).toFixed(1)},${g.clampY(q.price).toFixed(1)}`).join(' ');
+    s += `<g class="eng-pat" data-kind="${p.kind}" data-status="${p.status}"><polyline points="${pts}" fill="none" stroke="${col}" stroke-width="0.8" stroke-dasharray="${p.status === 'confirmed' ? '0' : '3,2'}"/>`;
+    for (const ln of [p.upper, p.lower]) if (ln) {
+      const xa = g.xAt(ln[0].index), xb = Math.min(g.chartRight, g.xAt(p.confirmedIndex));
+      const sl = (ln[1].price - ln[0].price) / (ln[1].index - ln[0].index);
+      const ya = g.clampY(ln[0].price), yb = g.clampY(ln[0].price + sl * (p.confirmedIndex - ln[0].index));
+      s += `<line x1="${xa.toFixed(1)}" y1="${ya.toFixed(1)}" x2="${xb.toFixed(1)}" y2="${yb.toFixed(1)}" stroke="${col}" stroke-width="0.7"/>`;
+    }
+    if (p.neckline != null && !p.necklinePts && p.neckline >= g.lo && p.neckline <= g.hi) s += `<line x1="${g.xAt(p.pivots[0].index).toFixed(1)}" y1="${g.clampY(p.neckline).toFixed(1)}" x2="${g.chartRight}" y2="${g.clampY(p.neckline).toFixed(1)}" stroke="${col}" stroke-width="0.6" stroke-dasharray="4,2"/>`;
+    const lp = p.pivots[p.pivots.length - 1];
+    s += `<text x="${g.xAt(lp.index).toFixed(1)}" y="${(g.clampY(lp.price) + (lp.type === 'high' ? -4 : 9)).toFixed(1)}" fill="${col}" font-size="6.5" font-family="monospace" text-anchor="middle">${p.kind} (${p.status})</text></g>`;
+  }
+  return s;
+}
+
+export function renderWyckoff(pat, g, { max = 6 } = {}) {
+  let s = '';
+  for (const e of pat.wyckoff.filter((e) => e.kind !== 'effort-no-result' && e.index >= g.start && e.index < g.start + g.count && e.level >= g.lo && e.level <= g.hi).slice(-max)) {
+    const col = e.dir === 1 ? '#16e08b' : '#ff4d5e';
+    s += `<text class="eng-wy" x="${g.xAt(e.index).toFixed(1)}" y="${(g.clampY(e.level) + (e.dir === 1 ? 10 : -4)).toFixed(1)}" fill="${col}" font-size="6.5" font-family="monospace" text-anchor="middle">${e.kind}</text>`;
+  }
+  return s;
+}
+
+export function renderRegime(pat, g) {
+  const v = pat.volatility.series[g.start + g.count - 1];
+  if (!v) return '';
+  const pct = v.atrPercentile == null ? 'n/a' : Math.round(v.atrPercentile * 100) + 'p';
+  return `<text class="eng-reg" x="${g.padL + 2}" y="9" fill="#9aa7bd" font-size="6.5" font-family="monospace">vol ${v.regime} (ATR ${pct})${v.squeeze ? ' · squeeze' : ''}</text>`;
+}

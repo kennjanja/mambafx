@@ -748,6 +748,10 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <label class="pa-chip"><input type="checkbox" id="pe-zones"><span class="sw fvg"></span> Zones (OB / FVG / BPR / RB)</label>
         <label class="pa-chip"><input type="checkbox" id="pe-struct"><span class="sw bos"></span> Structure (BOS / CHoCH / MSS)</label>
         <label class="pa-chip"><input type="checkbox" id="pe-liq"><span class="sw liq"></span> Liquidity pools &amp; sweeps</label>
+        <label class="pa-chip"><input type="checkbox" id="pe-cpat"><span class="sw bos"></span> Candle patterns</label>
+        <label class="pa-chip"><input type="checkbox" id="pe-chart"><span class="sw bos"></span> Chart patterns</label>
+        <label class="pa-chip"><input type="checkbox" id="pe-wy"><span class="sw bos"></span> Wyckoff events</label>
+        <label class="pa-chip"><input type="checkbox" id="pe-reg"><span class="sw bos"></span> Volatility regime</label>
         <select id="pe-states" title="Zone lifecycle filter" style="background:var(--panel2,#111827);color:var(--text);border:1px solid #243049;border-radius:6px;font-size:11px;padding:2px 4px"><option value="live">live zones only</option><option value="all">include ended zones</option></select>
       </div>
       <div class="pa-note">
@@ -26645,7 +26649,7 @@ window.addEventListener("mfx:modules-changed", () => {
 });
 
 // Overlay toggles redraw every timeframe chart; chips also reflect on/off styling
-["pa-sr","pa-zones","pa-ob","pa-fvg","pa-liq","pa-bos","pa-eq","pa-vp","pa-ote","pa-trend","pa-amd","pe-zones","pe-struct","pe-liq"].forEach(id => {
+["pa-sr","pa-zones","pa-ob","pa-fvg","pa-liq","pa-bos","pa-eq","pa-vp","pa-ote","pa-trend","pa-amd","pe-zones","pe-struct","pe-liq","pe-cpat","pe-chart","pe-wy","pe-reg"].forEach(id => {
   const el = document.getElementById(id);
   const key = "mfx_overlay_" + id;
   if (el){
@@ -28583,6 +28587,17 @@ function drawTfCandles(g){
       if (want("pe-zones")) out += window.MFXEngine.renderZones(an.zones, geom, { states });
       if (want("pe-struct")) out += window.MFXEngine.renderStructure(an, geom, { scale: "swing" });
       if (want("pe-liq")) out += window.MFXEngine.renderLiquidity(an.liquidity, geom);
+    }
+  }
+
+  if (window.MFXEngine && (want("pe-cpat") || want("pe-chart") || want("pe-wy") || want("pe-reg"))){
+    const pt = tfAnalysis(g, arr, "enginePat", a => window.MFXEngine.analyzePat(a));
+    if (pt && pt.dropped === 0){
+      const geom = { start, count, lo, hi, xAt, y, clampY, chartRight, padL, dec };
+      if (want("pe-chart")) out += window.MFXEngine.renderChartPatterns(pt, geom);
+      if (want("pe-cpat")) out += window.MFXEngine.renderCandlePatterns(pt, geom);
+      if (want("pe-wy")) out += window.MFXEngine.renderWyckoff(pt, geom);
+      if (want("pe-reg")) out += window.MFXEngine.renderRegime(pt, geom);
     }
   }
 
