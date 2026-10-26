@@ -46,8 +46,9 @@ test("duplicate and out-of-order ticks are ignored; state persists across reload
 
 test("page wiring: research card sits beside the frequency table and ticks feed it", () => {
   const html = readFileSync(new URL("../../index.html", import.meta.url), "utf8");
-  const a = html.indexOf('id="digFreqTable"'), b = html.indexOf('id="digResearchCard"');
-  assert.ok(a > 0 && b > a && b - a < 2500);
+  // the Under 2 / Over 7 bot card (uoCard) was deliberately placed directly under the frequency table, so the research card follows it
+  const a = html.indexOf('id="digFreqTable"'), u = html.indexOf('id="uoCard"'), b = html.indexOf('id="digResearchCard"');
+  assert.ok(a > 0 && u > a && b > u && b - a < 4000);
   assert.match(html, /window\.GAPRES\.ingest\(SYMBOL, d, epoch/);
   assert.match(html, /src\/ldpe\/gap-research\.js/);
 });

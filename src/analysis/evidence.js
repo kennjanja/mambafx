@@ -170,15 +170,20 @@ export function analyzeEvidence(input, opts = {}) {
       targets: [below && { price: below.level, why: 'liquidity pool below' }, srBelow && { price: srBelow.level, why: 'S/R below' }, pd && { price: pd.bottom, why: 'swing range low' }].filter(Boolean) },
   ];
 
-  const supporting = items.filter((i) => (verdict === 'bearish-lean' ? i.dir === -1 : i.dir === 1)).sort((x, y) => y.weight - x.weight);
-  const conflicting = items.filter((i) => i.dir !== 0 && (verdict === 'bearish-lean' ? i.dir === 1 : i.dir === -1)).sort((x, y) => y.weight - x.weight);
+  // Supporting/conflicting only exist relative to a reported lean; without one both sides are listed neutrally.
+  const byWeight = (x, y) => y.weight - x.weight;
+  const bullishItems = items.filter((i) => i.dir === 1).sort(byWeight), bearishItems = items.filter((i) => i.dir === -1).sort(byWeight);
+  const lean = verdict === 'bullish-lean' ? 1 : verdict === 'bearish-lean' ? -1 : 0;
+  const supporting = lean === 1 ? bullishItems : lean === -1 ? bearishItems : [];
+  const conflicting = lean === 1 ? bearishItems : lean === -1 ? bullishItems : [];
 
-  limitations.push('balance is a weighted evidence balance, not a probability; weights are heuristic and unvalidated');
-  limitations.push('volume-derived layers are proxies (no traded volume in the feed)');
+  limitations.push('balance is a weighted evidence balance, not a probability; weights are PROVISIONAL: heuristic, untuned and unvalidated');
+  limitations.push('VWAP and volume-profile layers are price/time proxies (no traded volume in the feed); they are drawn on charts but are not inputs to this balance');
+  limitations.push('groups are not independent: a recent swing break can appear in both the structure and break groups, and location (premium/discount) tends to oppose trend (EMA alignment)');
   if (!(opts.htf || []).length) limitations.push('no higher-timeframe data supplied: multi-timeframe alignment not assessed');
 
   return {
-    sufficient: true, verdict, balance, groups: glist, items, supporting, conflicting, conflicts, scenarios, missing, limitations, dropped,
+    sufficient: true, verdict, balance, groups: glist, items, supporting, conflicting, bullishItems, bearishItems, conflicts, scenarios, missing, limitations, dropped,
     facts: {
       price, atr: a, swingBias: lastSw ? lastSw.dir : 0, premiumDiscount: pd && { zone: pd.zone, position: pd.position },
       regime: pat.volatility.series[last]?.regime ?? 'unknown', squeeze: pat.volatility.series[last]?.squeeze ?? null,
