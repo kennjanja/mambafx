@@ -760,7 +760,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <label class="pa-chip"><input type="checkbox" id="pe-lv-ref"><span class="sw sr"></span> Opens &amp; pivots</label>
         <label class="pa-chip" title="Time-at-price proxy, not traded volume"><input type="checkbox" id="pe-lv-vp"><span class="sw vp"></span> Profile POC/VA (proxy)</label>
         <label class="pa-chip"><input type="checkbox" id="pe-lv-amd"><span class="sw amd"></span> AMD state</label>
-        <select id="pe-states" title="Zone lifecycle filter" style="background:var(--panel2,#111827);color:var(--text);border:1px solid #243049;border-radius:6px;font-size:11px;padding:2px 4px"><option value="live">live zones only</option><option value="all">include ended zones</option></select>
+        <select id="pe-states" title="Zone and chart-pattern lifecycle filter" style="background:var(--panel2,#111827);color:var(--text);border:1px solid #243049;border-radius:6px;font-size:11px;padding:2px 4px"><option value="live">live zones only</option><option value="all">include ended zones &amp; patterns</option></select>
       </div>
       <div class="pa-note">
         <b style="color:var(--accent)">ICT / Smart-Money structure:</b> support/resistance · demand &amp; supply zones · order blocks (OB+/OB−) · unmitigated fair-value gaps · liquidity at equal highs/lows · <b>BOS / CHoCH</b> · <b>premium/discount</b> equilibrium · <b>OTE</b> (0.62–0.79 entry) · <b>trendlines</b> (auto, from swing pivots) · <b>AMD</b> (accumulation → manipulation → distribution, ICT Power of 3).<br>
@@ -28611,7 +28611,7 @@ function drawTfCandles(g){
     const pt = tfAnalysis(g, arr, "enginePat", a => window.MFXEngine.analyzePat(a));
     if (pt && pt.dropped === 0){
       const geom = { start, count, lo, hi, xAt, y, clampY, chartRight, padL, dec };
-      if (want("pe-chart")) out += window.MFXEngine.renderChartPatterns(pt, geom);
+      if (want("pe-chart")) out += window.MFXEngine.renderChartPatterns(pt, geom, { live: (($("pe-states") || {}).value || "live") === "live" });
       if (want("pe-cpat")) out += window.MFXEngine.renderCandlePatterns(pt, geom);
       if (want("pe-wy")) out += window.MFXEngine.renderWyckoff(pt, geom);
       if (want("pe-reg")) out += window.MFXEngine.renderRegime(pt, geom);
