@@ -33550,14 +33550,14 @@ try {
     if (!e.sufficient){ body.innerHTML = "<b style=\"color:" + col + "\">insufficient data</b>" + li(e.limitations); return; }
     const sc = e.scenarios.map(s => (s.dir === 1 ? "Bullish" : "Bearish") + (s.supported ? " (supported)" : " (not supported)") + " - invalidation: " + (s.invalidation ? esc(s.invalidation.rule) + " @ " + s.invalidation.price.toFixed(4) : "n/a") + "; areas: " + (s.targets.map(t => t.price.toFixed(4) + " (" + esc(t.why) + ")").join(", ") || "n/a"));
     body.innerHTML = "<b style=\"color:" + col + "\">" + esc(e.verdict) + "</b> &middot; evidence balance " + e.balance.toFixed(2) + " (scale -1..1, not a probability) &middot; regime " + esc(e.facts.regime)
-      + "<div><b>Supporting</b>" + li(e.supporting.map(i => i.label + " [" + i.group + "]")) + "<b>Conflicting</b>" + li(e.conflicting.map(i => i.label + " [" + i.group + "]")) + (e.conflicts.length ? "<b>Conflicts</b>" + li(e.conflicts) : "") + "<b>Scenarios</b>" + li(sc) + "<b>Limitations</b>" + li(e.limitations.concat(e.missing.length ? ["missing: " + e.missing.join(", ")] : [])) + "</div>";
+      + "<div>" + (e.verdict === "inconclusive" ? "<b>Bullish evidence</b>" + li(e.bullishItems.map(i => i.label + " [" + i.group + "]")) + "<b>Bearish evidence</b>" + li(e.bearishItems.map(i => i.label + " [" + i.group + "]")) : "<b>Supporting</b>" + li(e.supporting.map(i => i.label + " [" + i.group + "]")) + "<b>Conflicting</b>" + li(e.conflicting.map(i => i.label + " [" + i.group + "]"))) + (e.conflicts.length ? "<b>Conflicts</b>" + li(e.conflicts) : "") + "<b>Scenarios</b>" + li(sc) + "<b>Limitations</b>" + li(e.limitations.concat(e.missing.length ? ["missing: " + e.missing.join(", ")] : [])) + "</div>";
   }
   sel.addEventListener("change", run);
   document.getElementById("evRefresh").addEventListener("click", run);
   setInterval(() => { if (body.offsetParent !== null) run(); }, 5000);
 })();
 </script>
-<script type="module">import * as E from "./src/analysis/all.js?v=4"; window.MFXEngine = E; if (typeof TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
+<script type="module">import * as E from "./src/analysis/all.js?v=5"; window.MFXEngine = E; if (typeof TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
 <script type="module" src="src/ldpe/under-over-bot.js?v=2"></script>
 <script type="module" src="src/consec/consecAlert.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
