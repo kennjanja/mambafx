@@ -7,7 +7,7 @@
  * -> Execution (execution.js). The UI only calls commands and reads `state`.
  */
 
-import { parseActiveSymbols, parseContractsFor, pickDurations, durationAllowed } from './universe.js?v=15';
+import { parseActiveSymbols, parseContractsFor, pickDurations, durationAllowed } from './universe.js?v=16';
 import { durationKey } from './validation.js?v=15';
 import { buildTradeSignal, modeMayAct, GATE } from './decision.js?v=16';
 import { predict3m } from './predict3m.js?v=17';
@@ -668,6 +668,7 @@ export async function placeOrder({ symbol, contractType, duration, source = 'man
 /** Signal-driven order: every purchase passes the signal book and the choke point. */
 export async function placeSignal(sig, source = 'semi') {
   if (!sig?.signalId) return { ok: false, reason: 'no triggered signal to execute' };
+  if (state.trades.some((t) => t.status === 'open' && t.symbol === sig.market)) return { ok: false, reason: `${sig.market} already has an open trade; it must expire before another signal on this market is traded` };
   const rec = state.records.find((x) => x.id === sig.recId); if (rec) { rec.taken = true; saveRecords(); }
   const flip = state.reverse && (sig.contractType === 'CALL' || sig.contractType === 'PUT');
   const stake = nextStake();

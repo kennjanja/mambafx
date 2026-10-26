@@ -101,3 +101,4 @@ dialog#bzRealDlg::backdrop{background:rgba(0,0,0,.6)}
 #sigMonitor .up{color:var(--bz-buy)}#sigMonitor .dn{color:var(--bz-sell)}#sigMonitor .mu{color:var(--bz-muted)}
 #sigMonitor .pill{display:inline-flex;padding:1px 7px;border-radius:999px;font-size:10px;font-weight:700;border:1px solid var(--bz-line);color:var(--bz-muted)}
 #sigMonitor .num{font-variant-numeric:tabular-nums}
+#sigMonitor .sm-notes{margin-top:6px;padding-top:6px;border-top:1px dashed var(--bz-line);font-size:11px;color:var(--bz-muted)}
