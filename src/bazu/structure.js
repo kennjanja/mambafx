@@ -12,7 +12,7 @@
  * Features are evaluated at candle closes only; other ticks are NaN.
  */
 
-import { findSwingPoints } from '../../mtf/src/analysis/swingPoints.js';
+import { findSwingPoints } from './sharedEngineAdapter.js';
 import { detectStructureBreaks, detectLiquiditySweep } from '../../mtf/src/analysis/structurePatterns.js';
 import { detectFVG, detectOrderBlock } from '../../mtf/src/analysis/zonePatterns.js';
 
