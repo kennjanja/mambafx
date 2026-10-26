@@ -752,6 +752,14 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <label class="pa-chip"><input type="checkbox" id="pe-chart"><span class="sw bos"></span> Chart patterns</label>
         <label class="pa-chip"><input type="checkbox" id="pe-wy"><span class="sw bos"></span> Wyckoff events</label>
         <label class="pa-chip"><input type="checkbox" id="pe-reg"><span class="sw bos"></span> Volatility regime</label>
+        <label class="pa-chip"><input type="checkbox" id="pe-lv-sr"><span class="sw sr"></span> S/R zones</label>
+        <label class="pa-chip"><input type="checkbox" id="pe-lv-sd"><span class="sw zone"></span> Supply / demand</label>
+        <label class="pa-chip"><input type="checkbox" id="pe-lv-fib"><span class="sw ote"></span> Premium/discount &amp; Fib</label>
+        <label class="pa-chip"><input type="checkbox" id="pe-lv-tl"><span class="sw trend"></span> Trendlines</label>
+        <label class="pa-chip"><input type="checkbox" id="pe-lv-ma"><span class="sw trend"></span> EMA 20/50/200</label>
+        <label class="pa-chip"><input type="checkbox" id="pe-lv-ref"><span class="sw sr"></span> Opens &amp; pivots</label>
+        <label class="pa-chip" title="Time-at-price proxy, not traded volume"><input type="checkbox" id="pe-lv-vp"><span class="sw vp"></span> Profile POC/VA (proxy)</label>
+        <label class="pa-chip"><input type="checkbox" id="pe-lv-amd"><span class="sw amd"></span> AMD state</label>
         <select id="pe-states" title="Zone lifecycle filter" style="background:var(--panel2,#111827);color:var(--text);border:1px solid #243049;border-radius:6px;font-size:11px;padding:2px 4px"><option value="live">live zones only</option><option value="all">include ended zones</option></select>
       </div>
       <div class="pa-note">
@@ -26649,7 +26657,7 @@ window.addEventListener("mfx:modules-changed", () => {
 });
 
 // Overlay toggles redraw every timeframe chart; chips also reflect on/off styling
-["pa-sr","pa-zones","pa-ob","pa-fvg","pa-liq","pa-bos","pa-eq","pa-vp","pa-ote","pa-trend","pa-amd","pe-zones","pe-struct","pe-liq","pe-cpat","pe-chart","pe-wy","pe-reg"].forEach(id => {
+["pa-sr","pa-zones","pa-ob","pa-fvg","pa-liq","pa-bos","pa-eq","pa-vp","pa-ote","pa-trend","pa-amd","pe-zones","pe-struct","pe-liq","pe-cpat","pe-chart","pe-wy","pe-reg","pe-lv-sr","pe-lv-sd","pe-lv-fib","pe-lv-tl","pe-lv-ma","pe-lv-ref","pe-lv-vp","pe-lv-amd"].forEach(id => {
   const el = document.getElementById(id);
   const key = "mfx_overlay_" + id;
   if (el){
@@ -28598,6 +28606,15 @@ function drawTfCandles(g){
       if (want("pe-cpat")) out += window.MFXEngine.renderCandlePatterns(pt, geom);
       if (want("pe-wy")) out += window.MFXEngine.renderWyckoff(pt, geom);
       if (want("pe-reg")) out += window.MFXEngine.renderRegime(pt, geom);
+    }
+  }
+
+  const lvIds = ["pe-lv-sr","pe-lv-sd","pe-lv-fib","pe-lv-tl","pe-lv-ma","pe-lv-ref","pe-lv-vp","pe-lv-amd"];
+  if (window.MFXEngine && lvIds.some(want)){
+    const L = tfAnalysis(g, arr, "engineLv", a => window.MFXEngine.analyzeLv(a));
+    if (L && L.dropped === 0){
+      const geom = { start, count, lo, hi, xAt, y, clampY, chartRight, padL, dec };
+      out += window.MFXEngine.renderLevels(L, geom, { showSR: want("pe-lv-sr"), showSD: want("pe-lv-sd"), showPD: want("pe-lv-fib"), showFib: want("pe-lv-fib"), showTL: want("pe-lv-tl"), showMA: want("pe-lv-ma"), showRef: want("pe-lv-ref"), showProfile: want("pe-lv-vp"), showAMD: want("pe-lv-amd") });
     }
   }
 
@@ -33508,7 +33525,7 @@ try {
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>
-<script type="module">import * as E from "./src/analysis/all.js?v=1"; window.MFXEngine = E; if (typeof TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
+<script type="module">import * as E from "./src/analysis/all.js?v=3"; window.MFXEngine = E; if (typeof TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
 <script type="module" src="src/ldpe/under-over-bot.js?v=2"></script>
 <script type="module" src="src/consec/consecAlert.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>

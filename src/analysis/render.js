@@ -134,3 +134,64 @@ export function renderRegime(pat, g) {
   const pct = v.atrPercentile == null ? 'n/a' : Math.round(v.atrPercentile * 100) + 'p';
   return `<text class="eng-reg" x="${g.padL + 2}" y="9" fill="#9aa7bd" font-size="6.5" font-family="monospace">vol ${v.regime} (ATR ${pct})${v.squeeze ? ' · squeeze' : ''}</text>`;
 }
+
+export function renderLevels(L, g, { showSR = true, showSD = true, showPD = true, showFib = true, showTL = true, showMA = true, showRef = true, showProfile = true, showAMD = true, srMax = 6, sdMax = 6 } = {}) {
+  let s = '';
+  const px = L.candles[L.candles.length - 1].close;
+  const line = (cls, y, col, dash, label, x0 = g.padL, w = 0.7) =>
+    `<g class="${cls}"><line x1="${x0.toFixed(1)}" y1="${y.toFixed(1)}" x2="${g.chartRight}" y2="${y.toFixed(1)}" stroke="${col}" stroke-width="${w}"${dash ? ` stroke-dasharray="${dash}"` : ''}/><text x="${g.chartRight - 2}" y="${(y - 2).toFixed(1)}" fill="${col}" font-size="6.5" text-anchor="end" font-family="monospace">${label}</text></g>`;
+  const inV = (p) => p >= g.lo && p <= g.hi;
+  if (showSR) {
+    const act = L.sr.filter((z) => z.status === 'active' && z.updatedIndex <= g.start + g.count).sort((a, b) => b.score - a.score).slice(0, srMax);
+    for (const z of act) {
+      if (z.high < g.lo || z.low > g.hi) continue;
+      const yt = g.clampY(z.high), yb = g.clampY(z.low), col = z.role === 'resistance' ? '255,77,94' : '22,224,139';
+      s += `<g class="lv-sr"><rect x="${g.padL}" y="${yt.toFixed(1)}" width="${(g.chartRight - g.padL).toFixed(1)}" height="${Math.max(1.5, yb - yt).toFixed(1)}" fill="rgba(${col},0.08)" stroke="rgba(${col},0.4)" stroke-width="0.5"/><text x="${g.padL + 2}" y="${(yt - 2).toFixed(1)}" fill="rgb(${col})" font-size="6.5" font-family="monospace">${z.role === 'resistance' ? 'R' : 'S'} ×${z.touches}${z.flips ? ' flip' + z.flips : ''}</text></g>`;
+    }
+  }
+  if (showSD) {
+    const sd = L.supplyDemand.filter((z) => z.status === 'active' && z.createdIndex < g.start + g.count && z.top >= g.lo && z.bottom <= g.hi)
+      .sort((a, b) => b.confirmedIndex - a.confirmedIndex).slice(0, sdMax);
+    for (const z of sd) {
+      const yt = g.clampY(z.top), yb = g.clampY(z.bottom), col = z.dir === 1 ? '60,200,255' : '255,140,60', x0 = Math.max(g.padL, g.xAt(z.createdIndex));
+      s += `<g class="lv-sd"><rect x="${x0.toFixed(1)}" y="${yt.toFixed(1)}" width="${(g.chartRight - x0).toFixed(1)}" height="${Math.max(1.5, yb - yt).toFixed(1)}" fill="rgba(${col},0.13)" stroke="rgba(${col},0.6)" stroke-width="0.6"/><text x="${(x0 + 2).toFixed(1)}" y="${(yt + 7).toFixed(1)}" fill="rgb(${col})" font-size="6.5" font-family="monospace">${z.kind === 'DEMAND' ? 'DEM' : 'SUP'}${z.testCount ? ' ×' + z.testCount : ''}</text></g>`;
+    }
+  }
+  if (showPD && L.premiumDiscount) {
+    const pd = L.premiumDiscount;
+    for (const [k, v] of [['75%', pd.q75], ['EQ', pd.eq], ['25%', pd.q25]]) if (inV(v)) s += line('lv-pd', g.clampY(v), '#8aa0c8', '1,3', `P/D ${k}`);
+  }
+  if (showFib && L.fib) {
+    for (const l of L.fib.levels) if ([0.5, 0.618, 0.705, 0.786, 1.272, 1.618, -0.27, -0.62].includes(l.ratio) && inV(l.price)) s += line('lv-fib', g.clampY(l.price), l.ratio === 0.705 ? '#ffd24d' : '#c0a0ff', '2,3', `fib ${l.ratio}`, g.padL, l.ratio === 0.705 ? 1 : 0.6);
+  }
+  if (showTL) {
+    for (const t of L.trendlines.filter((t) => t.status === 'active' && t.p2.index >= g.start - 60).sort((a, b) => b.touches - a.touches).slice(0, 3)) {
+      const last = g.start + g.count - 1, ya = t.p1.price + t.slope * (g.start - t.p1.index), yb2 = t.p1.price + t.slope * (last - t.p1.index);
+      s += `<g class="lv-tl"><line x1="${g.xAt(g.start).toFixed(1)}" y1="${g.clampY(ya).toFixed(1)}" x2="${g.xAt(last).toFixed(1)}" y2="${g.clampY(yb2).toFixed(1)}" stroke="${t.kind === 'support-line' ? '#16e08b' : '#ff4d5e'}" stroke-width="0.8" stroke-dasharray="5,2"/></g>`;
+    }
+  }
+  if (showMA) {
+    const cols = { 20: '#ffd24d', 50: '#4dc3ff', 200: '#ff7ad9' };
+    for (const [per, arr] of Object.entries(L.emas)) {
+      let d = '';
+      for (let i = g.start; i < g.start + g.count; i++) if (arr[i] != null && inV(arr[i])) d += `${d ? 'L' : 'M'}${g.xAt(i).toFixed(1)},${g.clampY(arr[i]).toFixed(1)}`;
+      if (d) s += `<g class="lv-ema"><path d="${d}" fill="none" stroke="${cols[per] || '#aaa'}" stroke-width="0.8"/></g>`;
+    }
+  }
+  if (showRef) {
+    const o = L.opens[g.start + g.count - 1];
+    if (o) {
+      if (inV(o.dayOpen)) s += line('lv-ref', g.clampY(o.dayOpen), '#9aa7bd', '1,2', 'day open');
+      if (inV(o.weekOpen)) s += line('lv-ref', g.clampY(o.weekOpen), '#9aa7bd', '1,2', 'week open');
+      if (o.pivots) for (const [k, v] of Object.entries(o.pivots)) if (inV(v)) s += line('lv-ref', g.clampY(v), '#7d8aa5', '2,4', k.toUpperCase(), g.padL, 0.5);
+    }
+  }
+  if (showProfile && L.profile) {
+    for (const [k, v] of [['POC*', L.profile.poc], ['VAH*', L.profile.vah], ['VAL*', L.profile.val]]) if (inV(v)) s += line('lv-vp', g.clampY(v), '#e0b0ff', k === 'POC*' ? '' : '3,3', k + ' (proxy)');
+  }
+  if (showAMD) {
+    const a = L.amd[g.start + g.count - 1];
+    if (a && a.state !== 'none') s += `<text class="lv-amd" x="${g.padL + 2}" y="18" fill="#ffd24d" font-size="6.5" font-family="monospace">AMD: ${a.state}${a.distributionDir ? (a.distributionDir === 1 ? ' ?' : ' ?') : ''}</text>`;
+  }
+  return s;
+}
