@@ -779,14 +779,30 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       </div>
     </div>
     <div class="tf-grid" id="tfGrid"><!-- cards injected by buildTfCards() --></div>
+      <div id="sigMonitor" class="tf-card" style="margin-top:16px;padding:12px">
+        <div class="sm-head"><strong>Signal monitor</strong><span class="sm-sub">active Bazu signals, tracked until their predicted duration elapses &middot; click one to open that market</span></div>
+        <div id="sigMonitorBody" class="sm-body"><div class="note">No active Bazu signals.</div></div>
+      </div>
       <div id="evidencePanel" class="tf-card" style="margin-top:16px;padding:12px">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <strong>Evidence summary</strong>
-          <span style="color:var(--muted);font-size:11px">descriptive only &middot; not a probability &middot; no trading decision uses this</span>
-          <select id="evTf" style="margin-left:auto;font-size:11px"></select>
-          <button class="tool-btn" id="evRefresh">Refresh</button>
+          <strong>Evidence summary and Bazu trade signal</strong>
+          <button class="tool-btn" id="tfOpenBazu" style="margin-left:auto" onclick="showPage('bazu')">Open Bazu page</button>
         </div>
-        <div id="evBody" style="font-size:12px;margin-top:8px;line-height:1.5">Open a timeframe with at least 60 candles.</div>
+        <div class="ev-combo">
+          <div class="ev-col">
+            <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <b>Evidence</b>
+              <span style="color:var(--muted);font-size:11px">descriptive only &middot; not a probability &middot; no trading decision uses this</span>
+              <select id="evTf" style="margin-left:auto;font-size:11px"></select>
+              <button class="tool-btn" id="evRefresh">Refresh</button>
+            </div>
+            <div id="evBody" style="font-size:12px;margin-top:8px;line-height:1.5">Open a timeframe with at least 60 candles.</div>
+          </div>
+          <div class="ev-col">
+            <b>Bazu trade signal</b> <span style="color:var(--muted);font-size:11px">read-only</span>
+            <div id="tfBazuBody" class="tf-bazu-body" style="margin-top:8px"><div class="note">Loading...</div></div>
+          </div>
+        </div>
       </div>
     <footer>
       Each chart shows the latest 50 candles for the selected market, pulled from Deriv and updated live. Drag/scroll to pan &amp; zoom, or use the on-chart buttons. Switch markets from the selector up top.
@@ -26293,6 +26309,8 @@ function resetState(){
   $("log").innerHTML = '<div class="log-empty">No 5-in-a-row runs detected yet. They\'ll appear here the moment one fires.</div>';
 }
 
+// Used by the Candle Charts signal monitor to point the whole app at a market.
+window.mfxSwitchMarket = function(code){ if (!MARKETS[code] || code === SYMBOL) return; const sel = $("marketSel"); if (sel) sel.value = code; switchMarket(code); };
 function switchMarket(code){
   SYMBOL = code;
   $("titleMarket").textContent = MARKETS[code];
@@ -26393,7 +26411,7 @@ function tfIngestTick(g, epoch, price){
 function buildTfCards(){
   const grid = document.getElementById("tfGrid");
   if (!grid || grid.dataset.built) return;
-  // Highest timeframe first, 30s last; the Bazu signal card follows the last (30s) card.
+  // Highest timeframe first, 30s last.
   grid.innerHTML = [...TIMEFRAMES].reverse().map(tf => `
     <div class="tf-card" id="tf-card-${tf.g}" data-g="${tf.g}">
       <div class="tf-head" data-g="${tf.g}" title="Click to expand / collapse" style="cursor:pointer">
@@ -26424,7 +26442,7 @@ function buildTfCards(){
         <div class="of-cell"><div class="of-label">Imbalance</div><div id="tf-imb-${tf.g}" class="of-val of-neutral">—</div></div>
         <div class="of-cell"><div class="of-label">Absorption</div><div id="tf-abs-${tf.g}" class="of-val of-neutral">—</div></div>
       </div>
-    </div>`).join("") + `<div class="tf-card tf-bazu" id="tfBazuCard"><div class="tf-head" style="cursor:default"><div class="tf-name"><b>Bazu</b> trade signal</div><span class="tf-status">read-only</span></div><div id="tfBazuBody" class="tf-bazu-body"><div class="note">Loading...</div></div></div>`;
+    </div>`).join("") ;
   grid.dataset.built = "1";
   attachTfNav();
   attachTfExpand();
@@ -33617,7 +33635,7 @@ try {
   </div>
 </div>
 
-<script type="module" src="src/bazu/page.js?v=28"></script>
+<script type="module" src="src/bazu/page.js?v=29"></script>
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>
@@ -33637,7 +33655,7 @@ try {
     if (!e.sufficient){ body.innerHTML = "<b style=\"color:" + col + "\">insufficient data</b>" + li(e.limitations); return; }
     const sc = e.scenarios.map(s => (s.dir === 1 ? "Bullish" : "Bearish") + (s.supported ? " (supported)" : " (not supported)") + " - invalidation: " + (s.invalidation ? esc(s.invalidation.rule) + " @ " + s.invalidation.price.toFixed(4) : "n/a") + "; areas: " + (s.targets.map(t => t.price.toFixed(4) + " (" + esc(t.why) + ")").join(", ") || "n/a"));
     body.innerHTML = "<b style=\"color:" + col + "\">" + esc(e.verdict) + "</b> &middot; evidence balance " + e.balance.toFixed(2) + " (scale -1..1, not a probability) &middot; regime " + esc(e.facts.regime)
-      + "<div>" + (e.verdict === "inconclusive" ? "<b>Bullish evidence</b>" + li(e.bullishItems.map(i => i.label + " [" + i.group + "]")) + "<b>Bearish evidence</b>" + li(e.bearishItems.map(i => i.label + " [" + i.group + "]")) : "<b>Supporting</b>" + li(e.supporting.map(i => i.label + " [" + i.group + "]")) + "<b>Conflicting</b>" + li(e.conflicting.map(i => i.label + " [" + i.group + "]"))) + (e.conflicts.length ? "<b>Conflicts</b>" + li(e.conflicts) : "") + "<b>Scenarios</b>" + li(sc) + "<b>Limitations</b>" + li(e.limitations.concat(e.missing.length ? ["missing: " + e.missing.join(", ")] : [])) + "</div>";
+      + "<div>" + (e.verdict === "inconclusive" ? "<b>Bullish evidence</b>" + li(e.bullishItems.map(i => i.label + " [" + i.group + "]")) + "<b>Bearish evidence</b>" + li(e.bearishItems.map(i => i.label + " [" + i.group + "]")) : "<b>Supporting</b>" + li(e.supporting.map(i => i.label + " [" + i.group + "]")) + "<b>Conflicting</b>" + li(e.conflicting.map(i => i.label + " [" + i.group + "]"))) + (e.conflicts.length ? "<b>Conflicts</b>" + li(e.conflicts) : "") + "<b>Scenarios</b>" + li(sc) + "</div>";
   }
   sel.addEventListener("change", run);
   document.getElementById("evRefresh").addEventListener("click", run);

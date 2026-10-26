@@ -504,6 +504,60 @@ function renderSignalMirror() {
   if (html !== _mirrorHtml) { _mirrorHtml = html; host.innerHTML = html; }
 }
 setInterval(renderSignalMirror, 1000);
+
+// ---- Signal monitor (Candle Charts page): every tradable Bazu signal is tracked until its predicted duration lapses.
+// Read-only observer. "Move" compares the latest tick with the price seen when tracking began (not a Deriv settlement).
+const MON_KEY = 'bz_signal_monitor_v1', MON_KEEP_CLOSED = 6;
+let monitor = (() => { try { const v = JSON.parse(localStorage.getItem(MON_KEY)); return Array.isArray(v) ? v : []; } catch { return []; } })();
+const fmtClock = (s) => { s = Math.max(0, Math.ceil(s)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
+function monitorTick() {
+  const now = Date.now();
+  for (const m of E.state.markets.values()) {
+    const sig = m.signal;
+    if (!sig || !sig.direction || sig.gate !== GATE.OK || !(sig.durationSec > 0) || !(m.last > 0)) continue;
+    const key = sig.signalId || `${m.symbol}|${sig.direction}`;
+    const seen = monitor.find((x) => x.key === key && (sig.signalId ? true : !x.closedAt));
+    if (seen) continue;
+    monitor.push({ key, symbol: m.symbol, name: m.name, direction: sig.direction, dur: sig.duration, durMs: sig.durationSec * 1000, strength: sig.strength, entry: m.last, dp: m.dp, startedAt: now, closedAt: null, exit: null });
+  }
+  for (const x of monitor) {
+    if (x.closedAt || now < x.startedAt + x.durMs) continue;
+    const m = E.state.markets.get(x.symbol);
+    x.closedAt = now; x.exit = m && m.last > 0 ? m.last : x.entry;
+  }
+  const closed = monitor.filter((x) => x.closedAt).sort((a, b) => b.closedAt - a.closedAt).slice(0, MON_KEEP_CLOSED);
+  monitor = monitor.filter((x) => !x.closedAt).concat(closed);
+  try { localStorage.setItem(MON_KEY, JSON.stringify(monitor)); } catch { /* storage full or blocked */ }
+}
+function moveHtml(x, price) {
+  const d = (price - x.entry) * (x.direction === 'Rise' ? 1 : -1);
+  const cls = d > 0 ? 'up' : d < 0 ? 'dn' : 'mu';
+  return `<span class="${cls} num">${d > 0 ? 'in favour' : d < 0 ? 'against' : 'level'} ${d >= 0 ? '+' : ''}${d.toFixed(x.dp ?? 2)}</span>`;
+}
+function renderMonitor() {
+  monitorTick();
+  const host = $('sigMonitorBody'); if (!host || document.hidden || !host.offsetParent) return;
+  const now = Date.now();
+  const rows = monitor.slice().sort((a, b) => (a.closedAt ? 1 : 0) - (b.closedAt ? 1 : 0) || a.startedAt - b.startedAt).map((x) => {
+    const m = E.state.markets.get(x.symbol), spot = x.closedAt ? x.exit : (m && m.last > 0 ? m.last : x.entry);
+    const frac = x.closedAt ? 1 : Math.min(1, (now - x.startedAt) / x.durMs);
+    const status = x.closedAt ? '<b class="mu">CLOSED</b>' : '<b class="up">ACTIVE</b>';
+    return `<div class="sm-row ${x.closedAt ? 'closed' : ''}" data-sym="${esc(x.symbol)}" title="Open ${esc(x.symbol)} on Candle Charts and Bazu">
+      <div class="sm-top"><span><b>${esc(x.symbol)}</b> <span class="mu">${esc(x.name || '')}</span></span><span><b class="${x.direction === 'Rise' ? 'up' : 'dn'}">${esc(x.direction)}</b> <span class="pill">${esc(x.dur)}</span> ${status}</span></div>
+      <div class="sm-bar"><i style="width:${(frac * 100).toFixed(1)}%"></i></div>
+      <div class="sm-bot num"><span>${x.closedAt ? 'closed ' + new Date(x.closedAt).toLocaleTimeString() : 'remaining <b class="up">' + fmtClock((x.startedAt + x.durMs - now) / 1000) + '</b>'}</span><span>strength ${pct(x.strength, 0)}</span><span>entry ${x.entry.toFixed(x.dp ?? 2)} &rarr; ${spot.toFixed(x.dp ?? 2)}</span>${moveHtml(x, spot)}</div></div>`;
+  }).join('');
+  const html = rows || '<div class="note">No active Bazu signals. Signals appear here when Bazu marks one tradable and stay until their predicted duration lapses.</div>';
+  if (host._html !== html) { host._html = html; host.innerHTML = html; }
+}
+document.addEventListener('click', (e) => {
+  const row = e.target.closest && e.target.closest('#sigMonitorBody .sm-row'); if (!row) return;
+  const sym = row.dataset.sym;
+  E.state.selected = sym;
+  if (typeof window.mfxSwitchMarket === 'function') window.mfxSwitchMarket(sym);
+  _mirrorHtml = ''; renderSignalMirror(); render();
+});
+setInterval(renderMonitor, 1000);
 const mtfCache = new Map();
 function mtfHtml(m, sig) {
   const cfg = configFor(m.symbol);
