@@ -161,6 +161,16 @@ footer{text-align:center;color:var(--muted);font-size:11px;margin-top:22px;line-
 .tf-head-right{display:flex;align-items:center;gap:8px}
 .tf-chart{width:100%;height:240px;display:block;background:#0d121d;border:1px solid var(--line);border-radius:10px;touch-action:none}
 .tf-chart-wrap{position:relative}
+.tf-expand{font-size:13px;color:var(--muted);line-height:1}.tf-head:hover .tf-expand{color:var(--accent)}
+#tfFullLayer{display:none;position:fixed;inset:0;z-index:100000;background:rgba(5,8,14,.97);padding:10px;flex-direction:column;gap:8px}
+#tfFullLayer.open{display:flex}
+#tfFullBar{display:flex;align-items:center;justify-content:space-between;font-size:12px;color:var(--muted)}
+#tfFullBar button{background:#0d121d;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:5px 12px;cursor:pointer;font-family:inherit;font-size:12px}
+#tfFullGrid{flex:1;min-height:0;display:grid;gap:10px}
+#tfFullGrid .tf-card{min-height:0;min-width:0;padding:10px;border-color:var(--accent)}
+#tfFullGrid .tf-chart-wrap{flex:1;min-height:0}
+#tfFullGrid .tf-chart{height:100%}
+#tfFullGrid .tf-of-title,#tfFullGrid .tf-of{display:none}
 .tf-nav{position:absolute;top:6px;right:6px;display:flex;gap:3px;background:rgba(10,14,23,.72);border:1px solid var(--line);border-radius:8px;padding:3px}
 .tf-btn{width:20px;height:20px;display:flex;align-items:center;justify-content:center;font-size:11px;line-height:1;color:var(--muted);background:#0d121d;border:1px solid var(--line);border-radius:5px;cursor:pointer;padding:0;font-family:inherit}
 .tf-btn:hover{color:var(--accent);border-color:var(--accent)}
@@ -26329,6 +26339,7 @@ function switchMarket(code){
 // updates. Each granularity is a separate subscription keyed by req_id.
 // =====================================================================
 const TIMEFRAMES = [
+  { g: 30,    label: "30 sec", num: "30", unit: "second", synth: true },   // Deriv has no 30s candles: built from ticks
   { g: 60,    label: "1 min",  num: "1",  unit: "minute" },
   { g: 300,   label: "5 min",  num: "5",  unit: "minute" },
   { g: 600,   label: "10 min", num: "10", unit: "minute" },
@@ -26363,17 +26374,33 @@ TIMEFRAMES.forEach(tf => tfData[tf.g] = []);
 // map req_id -> granularity for initial history responses
 const tfReqMap = {};
 
-// Build the six timeframe cards (chart + timer + order-flow readout)
+// Aggregate a tick into the synthetic timeframe g (bucketed by epoch; stale/out-of-order ticks are ignored)
+const tfSynthLast = {};
+function tfIngestTick(g, epoch, price){
+  if (!Number.isFinite(epoch) || !Number.isFinite(price)) return;
+  const arr = tfData[g], b = Math.floor(epoch / g) * g, last = arr[arr.length - 1];
+  if (last && last.epoch === b){
+    if (price > last.high) last.high = price;
+    if (price < last.low) last.low = price;
+    last.close = price;
+  } else if (!last || b > last.epoch){
+    arr.push({ epoch: b, open: price, high: price, low: price, close: price });
+    if (arr.length > TF_COUNT){ arr.shift(); const v = tfView[g]; if (v && v.start != null) v.start = Math.max(0, v.start - 1); }
+  }
+}
+
+// Build the timeframe cards (chart + timer + order-flow readout)
 function buildTfCards(){
   const grid = document.getElementById("tfGrid");
   if (!grid || grid.dataset.built) return;
   grid.innerHTML = TIMEFRAMES.map(tf => `
-    <div class="tf-card">
-      <div class="tf-head">
+    <div class="tf-card" id="tf-card-${tf.g}" data-g="${tf.g}">
+      <div class="tf-head" data-g="${tf.g}" title="Click to expand / collapse" style="cursor:pointer">
         <div class="tf-name"><b>${tf.num}</b> ${tf.unit}</div>
         <div style="display:flex;align-items:center;gap:8px">
           <span id="tf-timer-${tf.g}" class="tf-timer">--:--</span>
           <span id="tf-status-${tf.g}" class="tf-status">loading…</span>
+          <span class="tf-expand" id="tf-exp-${tf.g}">⤢</span>
         </div>
       </div>
       <div id="tf-meta-${tf.g}" class="tf-meta"></div>
@@ -26397,30 +26424,61 @@ function buildTfCards(){
         <div class="of-cell"><div class="of-label">Absorption</div><div id="tf-abs-${tf.g}" class="of-val of-neutral">—</div></div>
       </div>
     </div>`).join("");
-  // Append the "Predicted 5-min" card
-  grid.innerHTML += `<div class="tf-card" id="predCard" style="border:1.5px solid rgba(86,182,255,0.35);background:rgba(86,182,255,0.04)">
-    <div class="tf-head">
-      <div class="tf-name" style="color:var(--accent)">⚡ <b>Predicted</b> 5 min</div>
-      <div style="display:flex;align-items:center;gap:8px">
-        <span id="pred-regime-badge" style="font-size:10px;font-weight:700;padding:2px 10px;border-radius:6px;background:#131c2e;color:var(--muted)">computing…</span>
-        <span id="pred-confidence" style="font-size:9px;color:var(--muted)"></span>
-      </div>
-    </div>
-    <div id="pred-meta" style="font-size:9px;color:var(--muted);padding:0 4px 6px;min-height:18px;line-height:1.5"></div>
-    <div class="tf-chart-wrap">
-      <svg id="pred-chart" class="tf-chart" viewBox="0 0 600 240" preserveAspectRatio="none"></svg>
-    </div>
-    <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:4px;padding:8px 4px 4px">
-      ${[1,2,3,4,5].map(i=>`<div style="text-align:center;background:#0a0e17;border-radius:6px;padding:4px 2px">
-        <div style="color:var(--muted);font-size:9px;margin-bottom:2px">C${i}</div>
-        <div id="pred-c${i}-dir" style="font-size:13px;line-height:1">—</div>
-        <div id="pred-c${i}-rng" style="color:var(--muted);font-size:8px;margin-top:2px;font-variant-numeric:tabular-nums">—</div>
-      </div>`).join("")}
-    </div>
-    <div style="padding:4px 4px 0;font-size:9px;color:var(--muted);line-height:1.6" id="pred-scores"></div>
-  </div>`;
   grid.dataset.built = "1";
   attachTfNav();
+  attachTfExpand();
+}
+
+// Expand: click a card header to enlarge it to (almost) full screen; several can be expanded at once
+// and share the full-screen layer. Cards are moved (not cloned), so charts keep their own state and listeners.
+const tfExpanded = [];   // granularities, in the order they were expanded
+const tfPlaceholders = {};
+function tfLayoutFull(){
+  const layer = document.getElementById("tfFullLayer"), grid = document.getElementById("tfFullGrid");
+  if (!layer) return;
+  const n = tfExpanded.length;
+  layer.classList.toggle("open", n > 0);
+  document.body.style.overflow = n > 0 ? "hidden" : "";
+  const cols = n <= 1 ? 1 : n <= 4 ? 2 : 3;
+  grid.style.gridTemplateColumns = "repeat(" + cols + ",minmax(0,1fr))";
+  grid.style.gridTemplateRows = "repeat(" + Math.max(1, Math.ceil(n / cols)) + ",minmax(0,1fr))";
+  document.getElementById("tfFullCount").textContent = n + " expanded";
+  requestAnimationFrame(() => tfExpanded.forEach(g => drawTfCandles(g)));
+}
+function tfToggleExpand(g){
+  const card = document.getElementById("tf-card-" + g), grid = document.getElementById("tfFullGrid");
+  if (!card || !grid) return;
+  const i = tfExpanded.indexOf(g);
+  if (i < 0){
+    const ph = document.createElement("div"); ph.style.display = "none";
+    card.parentNode.insertBefore(ph, card); tfPlaceholders[g] = ph;
+    card.classList.add("tf-full"); grid.appendChild(card);
+    tfExpanded.push(g);
+  } else {
+    tfExpanded.splice(i, 1);
+    card.classList.remove("tf-full");
+    const ph = tfPlaceholders[g]; if (ph){ ph.replaceWith(card); delete tfPlaceholders[g]; }
+  }
+  const ic = document.getElementById("tf-exp-" + g); if (ic) ic.textContent = i < 0 ? "⤡" : "⤢";
+  tfLayoutFull();
+  drawTfCandles(g);
+}
+function tfCollapseAll(){ tfExpanded.slice().forEach(g => tfToggleExpand(g)); }
+function attachTfExpand(){
+  if (!document.getElementById("tfFullLayer")){
+    const layer = document.createElement("div"); layer.id = "tfFullLayer";
+    layer.innerHTML = '<div id="tfFullBar"><span>Expanded timeframes &middot; <span id="tfFullCount">0 expanded</span> &middot; click a card header to collapse it &middot; Esc closes all</span><button id="tfFullClose">Close all</button></div><div id="tfFullGrid"></div>';
+    document.body.appendChild(layer);
+    document.getElementById("tfFullClose").addEventListener("click", tfCollapseAll);
+    document.addEventListener("keydown", e => { if (e.key === "Escape" && tfExpanded.length) tfCollapseAll(); });
+    window.addEventListener("resize", () => tfExpanded.forEach(g => drawTfCandles(g)));
+  }
+  const onHead = e => {
+    const h = e.target.closest && e.target.closest(".tf-head[data-g]");
+    if (h) tfToggleExpand(Number(h.dataset.g));
+  };
+  document.getElementById("tfGrid").addEventListener("click", onHead);
+  document.getElementById("tfFullGrid").addEventListener("click", onHead);
 }
 
 // Pan/zoom: apply an action to a chart's viewport, then redraw it
@@ -26707,6 +26765,24 @@ function connectTfWs(){
       console.warn("TF candle error:", msg.error.message);
       return;
     }
+    // 30s candles are built from the tick stream (history, then live ticks)
+    if (msg.msg_type === "history" && msg.history && Array.isArray(msg.history.prices)){
+      const g = tfReqMap[msg.req_id];
+      if (!g) return;
+      tfData[g] = [];
+      const t = msg.history.times, pr = msg.history.prices;
+      for (let k = 0; k < pr.length; k++) tfIngestTick(g, Number(t[k]), Number(pr[k]));
+      const st = $("tf-status-" + g); if (st) st.textContent = "live";
+      drawTfCandles(g);
+      return;
+    }
+    if (msg.msg_type === "tick" && msg.tick){
+      const g = tfReqMap[msg.req_id];
+      if (!g || !tfData[g]) return;
+      tfIngestTick(g, Number(msg.tick.epoch), Number(msg.tick.quote));
+      drawTfCandles(g);
+      return;
+    }
     // Initial history: full candle array
     if (msg.msg_type === "candles" && Array.isArray(msg.candles)){
       const g = tfReqMap[msg.req_id] || (msg.echo_req && Number(msg.echo_req.granularity));
@@ -26749,11 +26825,17 @@ function requestAllTimeframes(){
   if (!tfWs || tfWs.readyState !== WebSocket.OPEN) return;
   // drop any existing candle subscriptions, then request fresh per timeframe
   tfWs.send(JSON.stringify({ forget_all: "candles" }));
+  tfWs.send(JSON.stringify({ forget_all: "ticks" }));
   TIMEFRAMES.forEach((tf, i) => {
     const reqId = 5000 + i;
     tfReqMap[reqId] = tf.g;
     tfData[tf.g] = [];
     const st = $("tf-status-" + tf.g); if (st) st.textContent = "loading…";
+    if (tf.synth){
+      tfSynthLast[tf.g] = 0;
+      tfWs.send(JSON.stringify({ ticks_history: _tickSubscriptionSymbol, end: "latest", count: 5000, style: "ticks", subscribe: 1, req_id: reqId }));
+      return;
+    }
     tfWs.send(JSON.stringify({
       ticks_history: _tickSubscriptionSymbol, end: "latest", count: TF_COUNT,
       style: "candles", granularity: tf.g, subscribe: 1, req_id: reqId
@@ -28369,7 +28451,11 @@ function drawTfCandles(g){
   const svg = $("tf-chart-" + g);
   if (!svg) return;
   const arr = tfData[g] || [];
-  const W = 600, H = 240, padT = 12, padB = 16, padL = 6, padR = 56;
+  let W = 600, H = 240;
+  const full = svg.closest(".tf-card.tf-full");
+  if (full && svg.clientWidth > 50 && svg.clientHeight > 50){ W = Math.max(300, Math.round(svg.clientWidth / 1.5)); H = Math.max(150, Math.round(svg.clientHeight / 1.5)); }
+  svg.setAttribute("viewBox", "0 0 " + W + " " + H);
+  const padT = 12, padB = 16, padL = 6, padR = 56;
   if (arr.length < 2){
     svg.innerHTML = `<text x="${W/2}" y="${H/2}" fill="#475569" font-size="12" text-anchor="middle" font-family="monospace">loading candles…</text>`;
     return;
@@ -28388,7 +28474,7 @@ function drawTfCandles(g){
   const range = hi - lo;
   const y = p => padT + (H - padT - padB) * (1 - (p - lo) / range);
   const slot = (W - padL - padR) / count;
-  const bodyW = Math.max(1.2, Math.min(slot * 0.66, 12));
+  const bodyW = Math.max(1.2, Math.min(slot * 0.66, 12 * W / 600));
   const dec = decimals;
 
   let out = "";
