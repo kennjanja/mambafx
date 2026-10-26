@@ -26751,79 +26751,19 @@ function requestAllTimeframes(){
 
 // Swing pivots: index i is a swing high if its high is the max within
 // +/-lb bars; swing low if its low is the min within +/-lb bars.
-function findSwings(arr, lb = 2){
-  const highs = [], lows = [];
-  for (let i = lb; i < arr.length - lb; i++){
-    let isHigh = true, isLow = true;
-    for (let j = i - lb; j <= i + lb; j++){
-      if (j === i) continue;
-      if (arr[j].high >= arr[i].high) isHigh = false;
-      if (arr[j].low <= arr[i].low) isLow = false;
-    }
-    if (isHigh) highs.push({ i, price: arr[i].high });
-    if (isLow) lows.push({ i, price: arr[i].low });
-  }
-  return { highs, lows };
-}
+function findSwings(arr, lb = 2){ return window.MFXOverlays.findSwings(arr,lb); }
 
 // Cluster nearby price levels (within tol fraction of range) into single
 // lines, weighted by how many pivots touch them.
-function clusterLevels(points, range, tol = 0.012){
-  const used = new Array(points.length).fill(false);
-  const out = [];
-  for (let a = 0; a < points.length; a++){
-    if (used[a]) continue;
-    let sum = points[a].price, n = 1, lastI = points[a].i;
-    used[a] = true;
-    for (let b = a + 1; b < points.length; b++){
-      if (used[b]) continue;
-      if (Math.abs(points[b].price - points[a].price) <= range * tol){
-        sum += points[b].price; n++; used[b] = true;
-        lastI = Math.max(lastI, points[b].i);
-      }
-    }
-    out.push({ price: sum / n, touches: n, lastI });
-  }
-  // strongest first
-  return out.sort((x, y) => y.touches - x.touches);
-}
+function clusterLevels(points, range, tol = 0.012){ return window.MFXOverlays.clusterLevels(points,range,tol); }
 
 // Support & resistance relative to the latest close
-function computeSR(arr){
-  if (arr.length < 8) return { support: [], resistance: [] };
-  const range = msdSafeMax(arr.map(c => c.high)) - msdSafeMin(arr.map(c => c.low)) || 1;
-  const { highs, lows } = findSwings(arr, 2);
-  const last = arr[arr.length - 1].close;
-  const resAll = clusterLevels(highs, range).filter(l => l.price >= last);
-  const supAll = clusterLevels(lows, range).filter(l => l.price <= last);
-  return { resistance: resAll.slice(0, 3), support: supAll.slice(0, 3) };
-}
+function computeSR(arr){ return window.MFXOverlays.computeSR(arr); }
 
 // Demand & supply zones: a strong impulse (large body, > avgBody*k) marks
 // the candle BEFORE it as the origin zone. Demand precedes an up-impulse,
 // supply precedes a down-impulse. Zone = origin candle's body/wick band.
-function computeZones(arr){
-  if (arr.length < 6) return { demand: [], supply: [] };
-  const bodies = arr.map(c => Math.abs(c.close - c.open));
-  const avgBody = bodies.reduce((a, b) => a + b, 0) / bodies.length || 1;
-  const demand = [], supply = [];
-  for (let i = 1; i < arr.length - 1; i++){
-    const c = arr[i];
-    const body = Math.abs(c.close - c.open);
-    if (body < avgBody * 1.6) continue;           // not an impulse
-    const origin = arr[i - 1];                     // basing candle before impulse
-    const zTop = Math.max(origin.open, origin.close, c.open);
-    const zBot = Math.min(origin.open, origin.close, c.open);
-    if (c.close > c.open){                          // bullish impulse -> demand below
-      demand.push({ top: zTop, bot: zBot, fromI: i - 1 });
-    } else {                                        // bearish impulse -> supply above
-      supply.push({ top: zTop, bot: zBot, fromI: i - 1 });
-    }
-  }
-  // keep the most recent few of each, avoid overlap clutter
-  const trim = list => list.slice(-3);
-  return { demand: trim(demand), supply: trim(supply) };
-}
+function computeZones(arr){ return window.MFXOverlays.computeZones(arr); }
 
 // ══════════════════════════════════════════════════════════════════════
 // Rise/Fall Autobot — Market Control & Confidence Engine
@@ -27608,167 +27548,40 @@ function rfaPageInit(){
 //   (any later.low <= top). We keep it only if untouched.
 // Bearish FVG: gap between candle[i+1].high (bot) and candle[i-1].low (top).
 //   Mitigated once a later candle trades back UP into it (later.high >= bot).
-function computeFVG(arr){
-  const gaps = [];
-  for (let i = 1; i < arr.length - 1; i++){
-    const a = arr[i - 1], c = arr[i + 1];
-    let gap = null;
-    if (a.high < c.low){
-      gap = { top: c.low, bot: a.high, fromI: i, dir: 1 };
-    } else if (a.low > c.high){
-      gap = { top: a.low, bot: c.high, fromI: i, dir: -1 };
-    }
-    if (!gap) continue;
-    // check mitigation by any candle AFTER the 3-candle pattern
-    let mitigated = false;
-    for (let j = i + 2; j < arr.length; j++){
-      if (gap.dir === 1 && arr[j].low <= gap.top){ mitigated = true; break; }
-      if (gap.dir === -1 && arr[j].high >= gap.bot){ mitigated = true; break; }
-    }
-    if (!mitigated) gaps.push(gap);
-  }
-  return gaps.slice(-5); // most recent unmitigated gaps
-}
+function computeFVG(arr){ return window.MFXOverlays.computeFVG(arr); }
 
 // Order Blocks (SMC): the last opposite-colour candle before an impulsive
 // move that breaks structure. Bullish OB = last bearish candle before a
 // strong up-impulse; Bearish OB = last bullish candle before a strong
 // down-impulse. Drawn from the OB candle's full range. Unmitigated only
 // (kept only if price hasn't traded back through the block).
-function computeOrderBlocks(arr){
-  if (arr.length < 6) return { bull: [], bear: [] };
-  const bodies = arr.map(c => Math.abs(c.close - c.open));
-  const avgBody = bodies.reduce((a, b) => a + b, 0) / bodies.length || 1;
-  const bull = [], bear = [];
-  for (let i = 2; i < arr.length - 1; i++){
-    const c = arr[i];
-    const body = Math.abs(c.close - c.open);
-    if (body < avgBody * 1.7) continue;             // need an impulse
-    if (c.close > c.open){
-      // bullish impulse -> find last bearish candle before it
-      for (let k = i - 1; k >= 0 && k >= i - 3; k--){
-        if (arr[k].close < arr[k].open){
-          const ob = { top: arr[k].high, bot: arr[k].low, fromI: k, dir: 1 };
-          // unmitigated if no later candle closed back below the block bottom
-          let mit = false;
-          for (let j = i + 1; j < arr.length; j++){ if (arr[j].low < ob.bot){ mit = true; break; } }
-          if (!mit) bull.push(ob);
-          break;
-        }
-      }
-    } else {
-      // bearish impulse -> find last bullish candle before it
-      for (let k = i - 1; k >= 0 && k >= i - 3; k--){
-        if (arr[k].close > arr[k].open){
-          const ob = { top: arr[k].high, bot: arr[k].low, fromI: k, dir: -1 };
-          let mit = false;
-          for (let j = i + 1; j < arr.length; j++){ if (arr[j].high > ob.top){ mit = true; break; } }
-          if (!mit) bear.push(ob);
-          break;
-        }
-      }
-    }
-  }
-  return { bull: bull.slice(-2), bear: bear.slice(-2) };
-}
+function computeOrderBlocks(arr){ return window.MFXOverlays.computeOrderBlocks(arr); }
 
 // Liquidity pools: equal highs (buy-side) and equal lows (sell-side) —
 // clusters of swing pivots at nearly the same price, where stops rest.
-function computeLiquidity(arr){
-  if (arr.length < 8) return { buy: [], sell: [] };
-  const range = msdSafeMax(arr.map(c => c.high)) - msdSafeMin(arr.map(c => c.low)) || 1;
-  const { highs, lows } = findSwings(arr, 2);
-  // only levels touched by 2+ pivots count as liquidity
-  const buy = clusterLevels(highs, range, 0.008).filter(l => l.touches >= 2).slice(0, 3);
-  const sell = clusterLevels(lows, range, 0.008).filter(l => l.touches >= 2).slice(0, 3);
-  return { buy, sell };
-}
+function computeLiquidity(arr){ return window.MFXOverlays.computeLiquidity(arr); }
 
 // Market structure: Break of Structure (BOS) = price closes beyond the prior
 // swing in the SAME direction as trend (continuation). Change of Character
 // (CHoCH) = the first break AGAINST the prevailing swing sequence (possible
 // reversal). We scan swing highs/lows in order and flag the most recent break.
-function computeStructure(arr){
-  if (arr.length < 10) return [];
-  const { highs, lows } = findSwings(arr, 2);
-  const events = [];
-  // merge swings in index order with type
-  const swings = [...highs.map(h => ({ ...h, t: "H" })), ...lows.map(l => ({ ...l, t: "L" }))]
-    .sort((a, b) => a.i - b.i);
-  let lastHigh = null, lastLow = null, trend = 0; // 1 up, -1 down
-  for (let s = 0; s < swings.length; s++){
-    const sw = swings[s];
-    if (sw.t === "H"){
-      if (lastHigh && sw.price > lastHigh.price){
-        const kind = trend === -1 ? "CHoCH" : "BOS";
-        events.push({ i: sw.i, price: sw.price, dir: 1, kind });
-        trend = 1;
-      }
-      lastHigh = sw;
-    } else {
-      if (lastLow && sw.price < lastLow.price){
-        const kind = trend === 1 ? "CHoCH" : "BOS";
-        events.push({ i: sw.i, price: sw.price, dir: -1, kind });
-        trend = -1;
-      }
-      lastLow = sw;
-    }
-  }
-  return events.slice(-3); // most recent structure events
-}
+function computeStructure(arr){ return window.MFXOverlays.computeStructure(arr); }
 
 // Premium / Discount (ICT equilibrium): take the dealing range (highest high
 // to lowest low of the window). 50% = equilibrium. Above = premium (favour
 // selling), below = discount (favour buying).
-function computeEquilibrium(arr){
-  if (arr.length < 5) return null;
-  const hi = msdSafeMax(arr.map(c => c.high));
-  const lo = msdSafeMin(arr.map(c => c.low));
-  const eq = (hi + lo) / 2;
-  const last = arr[arr.length - 1].close;
-  return { hi, lo, eq, zone: last > eq ? "PREMIUM" : "DISCOUNT", last };
-}
+function computeEquilibrium(arr){ return window.MFXOverlays.computeEquilibrium(arr); }
 
 // ICT Optimal Trade Entry (OTE) — the 0.62–0.79 retracement of the most
 // recent impulse leg (between the last swing low and last swing high). For an
 // up-leg the OTE is the long entry zone on a pullback; for a down-leg it's the
 // short entry zone on a rally. The 0.705 mid is the "sweet spot".
-function computeOTE(arr){
-  if (arr.length < 8) return null;
-  const { highs, lows } = findSwings(arr, 2);
-  if (!highs.length || !lows.length) return null;
-  const lastH = highs[highs.length - 1];
-  const lastL = lows[lows.length - 1];
-  const range = lastH.price - lastL.price;
-  if (range <= 0) return null;
-  if (lastH.i > lastL.i){
-    // up-leg low->high : OTE measured down from the high (long zone)
-    return { dir: 1, top: lastH.price - range * 0.62, bot: lastH.price - range * 0.79,
-             sweet: lastH.price - range * 0.705, fromI: lastL.i };
-  } else {
-    // down-leg high->low : OTE measured up from the low (short zone)
-    return { dir: -1, top: lastL.price + range * 0.79, bot: lastL.price + range * 0.62,
-             sweet: lastL.price + range * 0.705, fromI: lastH.i };
-  }
-}
+function computeOTE(arr){ return window.MFXOverlays.computeOTE(arr); }
 
 // Auto trendlines: connect the last two rising swing lows (up-trendline) and
 // the last two falling swing highs (down-trendline). Each line is projected
 // forward to the right edge so you can see where price meets the trend.
-function computeTrendline(arr){
-  if (arr.length < 10) return [];
-  const { highs, lows } = findSwings(arr, 3);
-  const out = [];
-  if (lows.length >= 2){
-    const a = lows[lows.length - 2], b = lows[lows.length - 1];
-    if (b.price > a.price && b.i > a.i) out.push({ i1:a.i, p1:a.price, i2:b.i, p2:b.price, kind:"up" });
-  }
-  if (highs.length >= 2){
-    const a = highs[highs.length - 2], b = highs[highs.length - 1];
-    if (b.price < a.price && b.i > a.i) out.push({ i1:a.i, p1:a.price, i2:b.i, p2:b.price, kind:"down" });
-  }
-  return out;
-}
+function computeTrendline(arr){ return window.MFXOverlays.computeTrendline(arr); }
 
 // AMD — Accumulation / Manipulation / Distribution (ICT "Power of 3").
 // 1) ACCUMULATION: a tight consolidation range (low volatility relative to the
@@ -27776,68 +27589,13 @@ function computeTrendline(arr){
 // 2) MANIPULATION: a stop-run / false break that pokes beyond the range then
 //    closes back inside (liquidity grab).
 // 3) DISTRIBUTION: the expansion move away from the range after the grab.
-function computeAMD(arr){
-  if (arr.length < 25) return null;
-  const N = arr.length;
-  const look = Math.min(60, N - 4);            // search recent window
-  const seg = arr.slice(N - look);
-  const ranges = seg.map(c => c.high - c.low);
-  const avgRange = ranges.reduce((a,b)=>a+b,0) / ranges.length || 1;
-  // find the longest recent quiet base (consolidation) ending before the last few candles
-  let best = null;
-  for (let end = seg.length - 4; end >= 8; end--){
-    let s = end;
-    let bandHi = seg[end].high, bandLo = seg[end].low;
-    while (s > 0){
-      const nHi = Math.max(bandHi, seg[s-1].high);
-      const nLo = Math.min(bandLo, seg[s-1].low);
-      if ((nHi - nLo) > avgRange * 3.2) break;   // band too wide → not accumulation
-      bandHi = nHi; bandLo = nLo; s--;
-    }
-    const len = end - s + 1;
-    if (len >= 5){ best = { s, end, hi: bandHi, lo: bandLo, len }; break; }
-  }
-  if (!best) return null;
-  const baseOffset = N - look;                 // map seg index → global index
-  const acc = { i0: baseOffset + best.s, i1: baseOffset + best.end, hi: best.hi, lo: best.lo };
-  // manipulation: a candle after the base that wicks beyond the band but closes back inside
-  let manip = null;
-  for (let i = best.end + 1; i < seg.length; i++){
-    const c = seg[i];
-    const pokeUp   = c.high > best.hi && c.close < best.hi;
-    const pokeDown = c.low  < best.lo && c.close > best.lo;
-    if (pokeUp || pokeDown){
-      manip = { i: baseOffset + i, price: pokeUp ? c.high : c.low, dir: pokeUp ? -1 : 1 };
-      break;
-    }
-  }
-  // distribution: net displacement from end of base to last candle
-  const last = arr[N - 1];
-  const mid = (best.hi + best.lo) / 2;
-  const dist = { i: acc.i1, toI: N - 1, dir: last.close >= mid ? 1 : -1, from: mid, to: last.close };
-  return { acc, manip, dist };
-}
+function computeAMD(arr){ return window.MFXOverlays.computeAMD(arr); }
 
 // Volume Profile PROXY (time-at-price / Market-Profile style). Synthetic
 // indices have no real volume, so we count how many candles' [low,high] range
 // covers each horizontal price bucket. The bucket with the most coverage is
 // the Point of Control (POC) — the price the market spent most time around.
-function computeVolumeProfile(arr, bins = 24){
-  if (arr.length < 5) return null;
-  const hi = msdSafeMax(arr.map(c => c.high));
-  const lo = msdSafeMin(arr.map(c => c.low));
-  const range = hi - lo || 1;
-  const buckets = new Array(bins).fill(0);
-  arr.forEach(c => {
-    const b0 = Math.floor(((c.low - lo) / range) * (bins - 1));
-    const b1 = Math.floor(((c.high - lo) / range) * (bins - 1));
-    for (let b = Math.max(0, b0); b <= Math.min(bins - 1, b1); b++) buckets[b]++;
-  });
-  const max = msdSafeMax(buckets, 1);
-  let pocIdx = 0; buckets.forEach((v, i) => { if (v > buckets[pocIdx]) pocIdx = i; });
-  const pocPrice = lo + (pocIdx + 0.5) / bins * range;
-  return { hi, lo, range, buckets, max, bins, pocPrice };
-}
+function computeVolumeProfile(arr, bins = 24){ return window.MFXOverlays.computeVolumeProfile(arr,bins); }
 
 // Order-flow PROXY from candle shape (no real volume on synthetics):
 //  • per-candle delta proxy = body direction weighted by close position in
@@ -33717,6 +33475,7 @@ try {
 <script type="module" src="src/bazu/page.js?v=27"></script>
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
+<script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>
 <script type="module" src="src/ldpe/under-over-bot.js?v=2"></script>
 <script type="module" src="src/consec/consecAlert.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
