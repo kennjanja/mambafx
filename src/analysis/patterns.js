@@ -18,8 +18,18 @@ export const PATTERN_DEFAULTS = Object.freeze({
   bbPeriod: 20, bbMult: 2, kcMult: 1.5,
   pivotWindow: 3, patternTolAtr: 0.5, patternMaxBars: 120, patternMaxAge: 200,
   wedgeSlopeAtr: 0.02, // per-bar slope (ATR units) below which a line counts as flat
+  broadenRatio: 1.25, // upper-lower gap at formation must be at least this multiple of the gap at the first pivot
+  poleAtr: 3.5, poleMaxBars: 15, poleMinCloseShare: 0.6, // flag/pennant pole: impulse size (ATR), duration, share of bars closing with it
+  flagMaxBars: 25, flagMaxRetrace: 0.5, flagParallelAtr: 0.03, pennantConverge: 0.7,
+  abcdRetrace: [0.382, 0.886], abcdTol: 0.15, abcdTime: [0.5, 2], abcdMinAtr: 2, // AB=CD: BC retracement band, |CD/AB-1| tolerance, CD/AB bar ratio band, min AB size
   springLookback: 20, srEffortMult: 1.5,
 });
+
+// Pattern lifecycle. 'potential' = incomplete geometry still inside its window; 'developing' (older detectors use the
+// synonym 'forming') = geometry complete, awaiting a close beyond the trigger line; then confirmed -> failed, or
+// invalidated / expired without ever confirming.
+export const PATTERN_STATES = Object.freeze(['potential', 'developing', 'forming', 'confirmed', 'failed', 'invalidated', 'expired']);
+export const isOpenState = (s) => s === 'potential' || s === 'developing' || s === 'forming';
 
 const mean = (a) => a.reduce((s, v) => s + v, 0) / a.length;
 
@@ -99,15 +109,17 @@ const lineAt = (p1, p2, x) => p1.price + ((p2.price - p1.price) / (p2.index - p1
 // Resolve a pattern after formation: first close beyond trigger => confirmed; first close back through
 // the opposite invalidation level (or max age) => failed / expired. History is stamped per bar.
 function resolve(candles, pat, startIdx, trigger, invalid, P) {
-  pat.history = [{ status: 'forming', index: pat.formedIndex }];
-  pat.status = 'forming';
+  const open = pat.openState || 'forming';
+  pat.history = [...(pat.potentialIndex != null ? [{ status: 'potential', index: pat.potentialIndex }] : []), { status: open, index: pat.formedIndex }];
+  pat.status = open;
+  const maxAge = pat.maxAge ?? P.patternMaxAge;
   for (let i = startIdx; i < candles.length; i++) {
     const c = candles[i];
     const t = trigger(i), v = invalid(i);
-    if (pat.status === 'forming') {
+    if (pat.status === open) {
       if (pat.dir === 1 ? c.close > t : c.close < t) { pat.status = 'confirmed'; pat.breakIndex = i; pat.history.push({ status: 'confirmed', index: i }); }
       else if (pat.dir === 1 ? c.close < v : c.close > v) { pat.status = 'invalidated'; pat.history.push({ status: 'invalidated', index: i }); break; }
-      else if (i - pat.formedIndex > P.patternMaxAge) { pat.status = 'expired'; pat.history.push({ status: 'expired', index: i }); break; }
+      else if (i - pat.formedIndex > maxAge) { pat.status = 'expired'; pat.history.push({ status: 'expired', index: i }); break; }
     } else if (pat.status === 'confirmed') {
       if (pat.dir === 1 ? c.close < v : c.close > v) { pat.status = 'failed'; pat.failIndex = i; pat.history.push({ status: 'failed', index: i }); break; }
     }
@@ -129,8 +141,13 @@ export function chartPatterns(candles, atr, opts = {}) {
     out.push(resolve(candles, pat, start, trig, inv, P));
   };
   const hist = [];
-  for (const p of confirmed) {
-    hist.push(p);
+  // Pivots confirmed on the same bar (e.g. an outside bar gives a high and a low) join history together,
+  // so results do not depend on their arbitrary order (mirror symmetry).
+  for (let gi = 0; gi < confirmed.length; gi++) {
+    const p = confirmed[gi];
+    if (gi === 0 || confirmed[gi - 1].confirmedIndex !== p.confirmedIndex) {
+      for (let k = gi; k < confirmed.length && confirmed[k].confirmedIndex === p.confirmedIndex; k++) hist.push(confirmed[k]);
+    }
     const a = atr[p.confirmedIndex];
     if (a == null) continue;
     const tol = P.patternTolAtr * a;
@@ -189,7 +206,12 @@ export function chartPatterns(candles, atr, opts = {}) {
         else if (conv && sH < 0 && sL > 0) kind = 'symmetrical-triangle';
         else if (conv && sH > 0 && sL > 0) kind = 'rising-wedge';
         else if (conv && sH < 0 && sL < 0) kind = 'falling-wedge';
-        else if (!conv && gapEnd > 0.8 * gapStart && Math.abs(sH - sL) < P.wedgeSlopeAtr && !flat(sH)) kind = 'channel';
+        else if (!conv && gapEnd > 0.8 * gapStart && Math.abs(sH - sL) < P.wedgeSlopeAtr && !flat((sH + sL) / 2)) kind = 'channel';
+        else if (gapEnd >= P.broadenRatio * gapStart) {
+          // diverging lines: broadening formation (both lines moving away) or right-angled (one line flat)
+          if (sH > 0 && sL < 0 && !flat(sH) && !flat(sL)) kind = 'broadening';
+          else if ((flat(sH) && sL < 0 && !flat(sL)) || (flat(sL) && sH > 0 && !flat(sH))) kind = 'right-angled-broadening';
+        }
       }
       if (kind) {
         const dir = kind === 'ascending-triangle' || kind === 'falling-wedge' ? 1 : kind === 'descending-triangle' || kind === 'rising-wedge' ? -1 : 0;
@@ -216,7 +238,112 @@ export function chartPatterns(candles, atr, opts = {}) {
       }
     }
   }
+  flagPatterns(candles, atr, confirmed, P, push, out);
+  abcdPatterns(candles, atr, confirmed, P, push, out);
   return out;
+}
+
+const slopeOf = (p, q) => (q.price - p.price) / (q.index - p.index);
+
+// Flags and pennants: an impulse (pole) of at least poleAtr x ATR within poleMaxBars, then a counter-trend or sideways
+// consolidation bounded by two lines through the first confirmed pivots after the pole top/bottom. Flag = roughly
+// parallel lines drifting against (or flat to) the pole; pennant = converging lines. Retracement beyond
+// flagMaxRetrace of the pole, or a close beyond the pole extreme before formation, rejects the geometry.
+// Direction is the pole direction (continuation hypothesis); it is a hypothesis, not a forecast.
+function flagPatterns(candles, atr, confirmed, P, push, out) {
+  const n = candles.length;
+  for (let bi = 0; bi < confirmed.length; bi++) {
+    const B = confirmed[bi], a0 = atr[B.confirmedIndex];
+    if (a0 == null) continue;
+    const dir = B.type === 'high' ? 1 : -1;
+    let A = null;
+    for (let k = bi - 1; k >= 0; k--) {
+      const q = confirmed[k];
+      if (B.index - q.index > P.poleMaxBars) break;
+      if (q.type !== B.type && q.index < B.index && (!A || dir * (q.price - A.price) < 0)) A = q;
+    }
+    if (!A) continue;
+    const pole = dir * (B.price - A.price);
+    if (pole < P.poleAtr * a0) continue;
+    let withPole = 0;
+    for (let i = A.index + 1; i <= B.index; i++) if (dir * (candles[i].close - candles[i].open) > 0) withPole++;
+    if (withPole / (B.index - A.index) < P.poleMinCloseShare) continue;
+    const tol = P.patternTolAtr * a0, level = B.price - dir * P.flagMaxRetrace * pole;
+    const rest = confirmed.slice(bi + 1).filter((q) => q.index > B.index && q.index <= B.index + P.flagMaxBars);
+    const S = rest.filter((q) => q.type === B.type), C = rest.filter((q) => q.type !== B.type);
+    let formed = false;
+    if (S.length >= 1 && C.length >= 2) {
+      const s0 = S[0], c0 = C[0], c1 = C[1];
+      const f = Math.max(s0.confirmedIndex, c0.confirmedIndex, c1.confirmedIndex);
+      const af = f < n ? atr[f] : null;
+      let ok = af != null && dir * (s0.price - B.price) <= tol;
+      const cExt = dir === 1 ? Math.min(c0.price, c1.price) : Math.max(c0.price, c1.price);
+      ok = ok && dir * (B.price - cExt) / pole <= P.flagMaxRetrace;
+      for (let i = B.index + 1; ok && i <= f; i++) if (dir * (candles[i].close - B.price) > tol) ok = false;
+      if (ok) {
+        const hi = dir === 1 ? [B, s0] : [c0, c1], lo = dir === 1 ? [c0, c1] : [B, s0];
+        const sU = slopeOf(hi[0], hi[1]) / af, sL = slopeOf(lo[0], lo[1]) / af, flat = P.wedgeSlopeAtr;
+        const x0 = Math.max(hi[0].index, lo[0].index);
+        const upper = (i) => lineAt(hi[0], hi[1], i), lower = (i) => lineAt(lo[0], lo[1], i);
+        const g0 = upper(x0) - lower(x0), g1 = upper(f) - lower(f);
+        let kind = null;
+        if (g0 > 0 && g1 > 0) {
+          if (g1 < P.pennantConverge * g0 && sU <= flat && sL >= -flat) kind = 'pennant';
+          else if (g1 >= P.pennantConverge * g0 && Math.abs(sU - sL) <= P.flagParallelAtr && dir * (sU + sL) / 2 <= flat) kind = 'flag';
+        }
+        if (kind) {
+          formed = true;
+          const pts = [A, B, s0, c0, c1].sort((x, y) => x.index - y.index || x.confirmedIndex - y.confirmedIndex);
+          push({ kind, dir, pivots: pts, formedIndex: f, index: pts[pts.length - 1].index, upper: hi, lower: lo, pole: { from: A, to: B, atr: pole / a0 }, openState: 'developing', potentialIndex: B.confirmedIndex, maxAge: P.flagMaxBars * 2 },
+            f + 1, dir === 1 ? upper : lower, () => level);
+        }
+      }
+    }
+    // potential: pole is valid and still inside its consolidation window, nothing resolved yet
+    if (!formed && n - 1 >= B.confirmedIndex && n - 1 <= B.index + P.flagMaxBars) {
+      let alive = true;
+      for (let i = B.index + 1; alive && i < n; i++) {
+        const cl = candles[i].close;
+        if (dir * (cl - B.price) > tol || dir * (level - cl) > 0) alive = false;
+      }
+      if (alive && !(S.length >= 1 && C.length >= 2)) {
+        const key = 'flag-pole' + A.index + '-' + B.index;
+        out.push({ kind: 'flag-pole', id: key, dir, pivots: [A, B], formedIndex: B.confirmedIndex, confirmedIndex: B.confirmedIndex, index: B.index, status: 'potential', pole: { from: A, to: B, atr: pole / a0 }, invalidationLevel: level, history: [{ status: 'potential', index: B.confirmedIndex }] });
+      }
+    }
+  }
+}
+
+// AB=CD: four alternating confirmed pivots where CD is about as long as AB (price and time), with BC retracing
+// abcdRetrace of AB. The pivot D is only confirmed pivotWindow bars late, so the move from D has already begun when the
+// pattern is stamped. 'potential' = A, B, C found and the projected D has not yet printed.
+function abcdPatterns(candles, atr, confirmed, P, push, out) {
+  const n = candles.length, [rLo, rHi] = P.abcdRetrace, [tLo, tHi] = P.abcdTime;
+  const legs = (A, B, C) => {
+    if (!(A.index < B.index && B.index < C.index) || A.type === B.type || B.type === C.type) return null;
+    const dir = C.type === 'high' ? 1 : -1; // bullish AB=CD ends in a low (D), so C is a high
+    const AB = Math.abs(A.price - B.price), BC = Math.abs(C.price - B.price);
+    const oriented = dir === 1 ? A.price > B.price && C.price > B.price && C.price < A.price : A.price < B.price && C.price < B.price && C.price > A.price;
+    if (!oriented || AB <= 0) return null;
+    const r = BC / AB;
+    return r >= rLo && r <= rHi ? { dir, AB } : null;
+  };
+  for (let i = 3; i < confirmed.length; i++) {
+    const [A, B, C, D] = confirmed.slice(i - 3, i + 1);
+    const L = legs(A, B, C), f = D.confirmedIndex, a = atr[f];
+    if (!L || a == null || D.type === C.type || D.index <= C.index || L.AB < P.abcdMinAtr * a) continue;
+    const CD = Math.abs(C.price - D.price), ratio = CD / L.AB, tr = (D.index - C.index) / (B.index - A.index);
+    const beyond = L.dir === 1 ? D.price < C.price : D.price > C.price;
+    if (!beyond || Math.abs(ratio - 1) > P.abcdTol || tr < tLo || tr > tHi) continue;
+    push({ kind: 'abcd', dir: L.dir, pivots: [A, B, C, D], formedIndex: f, index: D.index, ratioCD: ratio, retraceBC: Math.abs(C.price - B.price) / L.AB, openState: 'developing', potentialIndex: C.confirmedIndex, maxAge: 50 },
+      f + 1, () => D.price + 0.382 * (C.price - D.price), () => D.price - L.dir * P.patternTolAtr * a);
+  }
+  if (confirmed.length >= 3) {
+    const [A, B, C] = confirmed.slice(-3), L = legs(A, B, C), a = atr[n - 1];
+    if (L && a != null && L.AB >= P.abcdMinAtr * a && n - 1 <= C.index + tHi * (B.index - A.index) && n - 1 >= C.confirmedIndex) {
+      out.push({ kind: 'abcd', id: 'abcd-potential' + A.index + '-' + C.index, dir: L.dir, pivots: [A, B, C], formedIndex: C.confirmedIndex, confirmedIndex: C.confirmedIndex, index: C.index, status: 'potential', projectedD: C.price - L.dir * L.AB, history: [{ status: 'potential', index: C.confirmedIndex }] });
+    }
+  }
 }
 
 // Wyckoff-style events. Spring/upthrust: a wick pierces a prior range extreme and closes back inside.
