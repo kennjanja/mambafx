@@ -26310,10 +26310,13 @@ const TIMEFRAMES = [
   { g: 3600,  label: "1 hour", num: "1",  unit: "hour" },
   { g: 14400, label: "4 hour", num: "4",  unit: "hour" },
 ];
-const TF_COUNT = 50;            // candles fetched & kept per chart (50 per request)
+const TF_COUNT = 500;           // analysis history fetched & kept per chart (overlays are computed on all of it)
+const TF_LEGACY_COUNT = 50;     // the window older consumers (prediction model, order-flow proxy) were built on
 const TF_VIEW_DEFAULT = 50;     // candles visible by default (pan/zoom window)
 const TF_VIEW_MIN = 10;         // most zoomed-in
-const TF_VIEW_MAX = TF_COUNT;   // most zoomed-out (whole history)
+const TF_VIEW_MAX = 200;        // most zoomed-out; analysis still uses the full history
+// Last TF_LEGACY_COUNT candles of a timeframe, so code tuned on a 50-candle window behaves exactly as before.
+function tfRecent(g){ const a = tfData[g] || []; return a.length > TF_LEGACY_COUNT ? a.slice(-TF_LEGACY_COUNT) : a; }
 let tfWs = null, tfReconnect = null, tfPing = null;
 let candlesPageReady = false;   // lazy-init on first visit
 let tfTimerInterval = null;
@@ -26639,7 +26642,13 @@ window.addEventListener("mfx:modules-changed", () => {
 // Overlay toggles redraw every timeframe chart; chips also reflect on/off styling
 ["pa-sr","pa-zones","pa-ob","pa-fvg","pa-liq","pa-bos","pa-eq","pa-vp","pa-ote","pa-trend","pa-amd"].forEach(id => {
   const el = document.getElementById(id);
+  const key = "mfx_overlay_" + id;
+  if (el){
+    try { const saved = localStorage.getItem(key); if (saved !== null) el.checked = saved === "1"; } catch(_){}
+    const chip0 = el.closest(".pa-chip"); if (chip0) chip0.classList.toggle("on", el.checked);
+  }
   if (el) el.addEventListener("change", () => {
+    try { localStorage.setItem(key, el.checked ? "1" : "0"); } catch(_){}
     const chip = el.closest(".pa-chip");
     if (chip) chip.classList.toggle("on", el.checked);
     TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));
@@ -27856,7 +27865,7 @@ function computeOrderFlowProxy(arr){
 }
 
 function updateOrderFlowReadout(g){
-  const arr = tfData[g] || [];
+  const arr = tfRecent(g);
   const of = computeOrderFlowProxy(arr);
   const set = (id, txt, cls) => { const e = $(id); if (e){ e.textContent = txt; e.className = "of-val " + (cls||"of-neutral"); } };
   if (!of){ ["delta","cvd","imb","abs"].forEach(k => set("tf-"+k+"-"+g, "—")); return; }
@@ -27914,7 +27923,7 @@ PRED_COMPONENTS.forEach(k => _predLearnState[k] = { correct:0, total:0 });
 
 // ── Helper ────────────────────────────────────────────────────────────
 function predCandles(g){
-  const tf = tfData[g];
+  const tf = tfRecent(g);
   if (tf && tf.length >= 5) return tf;
   if (g === 300) return live5mCandles.length >= 3 ? live5mCandles : (tfData[60]||[]);
   if (g === 60)  return liveCandles.length  >= 3 ? liveCandles  : [];
@@ -28562,6 +28571,16 @@ function predUpdateActuals(){
 }
 
 
+// Overlay analysis is computed on the full history (not the visible window) and memoised per timeframe:
+// pan, zoom and overlay toggles reuse the result; it is recomputed only when the candles change.
+const _tfAnCache = {};
+function tfAnalysis(g, arr, name, fn){
+  const last = arr[arr.length - 1];
+  const key = arr.length + "|" + arr[0].epoch + "|" + last.epoch + "|" + last.high + "|" + last.low + "|" + last.close;
+  let ent = _tfAnCache[g];
+  if (!ent || ent.key !== key) ent = _tfAnCache[g] = { key, v: {} };
+  return name in ent.v ? ent.v[name] : (ent.v[name] = fn(arr));
+}
 function drawTfCandles(g){
   const svg = $("tf-chart-" + g);
   if (!svg) return;
@@ -28602,10 +28621,12 @@ function drawTfCandles(g){
   const xAt = i => padL + (i - start) * slot + slot / 2;
   const chartRight = W - padR;
   const clampY = v => Math.max(padT, Math.min(H - padB, y(v)));
+  const inView = p => p >= lo && p <= hi;                  // horizontal level inside the visible price range
+  const bandInView = (a, b) => Math.max(a, b) >= lo && Math.min(a, b) <= hi;
 
   // Volume Profile proxy (time-at-price histogram, drawn behind everything on the left)
   if (want("pa-vp")){
-    const vp = computeVolumeProfile(arr);
+    const vp = tfAnalysis(g, arr, 'vp', computeVolumeProfile);
     if (vp){
       const maxW = (W - padL - padR) * 0.26;     // histogram max width
       const bandH = (H - padT - padB) / vp.bins;
@@ -28617,22 +28638,24 @@ function drawTfCandles(g){
         out += `<rect x="${padL}" y="${yTop.toFixed(1)}" width="${w.toFixed(1)}" height="${Math.max(1,bandH-1).toFixed(1)}" fill="${isPoc?'rgba(255,196,77,0.32)':'rgba(120,144,180,0.22)'}"/>`;
       }
       // POC line
+      if (inView(vp.pocPrice)) {
       const yp = clampY(vp.pocPrice);
       out += `<line x1="${padL}" y1="${yp.toFixed(1)}" x2="${chartRight}" y2="${yp.toFixed(1)}" stroke="rgba(255,196,77,0.5)" stroke-width="0.75" stroke-dasharray="1,2"/>`;
       out += `<text x="${(padL+2)}" y="${(yp-2).toFixed(1)}" fill="rgba(255,196,77,0.85)" font-size="7" font-family="monospace">POC ${vp.pocPrice.toFixed(dec)}</text>`;
+      }
     }
   }
 
   // Demand / Supply zones (drawn first, behind candles)
   if (want("pa-zones")){
-    const { demand, supply } = computeZones(arr);
-    demand.forEach(z => {
+    const { demand, supply } = tfAnalysis(g, arr, 'zones', computeZones);
+    demand.filter(z => bandInView(z.top, z.bot)).forEach(z => {
       const yt = clampY(z.top), yb = clampY(z.bot);
       const x0 = xAt(z.fromI);
       out += `<rect x="${x0.toFixed(1)}" y="${yt.toFixed(1)}" width="${(chartRight-x0).toFixed(1)}" height="${Math.max(2,yb-yt).toFixed(1)}" fill="rgba(22,224,139,0.10)" stroke="rgba(22,224,139,0.35)" stroke-width="0.75"/>`;
       out += `<text x="${chartRight-3}" y="${(yt+9).toFixed(1)}" fill="rgba(22,224,139,0.8)" font-size="8" text-anchor="end" font-family="monospace">demand</text>`;
     });
-    supply.forEach(z => {
+    supply.filter(z => bandInView(z.top, z.bot)).forEach(z => {
       const yt = clampY(z.top), yb = clampY(z.bot);
       const x0 = xAt(z.fromI);
       out += `<rect x="${x0.toFixed(1)}" y="${yt.toFixed(1)}" width="${(chartRight-x0).toFixed(1)}" height="${Math.max(2,yb-yt).toFixed(1)}" fill="rgba(255,77,94,0.10)" stroke="rgba(255,77,94,0.35)" stroke-width="0.75"/>`;
@@ -28642,8 +28665,8 @@ function drawTfCandles(g){
 
   // Fair Value Gaps (behind candles)
   if (want("pa-fvg")){
-    const gaps = computeFVG(arr);
-    gaps.forEach(z => {
+    const gaps = tfAnalysis(g, arr, 'fvg', computeFVG);
+    gaps.filter(z => bandInView(z.top, z.bot)).forEach(z => {
       const yt = clampY(z.top), yb = clampY(z.bot);
       const x0 = xAt(z.fromI);
       out += `<rect x="${x0.toFixed(1)}" y="${yt.toFixed(1)}" width="${(chartRight-x0).toFixed(1)}" height="${Math.max(1.5,yb-yt).toFixed(1)}" fill="rgba(255,196,77,0.14)" stroke="rgba(255,196,77,0.4)" stroke-width="0.5" stroke-dasharray="2,2"/>`;
@@ -28653,14 +28676,14 @@ function drawTfCandles(g){
 
   // Order Blocks (behind candles). Bullish = teal, bearish = magenta.
   if (want("pa-ob")){
-    const { bull, bear } = computeOrderBlocks(arr);
-    bull.forEach(z => {
+    const { bull, bear } = tfAnalysis(g, arr, 'ob', computeOrderBlocks);
+    bull.filter(z => bandInView(z.top, z.bot)).forEach(z => {
       const yt = clampY(z.top), yb = clampY(z.bot);
       const x0 = xAt(z.fromI);
       out += `<rect x="${x0.toFixed(1)}" y="${yt.toFixed(1)}" width="${(chartRight-x0).toFixed(1)}" height="${Math.max(2,yb-yt).toFixed(1)}" fill="rgba(45,212,191,0.12)" stroke="rgba(45,212,191,0.55)" stroke-width="0.9"/>`;
       out += `<text x="${(x0+3).toFixed(1)}" y="${(yt+9).toFixed(1)}" fill="rgba(45,212,191,0.9)" font-size="7.5" font-family="monospace">OB+</text>`;
     });
-    bear.forEach(z => {
+    bear.filter(z => bandInView(z.top, z.bot)).forEach(z => {
       const yt = clampY(z.top), yb = clampY(z.bot);
       const x0 = xAt(z.fromI);
       out += `<rect x="${x0.toFixed(1)}" y="${yt.toFixed(1)}" width="${(chartRight-x0).toFixed(1)}" height="${Math.max(2,yb-yt).toFixed(1)}" fill="rgba(244,114,182,0.12)" stroke="rgba(244,114,182,0.55)" stroke-width="0.9"/>`;
@@ -28670,9 +28693,9 @@ function drawTfCandles(g){
 
   // ICT OTE zone (0.62–0.79 retracement of the last leg)
   if (want("pa-ote")){
-    const ote = computeOTE(arr);
-    if (ote){
-      const yT = clampY(Math.max(ote.top, ote.bot));
+   const ote = tfAnalysis(g, arr, 'ote', computeOTE);
+   if (ote && bandInView(ote.top, ote.bot)){
+     const yT = clampY(Math.max(ote.top, ote.bot));
       const yB = clampY(Math.min(ote.top, ote.bot));
       const x0 = xAt(ote.fromI);
       out += `<rect x="${x0.toFixed(1)}" y="${yT.toFixed(1)}" width="${(chartRight-x0).toFixed(1)}" height="${Math.max(2,yB-yT).toFixed(1)}" fill="rgba(129,140,248,0.12)" stroke="rgba(129,140,248,0.5)" stroke-width="0.8" stroke-dasharray="3,2"/>`;
@@ -28697,13 +28720,13 @@ function drawTfCandles(g){
 
   // Support / Resistance lines (on top of candles)
   if (want("pa-sr")){
-    const { support, resistance } = computeSR(arr);
-    resistance.forEach(l => {
+    const { support, resistance } = tfAnalysis(g, arr, 'sr', computeSR);
+    resistance.filter(l => inView(l.price)).forEach(l => {
       const yy = clampY(l.price);
       out += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${chartRight}" y2="${yy.toFixed(1)}" stroke="var(--accent)" stroke-width="${l.touches>=2?1.3:0.8}" opacity="0.7"/>`;
       out += `<text x="${padL+2}" y="${(yy-2).toFixed(1)}" fill="var(--accent)" font-size="8" font-family="monospace">R ${l.price.toFixed(dec)}</text>`;
     });
-    support.forEach(l => {
+    support.filter(l => inView(l.price)).forEach(l => {
       const yy = clampY(l.price);
       out += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${chartRight}" y2="${yy.toFixed(1)}" stroke="var(--accent)" stroke-width="${l.touches>=2?1.3:0.8}" opacity="0.7" stroke-dasharray="${l.touches>=2?'0':'4,2'}"/>`;
       out += `<text x="${padL+2}" y="${(yy+9).toFixed(1)}" fill="var(--accent)" font-size="8" font-family="monospace">S ${l.price.toFixed(dec)}</text>`;
@@ -28712,13 +28735,13 @@ function drawTfCandles(g){
 
   // Liquidity pools (equal highs/lows) — dashed purple lines
   if (want("pa-liq")){
-    const { buy, sell } = computeLiquidity(arr);
-    buy.forEach(l => {
+    const { buy, sell } = tfAnalysis(g, arr, 'liq', computeLiquidity);
+    buy.filter(l => inView(l.price)).forEach(l => {
       const yy = clampY(l.price);
       out += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${chartRight}" y2="${yy.toFixed(1)}" stroke="#b388ff" stroke-width="1" stroke-dasharray="5,3" opacity="0.8"/>`;
       out += `<text x="${(chartRight-3)}" y="${(yy-2).toFixed(1)}" fill="#b388ff" font-size="7.5" text-anchor="end" font-family="monospace">BSL ⨯${l.touches}</text>`;
     });
-    sell.forEach(l => {
+    sell.filter(l => inView(l.price)).forEach(l => {
       const yy = clampY(l.price);
       out += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${chartRight}" y2="${yy.toFixed(1)}" stroke="#b388ff" stroke-width="1" stroke-dasharray="5,3" opacity="0.8"/>`;
       out += `<text x="${(chartRight-3)}" y="${(yy+9).toFixed(1)}" fill="#b388ff" font-size="7.5" text-anchor="end" font-family="monospace">SSL ⨯${l.touches}</text>`;
@@ -28727,8 +28750,8 @@ function drawTfCandles(g){
 
   // Premium / Discount equilibrium (ICT) — shaded halves + 50% line
   if (want("pa-eq")){
-    const eqd = computeEquilibrium(arr);
-    if (eqd){
+    const eqd = tfAnalysis(g, arr, 'eq', computeEquilibrium);
+    if (eqd && inView(eqd.eq)){
       const yEq = clampY(eqd.eq), yHi = clampY(eqd.hi), yLo = clampY(eqd.lo);
       out += `<rect x="${padL}" y="${yHi.toFixed(1)}" width="${(chartRight-padL).toFixed(1)}" height="${Math.max(0,yEq-yHi).toFixed(1)}" fill="rgba(255,77,94,0.05)"/>`;
       out += `<rect x="${padL}" y="${yEq.toFixed(1)}" width="${(chartRight-padL).toFixed(1)}" height="${Math.max(0,yLo-yEq).toFixed(1)}" fill="rgba(22,224,139,0.05)"/>`;
@@ -28739,9 +28762,9 @@ function drawTfCandles(g){
 
   // BOS / CHoCH structure markers
   if (want("pa-bos")){
-    const events = computeStructure(arr);
-    events.forEach(ev => {
-      const xx = xAt(ev.i), yy = clampY(ev.price);
+   const events = tfAnalysis(g, arr, 'bos', computeStructure);
+   events.filter(ev => inView(ev.price) && ev.i >= start - 3).forEach(ev => {
+     const xx = xAt(ev.i), yy = clampY(ev.price);
       const col = ev.kind === "CHoCH" ? "#f0abfc" : (ev.dir === 1 ? "var(--up)" : "var(--down)");
       out += `<line x1="${(xx-slot).toFixed(1)}" y1="${yy.toFixed(1)}" x2="${Math.min(chartRight,xx+slot*3).toFixed(1)}" y2="${yy.toFixed(1)}" stroke="${col}" stroke-width="1" opacity="0.85"/>`;
       out += `<text x="${xx.toFixed(1)}" y="${(ev.dir===1?yy-2:yy+8).toFixed(1)}" fill="${col}" font-size="7.5" text-anchor="middle" font-family="monospace">${ev.kind}</text>`;
@@ -28750,7 +28773,7 @@ function drawTfCandles(g){
 
   // Trendlines (auto, from swing pivots) — projected to the right edge
   if (want("pa-trend")){
-    const tls = computeTrendline(arr);
+    const tls = tfAnalysis(g, arr, 'trend', computeTrendline);
     tls.forEach(t => {
       const slope = (t.p2 - t.p1) / (t.i2 - t.i1);
       const endI = start + count - 1;
@@ -28765,7 +28788,7 @@ function drawTfCandles(g){
 
   // AMD — Accumulation / Manipulation / Distribution (ICT Power of 3)
   if (want("pa-amd")){
-    const amd = computeAMD(arr);
+    const amd = tfAnalysis(g, arr, 'amd', computeAMD);
     if (amd){
       const a = amd.acc;
       const xa0 = Math.max(padL, xAt(a.i0)), xa1 = xAt(a.i1);
