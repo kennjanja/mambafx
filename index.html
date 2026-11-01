@@ -207,6 +207,11 @@ footer{text-align:center;color:var(--muted);font-size:11px;margin-top:22px;line-
 #tfFocusBar{display:none;margin:0 0 12px;padding:8px 12px;border:1px solid #3b82f6;border-radius:10px;background:rgba(59,130,246,.12);color:#93c5fd;font-size:12px;align-items:center;gap:10px}
 #tfFocusBar.on{display:flex}
 #tfFocusBar button{margin-left:auto;background:transparent;border:1px solid #3b82f6;color:#93c5fd;border-radius:6px;padding:3px 10px;cursor:pointer}
+#page-sossow .ts-note{font-size:11px;color:var(--muted);margin:0 0 10px}
+#page-sossow .ts-bar{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px;font-size:12px}
+#page-sossow .ts-bar button{background:#0d121d;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:5px 12px;cursor:pointer}
+#page-sossow .ts-empty{padding:14px;color:var(--muted);font-size:13px;border:1px dashed var(--line);border-radius:10px}
+#page-sossow .ss-up{color:var(--up)}#page-sossow .ss-dn{color:var(--down)}#page-sossow .ss-demo{color:#60a5fa}#page-sossow .ss-real{color:#f59e0b}#page-sossow .mu{color:var(--muted)}
 #page-beastmode .ts-note{font-size:11px;color:var(--muted);margin:0 0 10px}
 #page-beastmode .ts-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:12px;color:var(--muted)}
 #page-beastmode .ts-bar button{background:#0d121d;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:5px 12px;cursor:pointer}
@@ -696,6 +701,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     <button id="navTradeSignal" onclick="showPage('tradesignal')">🎯 Trade Signal</button>
 <button id="navPredHistory" onclick="showPage('predhistory')">🗂 Prediction History</button>
 <button id="navBeastMode" onclick="showPage('beastmode')">🦁 Beast Mode Signal</button>
+<button id="navSosSow" onclick="showPage('sossow')">⚡ SOS/SOW Bot</button>
     <button id="navEngine" onclick="showPage('engine')">⚡ 5-Tick Engine</button>
     <button id="navGrid" onclick="showPage('grid')">🎯 Trading Grid</button>
     <button id="navAnalysis" onclick="showPage('analysis')">🔬 Analysis Tool</button>
@@ -793,6 +799,16 @@ table.an-table tbody tr:last-child td{border-bottom:none}
   </div><!-- /page-live -->
 
   <!-- ============ TRADE SIGNAL (evidence-based setups) ============ -->
+  <div id="page-sossow" class="page">
+  <h2 style="margin:0 0 4px">SOS / SOW Bot</h2>
+  <p class="ts-note">Scans every market (Jump and Step excluded) on 1m, 2m, 3m, 5m, 15m, 30m, 1h and 4h candles. When a <b>closed</b> candle prints a <b>Sign of Strength</b> (close above the prior 20-candle range with a body of at least 1.5 ATR) it buys a <b>15-second Rise</b>; a <b>Sign of Weakness</b> (same, below the range) buys a <b>15-second Fall</b>. It trades on whichever Deriv account is connected, demo or real, and the real account asks once to confirm when you switch the bot on. One open trade per market. Entry follows the candle close plus scan and order latency (seconds), and events older than 45 s are skipped. This is an automated live-money bot with no tested edge: SOS/SOW are rule-based patterns, not a validated predictor, and 15 s Rise/Fall pays less than the stake risked. Results are Deriv's.</p>
+  <div class="ts-bar"><label><input type="checkbox" id="ssArm"> <b>Auto-trade SOS/SOW</b></label>
+    <label>Stake <input id="ssStake" type="number" min="0.35" step="0.05" style="width:70px"></label>
+    <label>Max open <input id="ssMax" type="number" min="1" step="1" style="width:55px"></label>
+    <span id="ssTfs"></span><button id="ssCsv">Export CSV</button><button id="ssClear">Clear log</button></div>
+  <div id="ssStatus" class="ts-note"></div>
+  <div id="ssList"></div>
+</div>
   <div id="page-beastmode" class="page">
   <h2 style="margin:0 0 4px">Beast Mode Signal</h2>
   <p class="ts-note">A beast signal is recorded only when <b>Bazu's live Rise/Fall prediction</b> and a <b>Trade Signal entry</b> (pullback or liquidity sweep trigger) point the <b>same way</b> on the same market. It is followed for Bazu's predicted duration and scored like the contract it describes: exit price vs entry price, a tie loses. The Trade Signal target / invalidation are shown as extra information. Records advance only while this page is open (this page also runs Bazu and the Trade Signal scan); a window that lapses unobserved is marked unscored. Display only: no orders are placed, and the result is not a validated edge or a Deriv settlement.</p>
@@ -26685,8 +26701,8 @@ function startTfTimers(){
 }
 
 function showPage(which){
-  const pages = { accounts:"page-accounts", live:"page-live", candles:"page-candles", engine:"page-engine", grid:"page-grid", analysis:"page-analysis", features:"page-features", predbot:"page-predbot", oubot:"page-oubot", tracker:"page-tracker", digits:"page-digits", diag:"page-diag", charts:"page-charts", adxbot:"page-adxbot", aggression:"page-aggression", mtf:"page-mtf", njanja:"page-njanja", rfabot:"page-rfabot", tradesignal:"page-tradesignal", predhistory:"page-predhistory", beastmode:"page-beastmode", bazu:"page-bazu", msdexplorer:"page-msdexplorer", msdfeatures:"page-msdfeatures", msdevents:"page-msdevents", msdinspector:"page-msdinspector", msddistribution:"page-msddistribution", msdcorrelation:"page-msdcorrelation", msdsearch:"page-msdsearch", msdexperiment:"page-msdexperiment", msdknowledge:"page-msdknowledge", msdvalidation:"page-msdvalidation", msdworkbench:"page-msdworkbench", msdphase8:"page-msdphase8", msdphase9:"page-msdphase9", msdphase11:"page-msdphase11", msdphase11validation:"page-msdphase11validation" };
-  const navs  = { accounts:"navAccounts", live:"navLive",  candles:"navCandles", engine:"navEngine", grid:"navGrid", analysis:"navAnalysis", features:"navFeatures", predbot:"navPredBot", oubot:"navOuBot", tracker:"navTracker", digits:"navDigits", diag:"navDiag", charts:"navCharts", adxbot:"navAdxBot", aggression:"navAggression", mtf:"navMtf", njanja:"navNjanja", rfabot:"navRfaBot", tradesignal:"navTradeSignal", predhistory:"navPredHistory", beastmode:"navBeastMode", bazu:"navBazu", msdexplorer:"navMsdExplorer", msdfeatures:"navMsdFeatures", msdevents:"navMsdEvents", msdinspector:"navMsdInspector", msddistribution:"navMsdDistribution", msdcorrelation:"navMsdCorrelation", msdsearch:"navMsdSearch", msdexperiment:"navMsdExperiment", msdknowledge:"navMsdKnowledge", msdvalidation:"navMsdValidation", msdworkbench:"navMsdWorkbench", msdphase8:"navMsdPhase8", msdphase9:"navMsdPhase9", msdphase11:"navMsdPhase11", msdphase11validation:"navMsdPhase11Validation" };
+  const pages = { accounts:"page-accounts", live:"page-live", candles:"page-candles", engine:"page-engine", grid:"page-grid", analysis:"page-analysis", features:"page-features", predbot:"page-predbot", oubot:"page-oubot", tracker:"page-tracker", digits:"page-digits", diag:"page-diag", charts:"page-charts", adxbot:"page-adxbot", aggression:"page-aggression", mtf:"page-mtf", njanja:"page-njanja", rfabot:"page-rfabot", tradesignal:"page-tradesignal", predhistory:"page-predhistory", beastmode:"page-beastmode", sossow:"page-sossow", bazu:"page-bazu", msdexplorer:"page-msdexplorer", msdfeatures:"page-msdfeatures", msdevents:"page-msdevents", msdinspector:"page-msdinspector", msddistribution:"page-msddistribution", msdcorrelation:"page-msdcorrelation", msdsearch:"page-msdsearch", msdexperiment:"page-msdexperiment", msdknowledge:"page-msdknowledge", msdvalidation:"page-msdvalidation", msdworkbench:"page-msdworkbench", msdphase8:"page-msdphase8", msdphase9:"page-msdphase9", msdphase11:"page-msdphase11", msdphase11validation:"page-msdphase11validation" };
+  const navs  = { accounts:"navAccounts", live:"navLive",  candles:"navCandles", engine:"navEngine", grid:"navGrid", analysis:"navAnalysis", features:"navFeatures", predbot:"navPredBot", oubot:"navOuBot", tracker:"navTracker", digits:"navDigits", diag:"navDiag", charts:"navCharts", adxbot:"navAdxBot", aggression:"navAggression", mtf:"navMtf", njanja:"navNjanja", rfabot:"navRfaBot", tradesignal:"navTradeSignal", predhistory:"navPredHistory", beastmode:"navBeastMode", sossow:"navSosSow", bazu:"navBazu", msdexplorer:"navMsdExplorer", msdfeatures:"navMsdFeatures", msdevents:"navMsdEvents", msdinspector:"navMsdInspector", msddistribution:"navMsdDistribution", msdcorrelation:"navMsdCorrelation", msdsearch:"navMsdSearch", msdexperiment:"navMsdExperiment", msdknowledge:"navMsdKnowledge", msdvalidation:"navMsdValidation", msdworkbench:"navMsdWorkbench", msdphase8:"navMsdPhase8", msdphase9:"navMsdPhase9", msdphase11:"navMsdPhase11", msdphase11validation:"navMsdPhase11Validation" };
   window.__mfxCurrentPage = which;
   Object.keys(pages).forEach(k => {
     document.getElementById(pages[k]).classList.toggle("active", k===which);
@@ -26706,6 +26722,7 @@ function showPage(which){
   if (which === "tradesignal" && typeof window.tsStart === "function") window.tsStart();
   if (which === "predhistory" && typeof window.phRender === "function") window.phRender();
   if (which === "beastmode" && typeof window.bmStart === "function") window.bmStart();
+  if (which === "sossow" && typeof window.ssStart === "function") window.ssStart(); else if (typeof window.ssLeave === "function") window.ssLeave();
   if (which === "candles"){
     if (!candlesPageReady){ candlesPageReady = true; buildTfCards(); connectTfWs(); startTfTimers(); }
     TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));
@@ -33795,6 +33812,7 @@ try {
 <script type="module" src="src/analysis/tradeSignalPage.js?v=4"></script>
 <script type="module" src="src/analysis/predictionHistoryPage.js?v=1"></script>
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
+<script type="module" src="src/analysis/sosSowPage.js?v=1"></script>
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>
