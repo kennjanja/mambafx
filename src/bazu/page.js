@@ -152,6 +152,12 @@ export function bazuPageInit() {
   if (!E.state.markets.size && E.state.status === 'idle') E.discover().then(() => E.startLoop()).catch((e) => { E.state.status = 'error: ' + e.message; render(); });
 }
 window.bazuPageInit = bazuPageInit;
+// Read-only snapshot of Bazu's live signal per market (used by the Beast Mode page).
+window.bazuLiveSignals = () => [...E.state.markets.values()].map((m) => {
+  const s = m.signal, has = s && s.direction;
+  return { symbol: m.symbol, name: m.name, dp: m.dp, price: m.last, direction: has ? s.direction : null, ok: !!has && s.gate === GATE.OK, gate: has ? s.gate : null,
+    duration: has ? s.duration : null, durationSec: has ? s.durationSec : null, strength: has ? s.strength : null, decisionTs: has ? s.decisionTs : null };
+});
 window.bazuPageLeave = () => E.pause();
 
 function syncAccounts() {

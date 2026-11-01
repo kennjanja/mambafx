@@ -32,7 +32,7 @@ archive(tracked.filter((r) => r.state === 'correct' || r.state === 'wrong'));
 let uiTimer = null;
 const pending = new Map();     // req_id -> granularity
 
-const isActive = () => { const p = $('page-tradesignal'); return !!p && p.classList.contains('active'); };
+const isActive = () => ['page-tradesignal', 'page-beastmode'].some((id) => { const p = $(id); return !!p && p.classList.contains('active'); });
 const markets = () => (typeof MARKETS !== 'undefined' ? Object.keys(MARKETS) : []);
 const labelOf = (s) => (typeof MARKETS !== 'undefined' && MARKETS[s]) || s;
 
