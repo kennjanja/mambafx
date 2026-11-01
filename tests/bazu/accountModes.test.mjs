@@ -18,7 +18,7 @@ const DEMO = { connected: true, isReal: false, balance: 1000, loginId: 'VRTC999'
 function env({ acc = REAL, trades = [], limits, age = 100, clock = { t: 1_700_000_000_000 } } = {}) {
   const book = createBook({ cfgFor: () => cfg }); let t = 1000; const bought = [], tripped = [];
   const cur = { acc, trades, age };
-  const real = createRealMode({ now: () => clock.t, limits: { ...REAL_LIMITS_DEFAULT, ...limits }, onTrip: (r) => tripped.push(r) });
+  const real = createRealMode({ now: () => clock.t, guards: true, limits: { ...REAL_LIMITS_DEFAULT, ...limits }, onTrip: (r) => tripped.push(r) });
   const choke = createChoke({
     book, cfgFor: () => cfg, now: () => t, log: () => {}, predictNow: () => mkPred(), account: () => cur.acc,
     riskState: () => ({ open: [], todayPnl: 0, lastTradeAt: {}, balance: cur.acc.balance }), limits: {}, realConfirmed: () => real.isEnabledFor(cur.acc),
@@ -184,4 +184,16 @@ test('page renders the account badge and the live-money banner outside the tab p
   assert.match(page, /bzAcctPill/); assert.match(page, /DEMO/);
   assert.ok(!/bzRealOk'\)\.onchange/.test(page), 'the old real-money checkbox is gone');
   assert.ok(!/localStorage[^;]*real(Enabled|Auto)/i.test(page));
+});
+
+// guards removed (default): a connected real account trades without opt-ins, limits or cooldown
+test('with guards off (default) a real account trades with no opt-in, limits or cooldown', async () => {
+  const real = createRealMode({ now: () => 1_700_000_000_000 });
+  const g = (o) => real.gate({ source: 'auto', stake: 50, acc: REAL, trades: [closedLoss(1_700_000_000_000 - 1000), closedLoss(1_699_999_999_000), closedLoss(1_699_999_998_000)], dataAgeMs: 100, ...o });
+  assert.equal(g({}).ok, true, 'stake above old cap, open losses and loss streak do not block');
+  assert.equal(g({ source: 'manual' }).ok, true, 'no ticket confirm needed');
+  assert.equal(g({ acc: { ...REAL, connected: false } }).ok, false, 'still needs a connected account');
+  assert.equal(g({ acc: { ...REAL, scopes: ['read'] } }).ok, false, 'still needs the Trade scope');
+  assert.equal(real.enable(REAL, '').ok, true);
+  assert.equal(real.enableAuto(REAL, '').ok, true);
 });

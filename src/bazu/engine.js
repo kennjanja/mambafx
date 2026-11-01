@@ -25,7 +25,7 @@ import { start as perfStart, mark as perfMark, startMonitors } from './perf3m.js
 import { accountInfo, watchContracts, requestContractUpdate } from './execution.js?v=15';
 import { createBook, S as SS } from './signalBook3m.js?v=15';
 import { createChoke } from './choke3m.js?v=17';
-import { createRealMode, REAL_LIMITS_DEFAULT } from './realMode3m.js?v=17';
+import { createRealMode, REAL_LIMITS_DEFAULT } from './realMode3m.js?v=18';
 import { createSupervisor } from './reconnect3m.js?v=15';
 import { wilson } from './stats.js?v=15';
 import { expiryProbBaseline, sigmaPerTick, reliabilityCurve, brier } from './expiry3m.js?v=15';

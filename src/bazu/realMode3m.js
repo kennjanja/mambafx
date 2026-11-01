@@ -21,6 +21,11 @@ export const REAL_LIMITS_DEFAULT = Object.freeze({
   REAL_COOLDOWN_MS: 15 * 60 * 1000,
 });
 
+/**
+ * Real-account guards (typed-phrase opt-ins, ticket confirm, REAL_* limits, loss-streak cooldown). OFF by default at the owner's request:
+ * a connected account with the Trade scope may trade without them. Set to true (or pass { guards: true }) to restore every guard.
+ */
+export const REAL_GUARDS_DEFAULT = false;
 export const REAL_PHRASE = 'REAL MONEY';
 export const REAL_AUTO_PHRASE = 'REAL AUTO';
 export const STALE_TICK_MS_DEFAULT = 5000;
@@ -43,7 +48,7 @@ export function realStats(trades, { sessionStart, dayStart }) {
   };
 }
 
-export function createRealMode({ now = () => Date.now(), limits = REAL_LIMITS_DEFAULT, staleTickMs = STALE_TICK_MS_DEFAULT, onTrip = () => {} } = {}) {
+export function createRealMode({ now = () => Date.now(), limits = REAL_LIMITS_DEFAULT, guards = REAL_GUARDS_DEFAULT, staleTickMs = STALE_TICK_MS_DEFAULT, onTrip = () => {} } = {}) {
   const startedAt = now();
   const st = { enabled: false, auto: false, suffix: null, reason: null, inflight: 0, inflightStake: 0 };
   const lim = () => ({ ...REAL_LIMITS_DEFAULT, ...limits });
@@ -57,13 +62,14 @@ export function createRealMode({ now = () => Date.now(), limits = REAL_LIMITS_DE
 
   return {
     /** Per-session state; read-only copy for the UI. */
-    view: () => ({ ...st, limits: lim() }),
-    isEnabledFor: (acc) => st.enabled && sameAccount(acc),
-    isAutoEnabledFor: (acc) => st.enabled && st.auto && sameAccount(acc),
+    view: () => ({ ...st, limits: lim(), guards, enabled: guards ? st.enabled : true, auto: guards ? st.auto : true }),
+    isEnabledFor: (acc) => (guards ? st.enabled && sameAccount(acc) : !!acc?.connected),
+    isAutoEnabledFor: (acc) => (guards ? st.enabled && st.auto && sameAccount(acc) : !!acc?.connected),
 
     /** Opt-in 1. Needs a connected real account, the typed phrase and (when known) the trade scope. */
     enable(acc, phrase) {
       if (!acc?.connected) return { ok: false, reason: 'Connect a Deriv account first' };
+      if (!guards) return { ok: true };
       if (!acc.isReal) return { ok: false, reason: 'This is a demo account - no opt-in is needed' };
       if (acc.scopes && !acc.scopes.includes('trade')) return { ok: false, reason: 'This token has no Trade scope' };
       if (!suffixOf(acc.loginId)) return { ok: false, reason: 'Account id unknown' };
@@ -75,6 +81,7 @@ export function createRealMode({ now = () => Date.now(), limits = REAL_LIMITS_DE
     disable() { st.enabled = false; st.auto = false; st.suffix = null; st.reason = 'real trading disabled by user'; return { ok: true }; },
     /** Opt-in 2 (separate): Auto and Semi-auto on the real account. */
     enableAuto(acc, phrase) {
+      if (!guards) return { ok: true };
       if (!st.enabled || !sameAccount(acc)) return { ok: false, reason: 'Enable real trading first' };
       if (String(phrase).trim() !== REAL_AUTO_PHRASE) return { ok: false, reason: `Type ${REAL_AUTO_PHRASE} exactly to confirm` };
       st.auto = true; st.reason = null;
@@ -85,7 +92,7 @@ export function createRealMode({ now = () => Date.now(), limits = REAL_LIMITS_DE
 
     /** Periodic watchdog: connection loss, unknown balance or an account switch end the real opt-ins. */
     monitor(acc) {
-      if (!st.enabled) return;
+      if (!guards || !st.enabled) return;
       if (acc?.connected && acc.isReal && suffixOf(acc.loginId) !== st.suffix) { st.enabled = false; st.auto = false; st.suffix = null; st.reason = 'account changed'; onTrip('account changed'); return; }
       if (acc?.connected && !acc.isReal) { st.enabled = false; st.auto = false; st.suffix = null; st.reason = 'demo account connected'; return; }
       if (!acc?.connected) { if (st.auto) trip('connection lost'); return; }
@@ -99,6 +106,11 @@ export function createRealMode({ now = () => Date.now(), limits = REAL_LIMITS_DE
      * { source: 'manual'|'auto'|'semi'|..., stake, acc, trades, dataAgeMs, ticketConfirmed } -> { ok, reason }
      */
     gate({ source = 'auto', stake, acc, trades = [], dataAgeMs = null, ticketConfirmed = false }) {
+      if (!guards) {
+        if (!acc?.connected) return { ok: false, reason: 'No connected Deriv account' };
+        if (acc.scopes && !acc.scopes.includes('trade')) return { ok: false, reason: 'This token has no Trade scope' };
+        return { ok: true };
+      }
       if (!st.enabled || !sameAccount(acc)) return { ok: false, reason: 'Real trading is off (demo only mode) - use "Enable real trading"' };
       const automated = source !== 'manual', L = lim();
       if (automated && !st.auto) return { ok: false, reason: 'Auto/Semi-auto on a real account needs its own opt-in' };
