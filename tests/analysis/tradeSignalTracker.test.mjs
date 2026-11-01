@@ -62,3 +62,22 @@ test('a price sample can resolve a hit; resolved records do not change; progress
   const ok = { state: 'correct' };
   assert.deepEqual(summarize([r, ok, { state: 'open' }]), { open: 1, resolved: 2, correct: 1, wrong: 1, hitRate: 0.5 });
 });
+
+test('profile hold time and early exit on opposing reversal', () => {
+  let r = openTracked(sig(1, { profile: 'scalp', holdSec: 180, entryG: 180, holdLabel: '3 min', exitOn: 'upthrust' }), T0);
+  assert.equal(r.expiresAt, T0 + 180); assert.equal(r.profile, 'scalp');
+  // reversal that formed before the open is ignored
+  updateTracked(r, { price: 100.5, nowSec: T0 + 30, reversal: { epoch: T0 - 60, label: 'upthrust' } });
+  assert.equal(r.state, 'open');
+  // reversal after the open exits early; scored by price direction
+  updateTracked(r, { price: 100.5, nowSec: T0 + 60, reversal: { epoch: T0 + 40, label: 'upthrust' } });
+  assert.equal(r.state, 'correct'); assert.equal(r.hit, 'exit'); assert.equal(r.exitReason, 'upthrust');
+  r = openTracked(sig(1), T0);
+  updateTracked(r, { price: 99.5, nowSec: T0 + 60, reversal: { epoch: T0 + 40, label: 'x' } });
+  assert.equal(r.state, 'wrong');
+  // a target already touched keeps its result (no exit override)
+  r = openTracked(sig(1), T0);
+  updateTracked(r, { price: 103, nowSec: T0 + 30 });
+  updateTracked(r, { price: 101, nowSec: T0 + 60, reversal: { epoch: T0 + 50, label: 'x' } });
+  assert.equal(r.state, 'open'); assert.equal(r.hit, 'correct');
+});

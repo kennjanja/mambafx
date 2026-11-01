@@ -2,7 +2,9 @@
 // Pure functions (no DOM / network) so the scoring rules can be tested.
 //
 // Rules (all fixed when the signal opens, never tuned afterwards):
-//  - horizon: 1800 s (one 30 min bias candle) from the moment the signal was first seen
+//  - horizon: the signal's profile hold time (default 1800 s) from the moment the signal was first seen
+//  - early exit: opposing entry-timeframe evidence (e.g. an upthrust for a BUY) formed after the signal opened closes it early,
+//    scored by the direction of the last price (unless the target/invalidation was already touched)
 //  - only prices after the signal opened count: scan price samples plus 5 min candles that start after it opened
 //  - first touch decides: target reached first -> correct; invalidation reached first -> wrong;
 //    a single bar touching both is scored wrong (order inside a bar is unknown)
@@ -14,14 +16,16 @@ export const ENTRY_GRANULARITY = 300;
 
 export function openTracked(sig, nowSec) {
   if (!sig || sig.status !== 'signal' || !(sig.dir === 1 || sig.dir === -1) || !(sig.price > 0)) return null;
+  const hold = sig.holdSec > 0 ? sig.holdSec : HORIZON_SEC;
   return {
-    id: sig.symbol + '@' + nowSec,
+    id: sig.symbol + '|' + (sig.profile || 'intraday') + '@' + nowSec,
+    profile: sig.profile || 'intraday', profileName: sig.profileName || 'Intraday', holdLabel: sig.holdLabel || '30 min', entryG: sig.entryG || ENTRY_GRANULARITY, trigger: sig.trigger ? sig.trigger.label : null, exitOn: sig.exitOn || null,
     symbol: sig.symbol, label: sig.label, dir: sig.dir, action: sig.action,
     headline: sig.headline,
     entry: sig.price,
     target: sig.target && sig.target.price != null ? sig.target.price : null,
     invalidation: sig.invalidation && sig.invalidation.price != null ? sig.invalidation.price : null,
-    openedAt: nowSec, expiresAt: nowSec + HORIZON_SEC,
+    openedAt: nowSec, expiresAt: nowSec + hold,
     hit: null, hitAt: null, last: sig.price, state: 'open',
   };
 }
@@ -36,11 +40,12 @@ function touch(rec, hi, lo) {
 }
 
 /** Advance a record with new market data. candles: ascending 5 min candles; price: latest sample. Returns the record (mutated). */
-export function updateTracked(rec, { candles = [], price = null, nowSec }) {
+export function updateTracked(rec, { candles = [], price = null, nowSec, reversal = null }) {
   if (rec.state !== 'open') return rec;
   const end = Math.min(nowSec, rec.expiresAt);
   // a bar is usable only if it starts after the signal opened (the bar containing the open also holds pre-signal prices)
-  const firstBar = (Math.floor(rec.openedAt / ENTRY_GRANULARITY) + 1) * ENTRY_GRANULARITY;
+  const g = rec.entryG || ENTRY_GRANULARITY;
+  const firstBar = (Math.floor(rec.openedAt / g) + 1) * g;
   let lastClose = null;
   const bars = candles.filter((c) => c.epoch >= firstBar && c.epoch < rec.expiresAt).sort((a, b) => a.epoch - b.epoch);
   for (const c of bars) {
@@ -52,10 +57,12 @@ export function updateTracked(rec, { candles = [], price = null, nowSec }) {
     lastClose = price;
   }
   if (lastClose != null) rec.last = lastClose;
-  if (nowSec >= rec.expiresAt) {
-    rec.state = rec.hit || ((rec.last - rec.entry) * rec.dir > 0 ? 'correct' : 'wrong');
+  const exited = !rec.hit && reversal && reversal.epoch > rec.openedAt && nowSec < rec.expiresAt;
+  if (exited) { rec.exitReason = reversal.label; rec.hit = 'exit'; }
+  if (nowSec >= rec.expiresAt || exited) {
+    rec.state = rec.hit === 'correct' || rec.hit === 'wrong' ? rec.hit : (rec.last - rec.entry) * rec.dir > 0 ? 'correct' : 'wrong';
     if (!rec.hit) rec.hit = 'none';
-    rec.resolvedAt = end;
+    rec.resolvedAt = exited ? nowSec : end;
   }
   return rec;
 }
