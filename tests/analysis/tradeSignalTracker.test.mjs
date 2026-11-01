@@ -15,26 +15,36 @@ test('only real signals open a record', () => {
   assert.equal(r.expiresAt, T0 + HORIZON_SEC);
 });
 
-test('stays open until the lapse even if the target is already touched', () => {
+test('stay-above rule: staying above the entry to the lapse wins, even if the target was never reached', () => {
   const r = openTracked(sig(1), T0);
-  updateTracked(r, { candles: [bar(1, 102.5, 100, 102)], nowSec: T0 + 600 });
-  assert.equal(r.state, 'open'); assert.equal(r.hit, 'correct');
-  updateTracked(r, { candles: [bar(1, 102.5, 100, 102)], nowSec: T0 + HORIZON_SEC });
-  assert.equal(r.state, 'correct');
+  updateTracked(r, { candles: [bar(1, 100.8, 100.1, 100.4)], nowSec: T0 + 600 });
+  assert.equal(r.state, 'open'); assert.equal(r.hit, null);
+  updateTracked(r, { candles: [bar(1, 100.8, 100.1, 100.4)], nowSec: T0 + HORIZON_SEC });
+  assert.equal(r.state, 'correct'); assert.equal(r.targetHit, false);
 });
 
-test('invalidation first is wrong; a bar touching both is wrong; SELL mirrors BUY', () => {
+test('going below the entry at any time loses, even if the target was touched and price recovered; SELL mirrors', () => {
   let r = openTracked(sig(1), T0);
-  updateTracked(r, { candles: [bar(1, 100.5, 98.9, 99), bar(2, 103, 99, 102)], nowSec: T0 + HORIZON_SEC });
-  assert.equal(r.state, 'wrong');
+  updateTracked(r, { candles: [bar(1, 100.5, 99.99, 100.4), bar(2, 103, 100.5, 102)], nowSec: T0 + HORIZON_SEC });
+  assert.equal(r.state, 'wrong'); assert.equal(r.hit, 'wrong'); assert.equal(r.targetHit, true);
   r = openTracked(sig(1), T0);
-  updateTracked(r, { candles: [bar(1, 103, 98.5, 100)], nowSec: T0 + HORIZON_SEC });
+  updateTracked(r, { candles: [bar(1, 103, 100, 102)], nowSec: T0 + HORIZON_SEC });   // touching the entry exactly is not below it
+  assert.equal(r.state, 'correct'); assert.equal(r.targetHit, true);
+  r = openTracked(sig(-1), T0);
+  updateTracked(r, { candles: [bar(1, 100.01, 98, 98.5)], nowSec: T0 + HORIZON_SEC });
   assert.equal(r.state, 'wrong');
   r = openTracked(sig(-1), T0);
-  updateTracked(r, { candles: [bar(1, 100.2, 97.9, 98)], nowSec: T0 + HORIZON_SEC });
+  updateTracked(r, { candles: [bar(1, 100, 97.9, 98)], nowSec: T0 + HORIZON_SEC });
   assert.equal(r.state, 'correct');
 });
 
+test('a loss is recorded immediately but the record resolves at the lapse', () => {
+  const r = openTracked(sig(1), T0);
+  updateTracked(r, { price: 99.9, nowSec: T0 + 60 });
+  assert.equal(r.state, 'open'); assert.equal(r.hit, 'wrong');
+  updateTracked(r, { price: 101, nowSec: T0 + HORIZON_SEC });
+  assert.equal(r.state, 'wrong');
+});
 test('bars before or at the open bar, and after the lapse, are ignored', () => {
   const r = openTracked(sig(1), T0);
   updateTracked(r, { candles: [bar(0, 110, 90, 100), bar(7, 110, 90, 100)], nowSec: T0 + HORIZON_SEC });
@@ -43,7 +53,7 @@ test('bars before or at the open bar, and after the lapse, are ignored', () => {
 
 test('no touch: scored by direction of the last price', () => {
   let r = openTracked(sig(1), T0);
-  updateTracked(r, { candles: [bar(1, 101, 99.5, 100.6)], nowSec: T0 + HORIZON_SEC });
+  updateTracked(r, { candles: [bar(1, 101, 100.2, 100.6)], nowSec: T0 + HORIZON_SEC });
   assert.equal(r.state, 'correct');
   r = openTracked(sig(1), T0);
   updateTracked(r, { candles: [bar(1, 100.5, 99.5, 99.7)], nowSec: T0 + HORIZON_SEC });
@@ -74,10 +84,13 @@ test('profile hold time and early exit on opposing reversal', () => {
   assert.equal(r.state, 'correct'); assert.equal(r.hit, 'exit'); assert.equal(r.exitReason, 'upthrust');
   r = openTracked(sig(1), T0);
   updateTracked(r, { price: 99.5, nowSec: T0 + 60, reversal: { epoch: T0 + 40, label: 'x' } });
-  assert.equal(r.state, 'wrong');
-  // a target already touched keeps its result (no exit override)
+  assert.equal(r.state, 'open'); assert.equal(r.hit, 'wrong');   // already lost, resolves at the lapse
   r = openTracked(sig(1), T0);
-  updateTracked(r, { price: 103, nowSec: T0 + 30 });
+  updateTracked(r, { price: 100, nowSec: T0 + 60, reversal: { epoch: T0 + 40, label: 'x' } });
+  assert.equal(r.state, 'wrong');   // level with the entry is not above it
+  // already below the entry: an exit does not override the loss
+  r = openTracked(sig(1), T0);
+  updateTracked(r, { price: 99.5, nowSec: T0 + 30 });
   updateTracked(r, { price: 101, nowSec: T0 + 60, reversal: { epoch: T0 + 50, label: 'x' } });
-  assert.equal(r.state, 'open'); assert.equal(r.hit, 'correct');
+  assert.equal(r.state, 'open'); assert.equal(r.hit, 'wrong');
 });
