@@ -1,10 +1,10 @@
 // Trade Signal page: scans every market for a 30 min bias + 5 min entry setup (see tradeSignal.js) and lists
 // the setups. Clicking one opens Candle Charts on that market with all evidence highlighted in blue.
 // Uses its own read-only WebSocket (public candle history); it never places orders.
-import { buildTradeSignal, TRADE_SIGNAL_TFS, fmtPrice } from './tradeSignal.js';
+import { buildTradeSignal, PROFILE_LIST, ALL_GRANULARITIES, fmtPrice } from './tradeSignal.js';
 import { openTracked, updateTracked, progress, summarize } from './tradeSignalTracker.js';
 
-const TFS = [TRADE_SIGNAL_TFS.entry, TRADE_SIGNAL_TFS.bias, ...TRADE_SIGNAL_TFS.htf];
+const TFS = ALL_GRANULARITIES.map((g) => ({ g }));
 const COUNT = 300, MARKET_TIMEOUT_MS = 12000, RESCAN_MS = 60000;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -96,21 +96,24 @@ function finishMarket() {
   clearTimeout(marketTimer);
   if (!cur) return;
   const { sym, candles } = cur; cur = null;
-  let sig;
-  try { sig = buildTradeSignal({ symbol: sym, label: labelOf(sym), candles }); }
-  catch (e) { sig = { symbol: sym, label: labelOf(sym), status: 'insufficient', dir: 0, reason: 'analysis error: ' + e.message, headline: labelOf(sym) + ': analysis error' }; }
-  results.set(sym, { sig, at: Date.now() });
-  track(sym, sig, candles[TRADE_SIGNAL_TFS.entry.g] || []);
+  for (const profile of PROFILE_LIST) {
+    let sig;
+    try { sig = buildTradeSignal({ symbol: sym, label: labelOf(sym), candles, profile }); }
+    catch (e) { sig = { symbol: sym, label: labelOf(sym), profile: profile.id, profileName: profile.name, status: 'insufficient', dir: 0, reason: 'analysis error: ' + e.message, headline: labelOf(sym) + ': analysis error' }; }
+    results.set(sym + '|' + profile.id, { sig, at: Date.now() });
+    track(sym, sig, candles[profile.tfs.entry.g] || []);
+  }
   scanned++; render(); next();
 }
 
 function track(sym, sig, entryCandles) {
   const t = nowSec();
   const price = sig.price != null ? sig.price : (entryCandles.length ? entryCandles[entryCandles.length - 1].close : null);
-  let open = tracked.find((r) => r.symbol === sym && r.state === 'open');
-  if (open) { updateTracked(open, { candles: entryCandles, price, nowSec: t }); if (open.state !== 'open') archive([open]); }
+  const pid = sig.profile || 'intraday', mine = (r) => r.symbol === sym && (r.profile || 'intraday') === pid && r.state === 'open';
+  let open = tracked.find(mine);
+  if (open) { updateTracked(open, { candles: entryCandles, price, nowSec: t, reversal: sig.reversal || null }); if (open.state !== 'open') archive([open]); }
   // a signal that is still valid after the previous one lapsed is a fresh signal
-  if (!tracked.some((r) => r.symbol === sym && r.state === 'open')) {
+  if (!tracked.some(mine)) {
     const rec = openTracked(sig, t);
     if (rec) tracked.push(rec);
   }
@@ -126,10 +129,11 @@ function trackedHtml() {
     const buy = r.dir === 1, cls = r.state === 'correct' ? 'ts-ok' : r.state === 'wrong' ? 'ts-bad' : '';
     const mark = r.state === 'correct' ? '<span class="ts-res ok" title="Correct">&#10003;</span>' : r.state === 'wrong' ? '<span class="ts-res bad" title="Wrong">&#10007;</span>' : `<span class="ts-res run" title="Running">${fmtLeft(r.expiresAt - t)}</span>`;
     const why = r.state === 'open' ? (r.hit ? (r.hit === 'correct' ? 'target reached, waiting for lapse' : 'invalidated, waiting for lapse') : 'in progress')
+      : r.hit === 'exit' ? 'exited early: ' + esc(r.exitReason || 'opposing reversal')
       : r.hit === 'correct' ? 'target reached first' : r.hit === 'wrong' ? 'invalidation reached first' : (r.state === 'correct' ? 'lapsed, price moved with the signal' : 'lapsed, price moved against the signal');
     return `<div class="ts-trk ${cls}" data-sym="${esc(r.symbol)}" role="button" tabindex="0" title="Open ${esc(r.label)} in Candle Charts">
-      ${mark}<span class="ts-main"><b>${esc(r.label)} · ${esc(r.action)} @ ${fmtPrice(r.entry)}</b>
-      <span class="ts-sub">${r.target != null ? 'target ' + fmtPrice(r.target) : 'no target'} · invalidation ${r.invalidation != null ? fmtPrice(r.invalidation) : '—'} · last ${fmtPrice(r.last)} · ${why} · ${new Date(r.openedAt * 1000).toLocaleTimeString()}</span>
+      ${mark}<span class="ts-main"><b>${esc(r.label)} · ${esc(r.action)} @ ${fmtPrice(r.entry)} <em class="ts-prof">${esc(r.profileName || 'Intraday')} · hold ${esc(r.holdLabel || '30 min')}</em></b>
+      <span class="ts-sub">${r.trigger ? 'trigger: ' + esc(r.trigger) + ' · ' : ''}${r.target != null ? 'target ' + fmtPrice(r.target) : 'no target'} · invalidation ${r.invalidation != null ? fmtPrice(r.invalidation) : '—'} · last ${fmtPrice(r.last)} · ${why} · ${new Date(r.openedAt * 1000).toLocaleTimeString()}</span>
       ${r.state === 'open' ? `<span class="ts-bar"><i data-id="${esc(r.id)}" style="width:${(progress(r, t) * 100).toFixed(1)}%"></i></span>` : ''}</span></div>`;
   };
   if (!tracked.length) return '';
@@ -148,24 +152,27 @@ function tickUi() {
 
 function row(sig) {
   const buy = sig.dir === 1, cls = sig.status === 'signal' ? (buy ? 'ts-buy' : 'ts-sell') : 'ts-wait';
+  const trg = sig.trigger ? ` · trigger ${esc(sig.trigger.kind)}: ${esc(sig.trigger.label)}` : (sig.status === 'watching' ? ` · ${esc(sig.reason)}` : '');
   const inv = sig.invalidation ? ` · invalidation ${fmtPrice(sig.invalidation.price)} (${esc(sig.invalidation.rule)})` : '';
-  return `<div class="ts-row ${cls}" data-sym="${esc(sig.symbol)}" role="button" tabindex="0" title="Open ${esc(sig.label)} in Candle Charts with the evidence highlighted">
-    <span class="ts-badge">${esc(sig.action || '')}</span>
-    <span class="ts-main"><b>${esc(sig.headline)}</b>
-      <span class="ts-sub">price ${sig.price != null ? fmtPrice(sig.price) : '—'}${inv} · ${esc(sig.biasTf)} balance ${sig.bias.balance == null ? '—' : sig.bias.balance.toFixed(2)} · ${esc(sig.entryTf)} ${esc(sig.entry.verdict)}</span></span>
+  return `<div class="ts-row ${cls}" data-sym="${esc(sig.symbol)}" data-key="${esc(sig.symbol + '|' + sig.profile)}" role="button" tabindex="0" title="Open ${esc(sig.label)} in Candle Charts with the evidence highlighted">
+    <span class="ts-badge">${sig.status === 'watching' ? 'WAIT' : esc(sig.action || '')}</span>
+    <span class="ts-main"><b><em class="ts-prof">${esc(sig.profileName || '')}</em> ${esc(sig.headline)}</b>
+      <span class="ts-sub">price ${sig.price != null ? fmtPrice(sig.price) : '—'}${inv} · ${esc(sig.biasTf)} balance ${sig.bias.balance == null ? '—' : sig.bias.balance.toFixed(2)} · ${esc(sig.entryTf)} ${esc(sig.entry.verdict)}${trg}</span></span>
     <span class="ts-go">Open charts ›</span></div>`;
 }
 function render() {
   const el = $('tsList'); if (!el) return;
   const all = [...results.values()].map((r) => r.sig);
   const live = all.filter((s) => s.status === 'signal').sort((a, b) => Math.abs(b.bias.balance) - Math.abs(a.bias.balance));
+  const watch = all.filter((s) => s.status === 'watching').sort((a, b) => Math.abs(b.bias.balance) - Math.abs(a.bias.balance));
   const wait = all.filter((s) => s.status === 'wait');
-  const rest = all.filter((s) => s.status !== 'signal' && s.status !== 'wait');
+  const rest = all.filter((s) => !['signal', 'watching', 'wait'].includes(s.status));
   const bar = $('tsStatus');
-  if (bar) bar.textContent = `${status === 'scanning' ? `scanning ${scanned}/${total}…` : status}${lastScanAt ? ' · last full scan ' + new Date(lastScanAt).toLocaleTimeString() : ''} · ${live.length} setup(s) · ${wait.length} waiting`;
-  el.innerHTML = trackedHtml() + (live.length ? live.map(row).join('') : `<div class="ts-empty">${status === 'scanning' && !all.length ? 'Scanning markets…' : 'No market currently has a 30 min lean with a non-opposing 5 min entry.'}</div>`)
-    + (wait.length ? `<div class="ts-h">Waiting (30 min lean, 5 min opposes)</div>` + wait.map(row).join('') : '')
-    + (rest.length ? `<details class="ts-rest"><summary>No setup (${rest.length})</summary>${rest.map((s) => `<div class="ts-none"><b>${esc(s.label)}</b> — ${esc(s.reason || s.headline)}</div>`).join('')}</details>` : '');
+  if (bar) bar.textContent = `${status === 'scanning' ? `scanning ${scanned}/${total}…` : status}${lastScanAt ? ' · last full scan ' + new Date(lastScanAt).toLocaleTimeString() : ''} · ${live.length} entry signal(s) · ${watch.length} watching for a trigger · ${wait.length} opposed`;
+  el.innerHTML = trackedHtml() + (live.length ? live.map(row).join('') : `<div class="ts-empty">${status === 'scanning' && !all.length ? 'Scanning markets…' : 'No market has an entry trigger right now (pullback or liquidity sweep).'}</div>`)
+    + (watch.length ? `<div class="ts-h">Watching - lean found, waiting for a pullback / swing / liquidity sweep</div>` + watch.map(row).join('') : '')
+    + (wait.length ? `<div class="ts-h">Opposed (bias lean, entry timeframe against it)</div>` + wait.map(row).join('') : '')
+    + (rest.length ? `<details class="ts-rest"><summary>No setup (${rest.length})</summary>${rest.map((s) => `<div class="ts-none"><b>${esc(s.label)} · ${esc(s.profileName || '')}</b> — ${esc(s.reason || s.headline)}</div>`).join('')}</details>` : '');
 }
 
 export function tsStart() {
@@ -182,8 +189,8 @@ export function tsStop() {
 export function tsRescan() { if (running && ws && status !== 'scanning') scan(); else if (!running) tsStart(); }
 
 /** Open Candle Charts on the market with the blue evidence highlight on. */
-export function tsOpen(sym) {
-  const r = results.get(sym);
+export function tsOpen(sym, key) {
+  const r = results.get(key) || [...results.entries()].find(([k]) => k.startsWith(sym + '|') && results.get(k).sig.status === 'signal')?.[1] || [...results.entries()].find(([k]) => k.startsWith(sym + '|'))?.[1];
   window.__tsFocus = { symbol: sym, headline: r ? r.sig.headline : sym };
   const chip = $('pa-evid');
   if (chip && !chip.checked) { chip.checked = true; chip.dispatchEvent(new Event('change')); }
@@ -193,8 +200,8 @@ export function tsOpen(sym) {
 }
 
 document.addEventListener('click', (e) => {
-  const r = e.target.closest && e.target.closest('#tsList .ts-row, #tsList .ts-trk'); if (r) tsOpen(r.dataset.sym);
+  const r = e.target.closest && e.target.closest('#tsList .ts-row, #tsList .ts-trk'); if (r) tsOpen(r.dataset.sym, r.dataset.key);
   if (e.target && e.target.id === 'tsRescan') tsRescan();
 });
-document.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && (e.target.classList.contains('ts-row') || e.target.classList.contains('ts-trk'))) { e.preventDefault(); tsOpen(e.target.dataset.sym); } });
+document.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && (e.target.classList.contains('ts-row') || e.target.classList.contains('ts-trk'))) { e.preventDefault(); tsOpen(e.target.dataset.sym, e.target.dataset.key); } });
 Object.assign(window, { tsStart, tsStop, tsOpen, tsRescan, __tsResults: results });

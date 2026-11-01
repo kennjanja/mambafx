@@ -219,6 +219,7 @@ footer{text-align:center;color:var(--muted);font-size:11px;margin-top:22px;line-
 #page-tradesignal .ts-res.ok{color:#22c55e}#page-tradesignal .ts-res.bad{color:#ef4444}#page-tradesignal .ts-res.run{font-size:12px;color:#60a5fa;font-family:monospace}
 #page-tradesignal .ts-trk .ts-bar{display:block;height:5px;margin:4px 0 0;background:#1a2130;border-radius:3px;overflow:hidden;padding:0}
 #page-tradesignal .ts-trk .ts-bar i{display:block;height:100%;background:#3b82f6}
+.ts-prof{font-style:normal;font-size:10px;font-weight:700;color:#60a5fa;border:1px solid #1e3a5f;border-radius:5px;padding:1px 6px;margin-right:4px}
 #page-tradesignal .ts-note{font-size:11px;color:var(--muted);margin:0 0 10px}
 #page-tradesignal .ts-bar{display:flex;gap:12px;align-items:center;margin-bottom:12px;font-size:12px;color:var(--muted)}
 #page-tradesignal .ts-bar button{background:#0d121d;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:5px 12px;cursor:pointer}
@@ -784,7 +785,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
   <div id="phList"></div>
 </div>
 <div id="page-tradesignal" class="page">
-    <div class="ts-note"><b>Trade Signal</b> — every market is scanned for a <b>30 min</b> evidence lean with a non-opposing <b>5 min</b> entry (1 hour and 4 hour as context). Click a setup to open Candle Charts on that market with all evidence highlighted in blue. These are rule-based readings of provisional, unvalidated evidence weights: not a forecast, not a probability, and no profitability is claimed. Nothing here places an order.</div>
+    <div class="ts-note"><b>Trade Signal</b> — every market is scanned under three profiles: <b>Scalp</b> (15 min bias, 3 min entry, hold 3 min), <b>Intraday</b> (30 min bias, 5 min entry, hold 30 min) and <b>Swing</b> (1 hour bias, 15 min entry, hold 1 hour). A bias lean first goes to <b>Watching</b>; it becomes an entry signal only when a pullback or liquidity sweep appears on the entry timeframe, and a running trade closes at its hold time or earlier on an opposing reversal (e.g. an upthrust). Click a setup to open Candle Charts on that market with all evidence highlighted in blue. These are rule-based readings of provisional, unvalidated evidence weights: not a forecast, not a probability, and no profitability is claimed. Nothing here places an order.</div>
     <div class="ts-bar"><span id="tsStatus">idle</span><button id="tsRescan" type="button">Rescan now</button></div>
     <div id="tsList"></div>
   </div>
@@ -33769,7 +33770,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=31"></script>
-<script type="module" src="src/analysis/tradeSignalPage.js?v=2"></script>
+<script type="module" src="src/analysis/tradeSignalPage.js?v=3"></script>
 <script type="module" src="src/analysis/predictionHistoryPage.js?v=1"></script>
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>

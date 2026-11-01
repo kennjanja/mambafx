@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTradeSignal, TRADE_SIGNAL_TFS } from '../../src/analysis/tradeSignal.js';
+import { buildTradeSignal, TRADE_SIGNAL_TFS, PROFILE_LIST, PROFILES, ALL_GRANULARITIES } from '../../src/analysis/tradeSignal.js';
 import { analyzeEvidence } from '../../src/analysis/evidence.js';
 
 // Synthetic data only: these tests check the composition rules, not market behaviour.
@@ -50,4 +50,27 @@ test('every outcome is internally consistent across many synthetic series', () =
 test('timeframes are the documented 30 min bias and 5 min entry', () => {
   assert.equal(TRADE_SIGNAL_TFS.bias.g, 1800);
   assert.equal(TRADE_SIGNAL_TFS.entry.g, 300);
+});
+
+test('profiles: every profile yields a consistent status; signals carry a trigger, hold and exit rule', () => {
+  const counts = { signal: 0, watching: 0 };
+  for (const prof of PROFILE_LIST) {
+    for (let seed = 1; seed <= 40; seed++) {
+      const drift = ((seed % 5) - 2) * 0.15, candles = {};
+      ALL_GRANULARITIES.forEach((g, i) => { candles[g] = walk(seed * 7 + i, 300, g, drift); });
+      const s = buildTradeSignal({ symbol: 'X', candles, profile: prof });
+      assert.equal(s.profile, prof.id); assert.equal(s.holdSec, prof.holdSec);
+      if (s.status === 'signal') {
+        counts.signal++;
+        assert.ok(s.trigger && ['pullback', 'sweep'].includes(s.trigger.kind));
+        assert.equal(s.reversal, null, 'a signal never opens with an opposing reversal already present');
+        assert.match(s.headline, new RegExp(`hold ${prof.holdLabel}`));
+        assert.match(s.headline, new RegExp(`on ${prof.tfs.entry.label} after`));
+      }
+      if (s.status === 'watching') { counts.watching++; assert.match(s.headline, /WAIT on/); }
+    }
+  }
+  assert.ok(counts.signal + counts.watching > 0);
+  assert.deepEqual(ALL_GRANULARITIES, [180, 300, 900, 1800, 3600, 14400]);
+  assert.equal(PROFILES.scalp.holdSec, 180);
 });
