@@ -3,34 +3,40 @@
 // Uses its own read-only WebSocket (public candle history); it never places orders.
 import { buildTradeSignal, PROFILE_LIST, ALL_GRANULARITIES, fmtPrice } from './tradeSignal.js';
 import { openTracked, updateTracked, progress, summarize } from './tradeSignalTracker.js';
+import { ARCHIVE_KEY, loadArchive, mergeArchiveRecords } from './tradeSignalStorage.js';
+import { transitionLifecycle, WATCHING_EXPIRY_SEC, TERMINAL_STATES } from './tradeSignalArchitecture.js';
 
-const TFS = ALL_GRANULARITIES.map((g) => ({ g }));
+const TFS = [...new Set([60, ...ALL_GRANULARITIES])].sort((a, b) => a - b).map((g) => ({ g }));
 const COUNT = 300, MARKET_TIMEOUT_MS = 12000, RESCAN_MS = 60000;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-const results = new Map();     // symbol -> { sig, at }
+const results = new Map();     // symbol/profile -> { sig, at }
+const LIFECYCLE_KEY = 'mfx_ts_lifecycle_v1';
+const lifecycleByKey = new Map();
+try { for (const [k, v] of Object.entries(JSON.parse(localStorage.getItem(LIFECYCLE_KEY) || '{}'))) lifecycleByKey.set(k, v); } catch (_) {}
 let ws = null, running = false, endpointIdx = 0, symMap = {}, scanTimer = null, marketTimer = null;
 let queue = [], cur = null, scanned = 0, total = 0, lastScanAt = null, reqSeq = 7100, status = 'idle';
+const pendingExpiryTicks = new Map();
 // Every signal produced is followed until its predicted window lapses, then marked correct (green tick) or wrong (red X).
 const TRACK_KEY = 'mfx_ts_track_v1', TRACK_MAX = 300;
 let tracked = [];
 try { tracked = JSON.parse(localStorage.getItem(TRACK_KEY) || '[]').filter((r) => r && r.id && r.expiresAt); } catch (_) {}
 const saveTracked = () => { try { localStorage.setItem(TRACK_KEY, JSON.stringify(tracked.slice(-TRACK_MAX))); } catch (_) {} };
+const saveLifecycle = () => { try { localStorage.setItem(LIFECYCLE_KEY, JSON.stringify(Object.fromEntries(lifecycleByKey))); } catch (_) {} };
 const nowSec = () => Math.floor(Date.now() / 1000);
 // Resolved predictions are archived permanently (separate store, read by the Prediction History page).
-const ARCHIVE_KEY = 'mfx_ts_archive_v1', ARCHIVE_MAX = 5000;
+const ARCHIVE_MAX = 5000;
+loadArchive();
 function archive(recs) {
   if (!recs.length) return;
-  let a = []; try { a = JSON.parse(localStorage.getItem(ARCHIVE_KEY) || '[]'); } catch (_) {}
-  const have = new Set(a.map((r) => r.id));
-  for (const r of recs) if (!have.has(r.id)) a.push(r);
+  const a = mergeArchiveRecords(loadArchive(), recs);
   try { localStorage.setItem(ARCHIVE_KEY, JSON.stringify(a.slice(-ARCHIVE_MAX))); } catch (_) {}
   window.dispatchEvent(new Event('mfx-prediction-archived'));
 }
 archive(tracked.filter((r) => r.state === 'correct' || r.state === 'wrong'));
 let uiTimer = null;
-const pending = new Map();     // req_id -> granularity
+const pending = new Map();     // req_id -> request type and candle granularity
 
 const isActive = () => ['page-tradesignal', 'page-beastmode'].some((id) => { const p = $(id); return !!p && p.classList.contains('active'); });
 const markets = () => (typeof MARKETS !== 'undefined' ? Object.keys(MARKETS) : []);
@@ -49,8 +55,10 @@ function connect() {
   ws.onmessage = (ev) => {
     let m; try { m = JSON.parse(ev.data); } catch (_) { return; }
     if (m.msg_type === 'active_symbols' || m.req_id === 7099) { onSymbols(m); return; }
-    if (m.error) { if (pending.has(m.req_id)) onCandles(m.req_id, null); return; }
+    if (m.error) { if (pending.has(m.req_id)) onCandles(m.req_id, null); if (pendingExpiryTicks.has(m.req_id)) onExpiryTicks(m.req_id, null); return; }
     if (m.msg_type === 'candles' && Array.isArray(m.candles) && pending.has(m.req_id)) onCandles(m.req_id, m.candles);
+    if (m.msg_type === 'history' && pending.has(m.req_id)) onCandles(m.req_id, m.history || null);
+    if (m.msg_type === 'history' && pendingExpiryTicks.has(m.req_id)) onExpiryTicks(m.req_id, m.history || null);
   };
   ws.onclose = () => { ws = null; if (!opened) endpointIdx++; if (running) retry(); };
   ws.onerror = () => {};
@@ -70,6 +78,7 @@ function onSymbols(m) {
 
 function scan() {
   if (!running || !ws) return;
+  requestExpiredTicks();
   queue = markets().slice(); total = queue.length; scanned = 0; status = 'scanning';
   next();
 }
@@ -78,47 +87,130 @@ function next() {
   if (!running) return;
   const sym = queue.shift();
   if (!sym) { status = 'idle'; lastScanAt = Date.now(); render(); clearTimeout(scanTimer); scanTimer = setTimeout(() => { if (isActive()) scan(); else stop(); }, RESCAN_MS); return; }
-  cur = { sym, candles: {}, got: 0, want: TFS.length };
-  for (const tf of TFS) {
-    const id = ++reqSeq; pending.set(id, tf.g);
-    send({ ticks_history: symMap[sym] || sym, end: 'latest', count: COUNT, style: 'candles', granularity: tf.g, req_id: id });
+  const monitorOpen = tracked.some((r) => r.symbol === sym && r.state === 'open');
+  const scanTfs = TFS.filter((tf) => tf.g !== 60 || monitorOpen);
+  cur = { sym, candles: {}, tick: null, got: 0, want: scanTfs.length + 1 };
+  for (const tf of scanTfs) {
+    const id = ++reqSeq; pending.set(id, { type: 'candles', g: tf.g });
+    send({ ticks_history: symMap[sym] || sym, end: 'latest', count: tf.g === 60 ? 360 : COUNT, style: 'candles', granularity: tf.g, req_id: id });
   }
+  const spotId = ++reqSeq; pending.set(spotId, { type: 'spot' });
+  send({ ticks_history: symMap[sym] || sym, end: 'latest', count: 1, style: 'ticks', req_id: spotId });
   marketTimer = setTimeout(finishMarket, MARKET_TIMEOUT_MS);
   render();
 }
 function onCandles(id, candles) {
-  const g = pending.get(id); pending.delete(id);
-  if (!cur) return;
-  if (candles) cur.candles[g] = candles.map((c) => ({ epoch: +c.epoch, open: +c.open, high: +c.high, low: +c.low, close: +c.close }));
+  const req = pending.get(id); pending.delete(id);
+  if (!cur || !req) return;
+  if (req.type === 'spot') {
+    const times = candles && candles.times, prices = candles && candles.prices;
+    if (Array.isArray(times) && times.length && Array.isArray(prices) && prices.length) cur.tick = { epoch: +times[times.length - 1], quote: +prices[prices.length - 1] };
+  } else if (candles) cur.candles[req.g] = candles.map((c) => ({ epoch: +c.epoch, open: +c.open, high: +c.high, low: +c.low, close: +c.close }));
   if (++cur.got >= cur.want) finishMarket();
 }
 function finishMarket() {
   clearTimeout(marketTimer);
   if (!cur) return;
-  const { sym, candles } = cur; cur = null;
+  const { sym, candles, tick } = cur; cur = null;
+  const scanTime = nowSec();
   for (const profile of PROFILE_LIST) {
     let sig;
-    try { sig = buildTradeSignal({ symbol: sym, label: labelOf(sym), candles, profile }); }
+    try { sig = buildTradeSignal({ symbol: sym, label: labelOf(sym), candles, profile, nowSec: scanTime }); }
     catch (e) { sig = { symbol: sym, label: labelOf(sym), profile: profile.id, profileName: profile.name, status: 'insufficient', dir: 0, reason: 'analysis error: ' + e.message, headline: labelOf(sym) + ': analysis error' }; }
+    if (tick && Number.isFinite(tick.quote) && tick.quote > 0) { sig.price = tick.quote; sig.entryAt = tick.epoch; sig.detectedAt = scanTime; }
+    updateLifecycle(sig, profile, scanTime);
     results.set(sym + '|' + profile.id, { sig, at: Date.now() });
-    track(sym, sig, candles[profile.tfs.entry.g] || []);
+    track(sym, sig, candles[60] || []);
   }
   scanned++; render(); next();
 }
 
-function track(sym, sig, entryCandles) {
+function updateLifecycle(sig, profile, at) {
+  const key = sig.symbol + '|' + profile.id;
+  let lifecycle = lifecycleByKey.get(key) || { state: 'No Setup', lifecycleHistory: [], watchingSince: null };
+  if (TERMINAL_STATES.includes(lifecycle.state) && sig.status === 'signal') lifecycle = { state: 'No Setup', lifecycleHistory: [], watchingSince: null };
+  const hasBias = sig.dir === 1 || sig.dir === -1;
+  const hasLocation = !!(sig.layers && sig.layers.location.status === 'Approaching Location');
+  const hasModel = !!sig.primaryModel;
+  const move = (next, reason) => { if (lifecycle.state !== next && !TERMINAL_STATES.includes(lifecycle.state)) transitionLifecycle(lifecycle, next, at, reason || sig.reason || sig.headline || ''); };
+  if (lifecycle.state === 'No Setup') {
+    if (sig.status === 'insufficient') move('Insufficient Data', sig.reason);
+    else if (hasBias) move('Bias Identified', 'directional context established');
+  }
+  if (lifecycle.state === 'Bias Identified') {
+    if (sig.status === 'wait') move('Opposed', sig.reason);
+    else if (hasBias) move('Watching', 'awaiting context-aligned location and entry model');
+  }
+  if (lifecycle.state === 'Watching') {
+    if (sig.status === 'wait') move('Opposed', sig.reason);
+    else if (hasLocation) move('Approaching Location', 'price is interacting with a qualifying location');
+  }
+  if (lifecycle.state === 'Approaching Location') {
+    if (!hasLocation) move('Watching', 'location condition no longer qualifies');
+    else if (hasModel) move('Trigger Detected', 'ordered entry model confirmed');
+  }
+  if (lifecycle.state === 'Trigger Detected') {
+    if (sig.status === 'signal') move('Signal Active', 'all three analysis layers agree');
+    else if (sig.reversal) move('Invalidated Before Entry', 'opposing reversal appeared before signal activation');
+  }
+  if (lifecycle.state === 'Watching' && lifecycle.watchingSince == null) lifecycle.watchingSince = at;
+  if (['Watching', 'Approaching Location'].includes(lifecycle.state) && lifecycle.watchingSince == null) lifecycle.watchingSince = at;
+  if (['Watching', 'Approaching Location'].includes(lifecycle.state) && at - lifecycle.watchingSince >= WATCHING_EXPIRY_SEC[profile.id]) {
+    transitionLifecycle(lifecycle, 'Expired Without Entry', at, 'profile watching window elapsed without entry confirmation');
+  }
+  lifecycleByKey.set(key, lifecycle);
+  saveLifecycle();
+  sig.lifecycleState = lifecycle.state;
+  sig.lifecycleHistory = lifecycle.lifecycleHistory;
+  sig.waitingCondition = sig.reason || (lifecycle.state === 'Signal Active' ? 'holding until the profile period ends' : '');
+  const loc = sig.layers?.location?.evidence?.[0];
+  sig.nearestLevel = loc?.price ?? loc?.level ?? null;
+}
+
+function track(sym, sig, resolutionCandles) {
   const t = nowSec();
-  const price = sig.price != null ? sig.price : (entryCandles.length ? entryCandles[entryCandles.length - 1].close : null);
   const pid = sig.profile || 'intraday', mine = (r) => r.symbol === sym && (r.profile || 'intraday') === pid && r.state === 'open';
   let open = tracked.find(mine);
-  if (open) { updateTracked(open, { candles: entryCandles, price, nowSec: t, reversal: sig.reversal || null }); if (open.state !== 'open') archive([open]); }
-  // a signal that is still valid after the previous one lapsed is a fresh signal
+  if (open) {
+    updateTracked(open, { candles: resolutionCandles, nowSec: t });
+    if (open.state !== 'open') {
+      const key = sym + '|' + pid;
+      const lifecycle = lifecycleByKey.get(key);
+      if (lifecycle && lifecycle.state === 'Signal Active') {
+        transitionLifecycle(lifecycle, 'Closed', open.resolvedAt || t, 'end-of-period outcome resolved');
+        open.lifecycleState = lifecycle.state;
+        open.lifecycleHistory = lifecycle.lifecycleHistory;
+        saveLifecycle();
+      }
+      archive([open]);
+    }
+  }
   if (!tracked.some(mine)) {
-    const rec = openTracked(sig, t);
+    const entryAt = Number.isFinite(sig.entryAt) ? sig.entryAt : Number.isFinite(sig.detectedAt) ? sig.detectedAt : t;
+    const rec = openTracked(sig, entryAt);
     if (rec) tracked.push(rec);
   }
   saveTracked();
 }
+function requestExpiredTicks() {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const t = nowSec();
+  for (const rec of tracked) {
+    if (rec.state !== 'open' || t < rec.expiresAt || (rec._tickRequestedAt && t - rec._tickRequestedAt < 30)) continue;
+    const id = ++reqSeq; pendingExpiryTicks.set(id, rec.id); rec._tickRequestedAt = t;
+    send({ ticks_history: symMap[rec.symbol] || rec.symbol, start: rec.expiresAt - 30, end: rec.expiresAt, count: 1000, style: 'ticks', req_id: id });
+  }
+}
+function onExpiryTicks(id, history) {
+  const recordId = pendingExpiryTicks.get(id); pendingExpiryTicks.delete(id);
+  const rec = tracked.find((r) => r.id === recordId && r.state === 'open'); if (!rec) return;
+  const times = history && history.times, prices = history && history.prices;
+  const ticks = Array.isArray(times) && Array.isArray(prices) ? times.map((epoch, i) => ({ epoch: +epoch, quote: +prices[i] })).filter((tick) => Number.isFinite(tick.epoch) && Number.isFinite(tick.quote)) : [];
+  updateTracked(rec, { ticks, nowSec: nowSec() });
+  if (rec.state !== 'open') archive([rec]);
+  saveTracked(); render();
+}
+
 function trackedHtml() {
   const t = nowSec();
   const open = tracked.filter((r) => r.state === 'open').sort((a, b) => a.expiresAt - b.expiresAt);
@@ -154,13 +246,17 @@ function tickUi() {
 
 function row(sig) {
   const buy = sig.dir === 1, cls = sig.status === 'signal' ? (buy ? 'ts-buy' : 'ts-sell') : 'ts-wait';
-  const trg = sig.trigger ? ` · trigger ${esc(sig.trigger.kind)}: ${esc(sig.trigger.label)}` : (sig.status === 'watching' ? ` · ${esc(sig.reason)}` : '');
-  const inv = sig.invalidation ? ` · invalidation ${fmtPrice(sig.invalidation.price)} (${esc(sig.invalidation.rule)})` : '';
-  return `<div class="ts-row ${cls}" data-sym="${esc(sig.symbol)}" data-key="${esc(sig.symbol + '|' + sig.profile)}" role="button" tabindex="0" title="Open ${esc(sig.label)} in Candle Charts with the evidence highlighted">
+  const trg = sig.trigger ? ` | trigger ${esc(sig.trigger.kind)}: ${esc(sig.trigger.label)}` : '';
+  const inv = sig.invalidation ? ` | invalidation ${fmtPrice(sig.invalidation.price)}` : '';
+  const model = sig.primaryModel ? sig.primaryModel.name : '?';
+  const nearest = sig.nearestLevel != null ? fmtPrice(sig.nearestLevel) : '?';
+  const familyText = (sig.familyValues || []).map((f) => `${f.family} ${f.value >= 0 ? '+' : ''}${f.value.toFixed(2)}`).join(' | ');
+  return `<div class="ts-row ${cls}" data-sym="${esc(sig.symbol)}" data-key="${esc(sig.symbol + '|' + sig.profile)}" role="button" tabindex="0" title="Open ${esc(sig.label)} in Candle Charts with the stored evidence highlighted">
     <span class="ts-badge">${sig.status === 'watching' ? 'WAIT' : esc(sig.action || '')}</span>
-    <span class="ts-main"><b><em class="ts-prof">${esc(sig.profileName || '')}</em> ${esc(sig.headline)}</b>
-      <span class="ts-sub">price ${sig.price != null ? fmtPrice(sig.price) : '—'}${inv} · ${esc(sig.biasTf)} balance ${sig.bias.balance == null ? '—' : sig.bias.balance.toFixed(2)} · ${esc(sig.entryTf)} ${esc(sig.entry.verdict)}${trg}</span></span>
-    <span class="ts-go">Open charts ›</span></div>`;
+    <span class="ts-main"><b><em class="ts-prof">${esc(sig.profileName || '')} | ${esc(sig.lifecycleState || 'No Setup')}</em> ${esc(sig.headline)}</b>
+      <span class="ts-sub">direction ${sig.dir === 1 ? 'Bullish' : sig.dir === -1 ? 'Bearish' : '?'} | evidence balance ${sig.overallBalance == null ? '?' : sig.overallBalance.toFixed(2)} | model ${esc(model)} | waiting for ${esc(sig.waitingCondition || '?')} | nearest ${nearest} | target ${sig.target ? fmtPrice(sig.target.price) : '?'}${inv} | hold ${esc(sig.holdLabel || '?')}${trg}</span>
+      ${familyText ? `<span class="ts-sub">families: ${esc(familyText)} (heuristic, provisional)</span>` : ''}</span>
+    <span class="ts-go">Open charts</span></div>`;
 }
 function render() {
   const el = $('tsList'); if (!el) return;
@@ -193,7 +289,7 @@ export function tsRescan() { if (running && ws && status !== 'scanning') scan();
 /** Open Candle Charts on the market with the blue evidence highlight on. */
 export function tsOpen(sym, key) {
   const r = results.get(key) || [...results.entries()].find(([k]) => k.startsWith(sym + '|') && results.get(k).sig.status === 'signal')?.[1] || [...results.entries()].find(([k]) => k.startsWith(sym + '|'))?.[1];
-  window.__tsFocus = { symbol: sym, headline: r ? r.sig.headline : sym };
+  window.__tsFocus = { symbol: sym, headline: r ? r.sig.headline : sym, profile: r?.sig.profile, evidenceSnapshot: r?.sig.evidenceSnapshot || [], entryG: r?.sig.entryG, entryEvidence: r ? { sufficient: true, verdict: r.sig.entry.verdict, balance: r.sig.entry.balance } : null, primaryModel: r?.sig.primaryModel || null, secondaryModels: r?.sig.secondaryModels || [], lifecycleHistory: r?.sig.lifecycleHistory || [] };
   const chip = $('pa-evid');
   if (chip && !chip.checked) { chip.checked = true; chip.dispatchEvent(new Event('change')); }
   if (typeof window.mfxSwitchMarket === 'function') window.mfxSwitchMarket(sym);

@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeEvidence, EVIDENCE_DEFAULTS } from '../../src/analysis/evidence.js';
+import { FAMILY_WEIGHTS } from '../../src/analysis/tradeSignalArchitecture.js';
 
 const K = (o, h, l, c, i) => ({ epoch: 1.7e9 + i * 60, open: o, high: h, low: l, close: c });
 function rng(seed) { let s = seed; return () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296; }
@@ -17,13 +18,13 @@ test('documented provisional weights are unchanged', () => {
   });
 });
 
-test('balance equals sum of group nets over the fixed weight total', () => {
-  const total = Object.values(EVIDENCE_DEFAULTS.weights).reduce((a, b) => a + b, 0);
-  assert.equal(total, 15.5);
+test('balance equals weighted strongest net value once per evidence family', () => {
+  const total = Object.values(FAMILY_WEIGHTS).reduce((a, b) => a + b, 0);
+  assert.equal(total, 7.25);
   for (const s of SEEDS) {
     const e = analyzeEvidence(walk(s, 240, (s % 3 - 1) * 0.1));
     if (!e.sufficient) continue;
-    const net = e.groups.reduce((a, g) => a + (g.bull - g.bear), 0);
+    const net = e.families.reduce((sum, family) => sum + family.value * family.weight, 0);
     assert.ok(Math.abs(e.balance - net / total) < 1e-9, `seed ${s}`);
   }
 });
@@ -56,7 +57,7 @@ test('limitations state weights are provisional and VWAP/profile are proxies out
   const e = analyzeEvidence(walk(3, 240));
   assert.ok(e.limitations.some((l) => /PROVISIONAL/.test(l)));
   assert.ok(e.limitations.some((l) => /VWAP and volume-profile.*proxies.*not inputs/.test(l)));
-  assert.ok(e.limitations.some((l) => /not independent/.test(l)));
+  assert.ok(e.limitations.some((l) => /correlated, not independent/.test(l)));
 });
 
 test('characterisation: structure and break groups can carry the same recent swing event', () => {
@@ -70,4 +71,22 @@ test('characterisation: structure and break groups can carry the same recent swi
   }
   // Documents (does not endorse) the overlap measured in docs/evidence-audit.md.
   assert.ok(both > 0, 'expected at least one fixture with both groups populated');
+});
+
+
+test('evidence timestamps preserve confirmation lag for structural and detected events', () => {
+  let lagged = 0;
+  for (const seed of SEEDS) {
+    const e = analyzeEvidence(walk(seed, 240));
+    for (const item of e.items) {
+      if (!Number.isInteger(item.index)) continue;
+      assert.ok(Number.isFinite(item.occurredAt), `${item.label} has occurredAt`);
+      assert.ok(Number.isFinite(item.confirmedAt), `${item.label} has confirmedAt`);
+      if (Number.isInteger(item.confirmedIndex) && item.confirmedIndex > item.index) {
+        assert.ok(item.confirmedAt > item.occurredAt, `${item.label} preserves confirmation lag`);
+        lagged++;
+      }
+    }
+  }
+  assert.ok(lagged > 0, 'synthetic fixtures include a delayed confirmation');
 });

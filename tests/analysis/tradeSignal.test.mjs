@@ -40,7 +40,7 @@ test('every outcome is internally consistent across many synthetic series', () =
       assert.equal(s.action, s.dir === 1 ? 'BUY' : 'SELL');
       assert.notEqual(s.entry.verdict, s.dir === 1 ? 'bearish-lean' : 'bullish-lean');
       if (s.target) assert.ok(s.dir === 1 ? s.target.price > s.price : s.target.price < s.price, 'target is on the trade side of price');
-      assert.match(s.headline, new RegExp(`${s.dir === 1 ? 'BULLISH' : 'BEARISH'} lean on 30 min - ${s.action} on 5 min`));
+      assert.match(s.headline, new RegExp(`${s.dir === 1 ? 'BULLISH' : 'BEARISH'} lean on 30 min.*${s.action} on 5 min`));
     }
     if (s.status === 'wait') assert.match(s.reason, /against the 30 min/);
     assert.ok(!('probability' in s) && !('winRate' in s));
@@ -62,15 +62,48 @@ test('profiles: every profile yields a consistent status; signals carry a trigge
       assert.equal(s.profile, prof.id); assert.equal(s.holdSec, prof.holdSec);
       if (s.status === 'signal') {
         counts.signal++;
-        assert.ok(s.trigger && ['pullback', 'sweep'].includes(s.trigger.kind));
+        assert.ok(s.trigger && s.trigger.kind === 'model');
+        assert.ok(s.primaryModel && s.qualifyingModelIds.includes(s.primaryModel.model_id));
         assert.equal(s.reversal, null, 'a signal never opens with an opposing reversal already present');
         assert.match(s.headline, new RegExp(`hold ${prof.holdLabel}`));
-        assert.match(s.headline, new RegExp(`on ${prof.tfs.entry.label} after`));
+        assert.match(s.headline, new RegExp(`on ${prof.tfs.entry.label}.*${s.primaryModel.name}`));
       }
-      if (s.status === 'watching') { counts.watching++; assert.match(s.headline, /WAIT on/); }
+      if (s.status === 'watching') { counts.watching++; assert.match(s.headline, /waiting for/); }
     }
   }
   assert.ok(counts.signal + counts.watching > 0);
   assert.deepEqual(ALL_GRANULARITIES, [180, 300, 900, 1800, 3600, 14400]);
   assert.equal(PROFILES.scalp.holdSec, 180);
+});
+
+test('closed-bar as-of outputs are invariant to truncation, forming candles, and future mutations', () => {
+  const t = 240, asOf = 1_800_000_000, candles = {};
+  for (const g of ALL_GRANULARITIES) {
+    const start = asOf - (t + 1) * g;
+    candles[g] = walk(g + 3, 300, g, 0.05).map((c, i) => ({ ...c, epoch: start + i * g }));
+  }
+  for (const profile of PROFILE_LIST) {
+    const cutoff = candles[profile.tfs.entry.g][t].epoch + profile.tfs.entry.g;
+    const prefix = Object.fromEntries(Object.entries(candles).map(([g, series]) => [g, series.slice(0, t + 1)]));
+    const full = Object.fromEntries(Object.entries(candles).map(([g, series]) => [g, series]));
+    const forming = Object.fromEntries(Object.entries(full).map(([g, series]) => [g, [...series, { ...series.at(-1), epoch: cutoff }]]));
+    const before = buildTradeSignal({ symbol: 'X', candles: prefix, profile, nowSec: cutoff });
+    const fromFull = buildTradeSignal({ symbol: 'X', candles: full, profile, nowSec: cutoff });
+    const withForming = buildTradeSignal({ symbol: 'X', candles: forming, profile, nowSec: cutoff });
+    assert.deepEqual(fromFull, before, `${profile.id}: future candles must not affect the as-of result`);
+    assert.deepEqual(withForming, before, `${profile.id}: forming candles must be excluded`);
+    const mutated = Object.fromEntries(Object.entries(full).map(([g, series]) => [g, series.map((c, i) => i <= t ? c : { ...c, open: c.open + 500, high: c.high + 500, low: c.low + 500, close: c.close + 500 })]));
+    assert.deepEqual(buildTradeSignal({ symbol: 'X', candles: mutated, profile, nowSec: cutoff }), before);
+  }
+});
+
+
+test('signal snapshots carry event and confirmation timestamps', () => {
+  const candles = {};
+  for (const [i, g] of ALL_GRANULARITIES.entries()) candles[g] = walk(i + 100, 240, g, 0.1).map((c) => ({ ...c, epoch: 1_700_000_000 + i * 10_000_000 + c.epoch - 1.7e9 }));
+  const s = buildTradeSignal({ symbol: 'X', candles });
+  if (s.status === 'signal') {
+    assert.ok(Number.isFinite(s.confirmedAt));
+    assert.ok(s.evidenceSnapshot.every((item) => 'occurredAt' in item && 'confirmedAt' in item));
+  }
 });
