@@ -6,9 +6,10 @@
 //  - early exit: opposing entry-timeframe evidence (e.g. an upthrust for a BUY) formed after the signal opened closes it early,
 //    scored by the direction of the last price (unless the target/invalidation was already touched)
 //  - only prices after the signal opened count: scan price samples plus 5 min candles that start after it opened
-//  - first touch decides: target reached first -> correct; invalidation reached first -> wrong;
-//    a single bar touching both is scored wrong (order inside a bar is unknown)
-//  - nothing touched by the lapse: correct if the last price moved in the signal direction from the entry price
+//  - STAY-ABOVE RULE: a BUY is correct only if price stays above the entry price for the whole window; the moment price
+//    trades below the entry it is wrong. A SELL mirrors it (stays below entry; wrong once price trades above it).
+//    Exactly at the entry is not "above" and does not count as a win at the lapse (a tie loses).
+//  - the target and invalidation levels are shown for information (`targetHit`) and no longer decide the result
 //  - a record resolves only at the lapse, interim state is shown as progress
 
 export const HORIZON_SEC = 1800;
@@ -26,17 +27,15 @@ export function openTracked(sig, nowSec) {
     target: sig.target && sig.target.price != null ? sig.target.price : null,
     invalidation: sig.invalidation && sig.invalidation.price != null ? sig.invalidation.price : null,
     openedAt: nowSec, expiresAt: nowSec + hold,
-    hit: null, hitAt: null, last: sig.price, state: 'open',
+    hit: null, hitAt: null, targetHit: false, rule: 'hold', last: sig.price, state: 'open',
   };
 }
 
+// Stay-above rule: a breach is price trading strictly beyond the entry against the signal direction.
 function touch(rec, hi, lo) {
   const up = rec.dir === 1;
-  const tgt = rec.target != null && (up ? hi >= rec.target : lo <= rec.target);
-  const inv = rec.invalidation != null && (up ? lo <= rec.invalidation : hi >= rec.invalidation);
-  if (inv) return 'wrong';       // includes the both-touched-in-one-bar case
-  if (tgt) return 'correct';
-  return null;
+  if (rec.target != null && (up ? hi >= rec.target : lo <= rec.target)) rec.targetHit = true;
+  return (up ? lo < rec.entry : hi > rec.entry) ? 'wrong' : null;
 }
 
 /** Advance a record with new market data. candles: ascending 5 min candles; price: latest sample. Returns the record (mutated). */
@@ -49,18 +48,18 @@ export function updateTracked(rec, { candles = [], price = null, nowSec, reversa
   let lastClose = null;
   const bars = candles.filter((c) => c.epoch >= firstBar && c.epoch < rec.expiresAt).sort((a, b) => a.epoch - b.epoch);
   for (const c of bars) {
-    if (!rec.hit) { const h = touch(rec, c.high, c.low); if (h) { rec.hit = h; rec.hitAt = c.epoch; } }
+    const h = touch(rec, c.high, c.low); if (h && !rec.hit) { rec.hit = h; rec.hitAt = c.epoch; }
     lastClose = c.close;
   }
   if (price != null && nowSec <= rec.expiresAt) {
-    if (!rec.hit) { const h = touch(rec, price, price); if (h) { rec.hit = h; rec.hitAt = nowSec; } }
+    const h = touch(rec, price, price); if (h && !rec.hit) { rec.hit = h; rec.hitAt = nowSec; }
     lastClose = price;
   }
   if (lastClose != null) rec.last = lastClose;
   const exited = !rec.hit && reversal && reversal.epoch > rec.openedAt && nowSec < rec.expiresAt;
   if (exited) { rec.exitReason = reversal.label; rec.hit = 'exit'; }
   if (nowSec >= rec.expiresAt || exited) {
-    rec.state = rec.hit === 'correct' || rec.hit === 'wrong' ? rec.hit : (rec.last - rec.entry) * rec.dir > 0 ? 'correct' : 'wrong';
+    rec.state = rec.hit === 'wrong' ? 'wrong' : (rec.last - rec.entry) * rec.dir > 0 ? 'correct' : 'wrong';
     if (!rec.hit) rec.hit = 'none';
     rec.resolvedAt = exited ? nowSec : end;
   }
