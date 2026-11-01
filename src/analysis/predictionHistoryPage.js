@@ -5,7 +5,7 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fp = (p) => { if (p == null) return '—'; const a = Math.abs(p); return p.toFixed(a >= 1000 ? 2 : a >= 100 ? 3 : a >= 1 ? 4 : 5); };
 const load = () => { try { return JSON.parse(localStorage.getItem(KEY) || '[]'); } catch (_) { return []; } };
-const reason = (r) => r.rule === 'hold' ? (r.hit === 'wrong' ? 'price went through the entry' : r.state === 'correct' ? 'stayed ' + (r.dir === 1 ? 'above' : 'below') + ' the entry' : 'finished level with or beyond the entry') : r.hit === 'correct' ? 'target reached first' : r.hit === 'wrong' ? 'invalidation reached first'
+const reason = (r) => r.rule === 'end' || r.rule === 'hold' ? (r.hit === 'wrong' ? 'price went through the entry' : r.state === 'correct' ? 'ended ' + (r.dir === 1 ? 'above' : 'below') + ' the entry' : 'ended ' + (r.dir === 1 ? 'at or below' : 'at or above') + ' the entry') : r.hit === 'correct' ? 'target reached first' : r.hit === 'wrong' ? 'invalidation reached first'
   : (r.state === 'correct' ? 'lapsed, moved with signal' : 'lapsed, moved against signal');
 
 export function phRender() {

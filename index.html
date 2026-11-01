@@ -824,12 +824,12 @@ table.an-table tbody tr:last-child td{border-bottom:none}
 </div>
 <div id="page-predhistory" class="page">
   <h2 style="margin:0 0 4px">Prediction History</h2>
-  <p class="ts-note">Archive of every Trade Signal prediction after its predicted time lapsed: &#10003; correct (price stayed above the entry for a BUY, below for a SELL), &#10007; wrong (price went through the entry). Older records used the earlier target-first rule. Predictions are followed only while the Trade Signal page is open. Stored in this browser.</p>
+  <p class="ts-note">Archive of every Trade Signal prediction after its predicted time lapsed: &#10003; correct (price ended the predicted period above the entry for a BUY, below for a SELL), &#10007; wrong (it ended at or beyond the entry). Older records used earlier rules (target-first, then stay-through). Predictions are followed only while the Trade Signal page is open. Stored in this browser.</p>
   <div class="ts-bar"><select id="phMarket"><option value="">All markets</option></select><select id="phResult"><option value="">All results</option><option value="correct">Correct</option><option value="wrong">Wrong</option></select><button id="phCsv">Export CSV</button><button id="phClear">Clear</button><span id="phSummary"></span></div>
   <div id="phList"></div>
 </div>
 <div id="page-tradesignal" class="page">
-    <div class="ts-note"><b>Trade Signal</b> — every market is scanned under three profiles: <b>Scalp</b> (15 min bias, 3 min entry, hold 3 min), <b>Intraday</b> (30 min bias, 5 min entry, hold 30 min) and <b>Swing</b> (1 hour bias, 15 min entry, hold 1 hour). A bias lean first goes to <b>Watching</b>; it becomes an entry signal only when a pullback or liquidity sweep appears on the entry timeframe, and a running trade closes at its hold time or earlier on an opposing reversal (e.g. an upthrust). <b>Scoring:</b> a BUY is &#10003; only if price stays above its entry for the whole window and &#10007; the moment price trades below it (a SELL mirrors this); target and invalidation are shown for information only. Click a setup to open Candle Charts on that market with all evidence highlighted in blue. These are rule-based readings of provisional, unvalidated evidence weights: not a forecast, not a probability, and no profitability is claimed. Nothing here places an order.</div>
+    <div class="ts-note"><b>Trade Signal</b> — every market is scanned under three profiles: <b>Scalp</b> (15 min bias, 3 min entry, hold 3 min), <b>Intraday</b> (30 min bias, 5 min entry, hold 30 min) and <b>Swing</b> (1 hour bias, 15 min entry, hold 1 hour). A bias lean first goes to <b>Watching</b>; it becomes an entry signal only when a pullback or liquidity sweep appears on the entry timeframe, and a running trade closes at its hold time. <b>Scoring:</b> only the price at the END of the predicted period counts: a BUY is &#10003; if it ends above its entry and &#10007; if it ends at or below it (a SELL mirrors this); dips during the window do not matter, and target and invalidation are shown for information only. Click a setup to open Candle Charts on that market with all evidence highlighted in blue. These are rule-based readings of provisional, unvalidated evidence weights: not a forecast, not a probability, and no profitability is claimed. Nothing here places an order.</div>
     <div class="ts-bar"><span id="tsStatus">idle</span><button id="tsRescan" type="button">Rescan now</button></div>
     <div id="tsList"></div>
   </div>
@@ -33816,8 +33816,8 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=32"></script>
-<script type="module" src="src/analysis/tradeSignalPage.js?v=5"></script>
-<script type="module" src="src/analysis/predictionHistoryPage.js?v=2"></script>
+<script type="module" src="src/analysis/tradeSignalPage.js?v=6"></script>
+<script type="module" src="src/analysis/predictionHistoryPage.js?v=3"></script>
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/analysis/sosSowPage.js?v=3"></script>
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>

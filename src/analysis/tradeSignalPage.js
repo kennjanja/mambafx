@@ -126,11 +126,12 @@ function trackedHtml() {
   const s = summarize(tracked);
   const fmtLeft = (sec) => { sec = Math.max(0, sec); return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); };
   const line = (r) => {
+    const endRule = (x) => x.rule === 'end' || (x.rule === 'hold' && x.hit !== 'wrong');
     const buy = r.dir === 1, cls = r.state === 'correct' ? 'ts-ok' : r.state === 'wrong' ? 'ts-bad' : '';
     const mark = r.state === 'correct' ? '<span class="ts-res ok" title="Correct">&#10003;</span>' : r.state === 'wrong' ? '<span class="ts-res bad" title="Wrong">&#10007;</span>' : `<span class="ts-res run" title="Running">${fmtLeft(r.expiresAt - t)}</span>`;
-    const why = r.state === 'open' ? (r.hit ? (r.rule === 'hold' ? 'price went through the entry: already lost' : r.hit === 'correct' ? 'target reached, waiting for lapse' : 'invalidated, waiting for lapse') : r.rule === 'hold' ? 'holding the entry so far' + (r.targetHit ? ', target touched' : '') : 'in progress')
+    const why = r.state === 'open' ? (r.hit ? (r.hit === 'correct' ? 'target reached, waiting for lapse' : 'invalidated, waiting for lapse') : endRule(r) ? (((r.last - r.entry) * r.dir > 0) ? 'currently ' + (r.dir === 1 ? 'above' : 'below') + ' the entry; only the end of the period counts' : 'currently not ' + (r.dir === 1 ? 'above' : 'below') + ' the entry; only the end of the period counts') + (r.targetHit ? ', target touched' : '') : 'in progress')
       : r.hit === 'exit' ? 'exited early: ' + esc(r.exitReason || 'opposing reversal')
-      : r.rule === 'hold' ? (r.hit === 'wrong' ? 'price went through the entry' : r.state === 'correct' ? 'stayed ' + (r.dir === 1 ? 'above' : 'below') + ' the entry' : 'finished level with or beyond the entry') + (r.targetHit ? ', target touched' : '')
+      : endRule(r) ? (r.hit === 'wrong' ? 'price went through the entry' : r.state === 'correct' ? 'ended ' + (r.dir === 1 ? 'above' : 'below') + ' the entry' : 'ended ' + (r.dir === 1 ? 'at or below' : 'at or above') + ' the entry') + (r.targetHit ? ', target touched' : '')
       : r.hit === 'correct' ? 'target reached first' : r.hit === 'wrong' ? 'invalidation reached first' : (r.state === 'correct' ? 'lapsed, price moved with the signal' : 'lapsed, price moved against the signal');
     return `<div class="ts-trk ${cls}" data-sym="${esc(r.symbol)}" role="button" tabindex="0" title="Open ${esc(r.label)} in Candle Charts">
       ${mark}<span class="ts-main"><b>${esc(r.label)} · ${esc(r.action)} @ ${fmtPrice(r.entry)} <em class="ts-prof">${esc(r.profileName || 'Intraday')} · hold ${esc(r.holdLabel || '30 min')}</em></b>
