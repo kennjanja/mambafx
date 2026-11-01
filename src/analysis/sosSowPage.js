@@ -7,9 +7,11 @@ const KEY = 'mfx_sossow_v1', SET = 'mfx_sossow_set_v1', KEEP = 400, DURATION = 1
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const nowSec = () => Math.floor(Date.now() / 1000);
-const markets = () => (typeof MARKETS !== 'undefined' ? Object.keys(MARKETS) : []);
-const labelOf = (s) => (typeof MARKETS !== 'undefined' && MARKETS[s]) || s;
-const isJumpStep = (k, sym) => /^(JD\d|stpRNG|STP)/i.test(sym || k) || /jump|step/i.test(labelOf(k));
+// Every market: the app's list, the Jump/Step indices, and every open synthetic index Deriv reports.
+const known = () => ({ ...(typeof MARKETS !== 'undefined' ? MARKETS : {}), ...(typeof DISABLED_MARKETS !== 'undefined' ? DISABLED_MARKETS : {}) });
+const extra = new Map();   // symbol -> display name, from active_symbols
+const markets = () => [...new Set([...Object.keys(known()), ...extra.keys()])];
+const labelOf = (s) => known()[s] || extra.get(s) || s;
 
 let recs = [];
 try { recs = JSON.parse(localStorage.getItem(KEY) || '[]').filter((r) => r && r.id); } catch (_) {}
@@ -49,6 +51,10 @@ function connect() {
 }
 function onSymbols(m) {
   const list = m.active_symbols || []; symMap = {};
+  for (const x of list) {
+    const s = x.underlying_symbol || x.symbol;
+    if (s && x.market === 'synthetic_index' && !x.is_trading_suspended && x.exchange_is_open !== 0 && !/^(WLD|CRASH|BOOM)?BASKET/i.test(s) && !/basket/i.test(x.submarket || '')) extra.set(s, x.display_name || x.underlying_symbol_name || s);
+  }
   for (const k of markets()) {
     let d = null; try { d = typeof _findDiscoveredSymbol === 'function' ? _findDiscoveredSymbol(list, k) : null; } catch (_) {}
     symMap[k] = d ? (d.underlying_symbol || d.symbol || k) : k;
@@ -70,7 +76,6 @@ function poll() {
   const t = nowSec();
   if (ws && ws.readyState === WebSocket.OPEN && Object.keys(symMap).length) {
     for (const k of markets()) {
-      if (isJumpStep(k, symMap[k])) continue;
       for (const g of cfg.tfs) {
         const b = Math.floor(t / g) * g, id = k + '|' + g;
         if (t - b < 1 || t - b > FRESH_SEC - 10 || asked.get(id) === b) continue;
@@ -146,12 +151,14 @@ function render() {
   const done = recs.filter((r) => r.state === 'won' || r.state === 'lost');
   const pl = (k) => done.filter((r) => r.account === k).reduce((s, r) => s + (Number.isFinite(r.profit) ? r.profit : 0), 0);
   const st = $('ssStatus');
-  if (st) st.innerHTML = `Account: <b class="${a.connected ? (a.demo ? 'ss-demo' : 'ss-real') : ''}">${a.connected ? (a.demo ? 'DEMO' : 'REAL') + ' ' + esc(a.id || '') : 'not connected'}</b> · bot <b>${armed ? 'ON' : 'off'}</b> · scanning ${markets().filter((k) => !isJumpStep(k, symMap[k])).length} markets × ${cfg.tfs.length} timeframes${lastScanAt ? '' : ' (starting…)'} · ${open.length} open · ${done.filter((r) => r.state === 'won').length} won / ${done.filter((r) => r.state === 'lost').length} lost · P/L demo ${pl('demo').toFixed(2)} · real ${pl('real').toFixed(2)}`;
+  if (st) st.innerHTML = `Account: <b class="${a.connected ? (a.demo ? 'ss-demo' : 'ss-real') : ''}">${a.connected ? (a.demo ? 'DEMO' : 'REAL') + ' ' + esc(a.id || '') : 'not connected'}</b> · bot <b>${armed ? 'ON' : 'off'}</b> · scanning ${markets().length} markets × ${cfg.tfs.length} timeframes${lastScanAt ? '' : ' (starting…)'} · ${open.length} open · ${done.filter((r) => r.state === 'won').length} won / ${done.filter((r) => r.state === 'lost').length} lost · P/L demo ${pl('demo').toFixed(2)} · real ${pl('real').toFixed(2)}`;
   const row = (r) => `<tr><td>${clockTxt(r.at)}</td><td>${esc(r.label)}</td><td><b class="${r.kind === 'SOS' ? 'ss-up' : 'ss-dn'}">${r.kind}</b> ${esc(r.tf)}</td><td>${r.side} ${DURATION}s</td><td>${r.account ? esc(r.account) : '—'}</td><td>${r.state === 'won' ? '<b class="ss-up">&#10003; won</b>' : r.state === 'lost' ? '<b class="ss-dn">&#10007; lost</b>' : esc(r.state)}</td><td>${r.profit != null && Number.isFinite(r.profit) ? (r.profit >= 0 ? '+' : '') + r.profit.toFixed(2) : '—'}</td><td class="mu">${esc(r.reason || (r.entry != null ? 'entry ' + r.entry + (r.exit != null ? ' exit ' + r.exit : '') : ''))}</td></tr>`;
   const list = recs.slice(-80).reverse();
   const html = list.length ? `<table class="ph-t"><thead><tr><th>Time</th><th>Market</th><th>Event</th><th>Trade</th><th>Account</th><th>Result</th><th>P/L</th><th>Note</th></tr></thead><tbody>${list.map(row).join('')}</tbody></table>` : '<div class="ts-empty">No SOS/SOW seen yet. Events appear here the moment a candle closes with one.</div>';
   if (el.dataset.h !== html) { el.dataset.h = html; el.innerHTML = html; }
   const box = $('ssArm'); if (box) box.checked = armed;
+  const bd = $('ssAcctDemo'), br = $('ssAcctReal');
+  if (bd && br) { bd.className = a.connected && a.demo ? 'on-demo' : ''; br.className = a.connected && !a.demo ? 'on-real' : ''; }
 }
 function readInputs() {
   const s = parseFloat(($('ssStake') || {}).value), m = parseInt(($('ssMax') || {}).value, 10);
@@ -163,6 +170,23 @@ function readInputs() {
 function paintInputs() {
   if ($('ssStake')) $('ssStake').value = cfg.stake; if ($('ssMax')) $('ssMax').value = cfg.maxOpen;
   const host = $('ssTfs'); if (host && !host.dataset.done) { host.dataset.done = 1; host.innerHTML = GRANULARITIES.map((g) => `<label><input type="checkbox" id="ssTf${g}" ${cfg.tfs.includes(g) ? 'checked' : ''}> ${tfLabel(g)}</label>`).join(' '); }
+}
+// Switch the app's Deriv connection between the demo and real account of the current login. The bot is always switched off first.
+async function switchAcct(type) {
+  const msg = $('ssAcctMsg'), say = (t) => { if (msg) msg.textContent = t; };
+  const a = acct();
+  if (a.connected && (type === 'demo') === a.demo) { say('already on the ' + type + ' account'); return; }
+  armed = false; render();
+  const host = window.__ldpeHost;
+  if (!host || typeof host.selectAccountType !== 'function') { say('account switch unavailable'); return; }
+  say('switching to ' + type + '…');
+  let r; try { r = await host.selectAccountType(type); } catch (e) { r = { ok: false, error: e.message }; }
+  if (!r.ok) { say(r.error || 'switch failed'); return; }
+  for (let i = 0; i < 40; i++) {   // wait for the reconnect to authorise on the new account
+    await new Promise((res) => setTimeout(res, 500));
+    const n = acct(); if (n.connected && (type === 'demo') === n.demo) { say('connected to ' + type + ' ' + (n.id || '') + '. Bot is off; switch it on when ready.'); render(); return; }
+  }
+  say('still connecting to ' + type + '. Check the Trading Grid page.'); render();
 }
 function arm(on) {
   if (on) {
@@ -176,7 +200,7 @@ function arm(on) {
 export function ssStart() { paintInputs(); if (!running) { running = true; clearInterval(pollTimer); pollTimer = setInterval(poll, POLL_MS); } poll(); }
 export function ssLeave() { if (!armed) { running = false; clearInterval(pollTimer); pollTimer = null; } }
 document.addEventListener('change', (e) => { const t = e.target; if (t && t.id === 'ssArm') arm(t.checked); else if (t && /^ss(Stake|Max|Tf)/.test(t.id || '')) { readInputs(); } });
-document.addEventListener('click', (e) => { const t = e.target; if (t && t.id === 'ssCsv') csv(); if (t && t.id === 'ssClear' && window.confirm('Delete the SOS/SOW trade log?')) { recs = recs.filter((r) => r.state === 'open' || r.state === 'placing'); save(); render(); } });
+document.addEventListener('click', (e) => { const t = e.target; if (t && t.id === 'ssAcctDemo') switchAcct('demo'); if (t && t.id === 'ssAcctReal') switchAcct('real'); if (t && t.id === 'ssCsv') csv(); if (t && t.id === 'ssClear' && window.confirm('Delete the SOS/SOW trade log?')) { recs = recs.filter((r) => r.state === 'open' || r.state === 'placing'); save(); render(); } });
 window.addEventListener('pagehide', () => { armed = false; });
 function csv() {
   const q = (v) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
