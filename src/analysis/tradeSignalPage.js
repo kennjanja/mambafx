@@ -2,6 +2,7 @@
 // the setups. Clicking one opens Candle Charts on that market with all evidence highlighted in blue.
 // Uses its own read-only WebSocket (public candle history); it never places orders.
 import { buildTradeSignal, TRADE_SIGNAL_TFS, fmtPrice } from './tradeSignal.js';
+import { openTracked, updateTracked, progress, summarize } from './tradeSignalTracker.js';
 
 const TFS = [TRADE_SIGNAL_TFS.entry, TRADE_SIGNAL_TFS.bias, ...TRADE_SIGNAL_TFS.htf];
 const COUNT = 300, MARKET_TIMEOUT_MS = 12000, RESCAN_MS = 60000;
@@ -11,6 +12,24 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 const results = new Map();     // symbol -> { sig, at }
 let ws = null, running = false, endpointIdx = 0, symMap = {}, scanTimer = null, marketTimer = null;
 let queue = [], cur = null, scanned = 0, total = 0, lastScanAt = null, reqSeq = 7100, status = 'idle';
+// Every signal produced is followed until its predicted window lapses, then marked correct (green tick) or wrong (red X).
+const TRACK_KEY = 'mfx_ts_track_v1', TRACK_MAX = 300;
+let tracked = [];
+try { tracked = JSON.parse(localStorage.getItem(TRACK_KEY) || '[]').filter((r) => r && r.id && r.expiresAt); } catch (_) {}
+const saveTracked = () => { try { localStorage.setItem(TRACK_KEY, JSON.stringify(tracked.slice(-TRACK_MAX))); } catch (_) {} };
+const nowSec = () => Math.floor(Date.now() / 1000);
+// Resolved predictions are archived permanently (separate store, read by the Prediction History page).
+const ARCHIVE_KEY = 'mfx_ts_archive_v1', ARCHIVE_MAX = 5000;
+function archive(recs) {
+  if (!recs.length) return;
+  let a = []; try { a = JSON.parse(localStorage.getItem(ARCHIVE_KEY) || '[]'); } catch (_) {}
+  const have = new Set(a.map((r) => r.id));
+  for (const r of recs) if (!have.has(r.id)) a.push(r);
+  try { localStorage.setItem(ARCHIVE_KEY, JSON.stringify(a.slice(-ARCHIVE_MAX))); } catch (_) {}
+  window.dispatchEvent(new Event('mfx-prediction-archived'));
+}
+archive(tracked.filter((r) => r.state === 'correct' || r.state === 'wrong'));
+let uiTimer = null;
 const pending = new Map();     // req_id -> granularity
 
 const isActive = () => { const p = $('page-tradesignal'); return !!p && p.classList.contains('active'); };
@@ -81,7 +100,50 @@ function finishMarket() {
   try { sig = buildTradeSignal({ symbol: sym, label: labelOf(sym), candles }); }
   catch (e) { sig = { symbol: sym, label: labelOf(sym), status: 'insufficient', dir: 0, reason: 'analysis error: ' + e.message, headline: labelOf(sym) + ': analysis error' }; }
   results.set(sym, { sig, at: Date.now() });
+  track(sym, sig, candles[TRADE_SIGNAL_TFS.entry.g] || []);
   scanned++; render(); next();
+}
+
+function track(sym, sig, entryCandles) {
+  const t = nowSec();
+  const price = sig.price != null ? sig.price : (entryCandles.length ? entryCandles[entryCandles.length - 1].close : null);
+  let open = tracked.find((r) => r.symbol === sym && r.state === 'open');
+  if (open) { updateTracked(open, { candles: entryCandles, price, nowSec: t }); if (open.state !== 'open') archive([open]); }
+  // a signal that is still valid after the previous one lapsed is a fresh signal
+  if (!tracked.some((r) => r.symbol === sym && r.state === 'open')) {
+    const rec = openTracked(sig, t);
+    if (rec) tracked.push(rec);
+  }
+  saveTracked();
+}
+function trackedHtml() {
+  const t = nowSec();
+  const open = tracked.filter((r) => r.state === 'open').sort((a, b) => a.expiresAt - b.expiresAt);
+  const done = tracked.filter((r) => r.state !== 'open').sort((a, b) => (b.resolvedAt || 0) - (a.resolvedAt || 0)).slice(0, 40);
+  const s = summarize(tracked);
+  const fmtLeft = (sec) => { sec = Math.max(0, sec); return Math.floor(sec / 60) + ':' + String(sec % 60).padStart(2, '0'); };
+  const line = (r) => {
+    const buy = r.dir === 1, cls = r.state === 'correct' ? 'ts-ok' : r.state === 'wrong' ? 'ts-bad' : '';
+    const mark = r.state === 'correct' ? '<span class="ts-res ok" title="Correct">&#10003;</span>' : r.state === 'wrong' ? '<span class="ts-res bad" title="Wrong">&#10007;</span>' : `<span class="ts-res run" title="Running">${fmtLeft(r.expiresAt - t)}</span>`;
+    const why = r.state === 'open' ? (r.hit ? (r.hit === 'correct' ? 'target reached, waiting for lapse' : 'invalidated, waiting for lapse') : 'in progress')
+      : r.hit === 'correct' ? 'target reached first' : r.hit === 'wrong' ? 'invalidation reached first' : (r.state === 'correct' ? 'lapsed, price moved with the signal' : 'lapsed, price moved against the signal');
+    return `<div class="ts-trk ${cls}" data-sym="${esc(r.symbol)}" role="button" tabindex="0" title="Open ${esc(r.label)} in Candle Charts">
+      ${mark}<span class="ts-main"><b>${esc(r.label)} · ${esc(r.action)} @ ${fmtPrice(r.entry)}</b>
+      <span class="ts-sub">${r.target != null ? 'target ' + fmtPrice(r.target) : 'no target'} · invalidation ${r.invalidation != null ? fmtPrice(r.invalidation) : '—'} · last ${fmtPrice(r.last)} · ${why} · ${new Date(r.openedAt * 1000).toLocaleTimeString()}</span>
+      ${r.state === 'open' ? `<span class="ts-bar"><i data-id="${esc(r.id)}" style="width:${(progress(r, t) * 100).toFixed(1)}%"></i></span>` : ''}</span></div>`;
+  };
+  if (!tracked.length) return '';
+  return `<div class="ts-h">Signal results — ${s.open} running · ${s.correct} &#10003; · ${s.wrong} &#10007;${s.hitRate != null ? ' · ' + (s.hitRate * 100).toFixed(0) + '% (n=' + s.resolved + ', not a validated edge)' : ''}</div>`
+    + open.map(line).join('') + done.map(line).join('');
+}
+function tickUi() {
+  if (!isActive()) return;
+  const t = nowSec(); let expired = false;
+  for (const r of tracked) if (r.state === 'open' && t >= r.expiresAt + 1 && !r._late) { expired = true; }
+  document.querySelectorAll('#tsList .ts-bar i').forEach((i) => { const r = tracked.find((x) => x.id === i.dataset.id); if (r) i.style.width = (progress(r, t) * 100).toFixed(1) + '%'; });
+  document.querySelectorAll('#tsList .ts-res.run').forEach((el) => { const row = el.closest('.ts-trk'); const r = tracked.find((x) => x.id === (row.querySelector('i') || {}).dataset?.id); if (r) { const s = Math.max(0, r.expiresAt - t); el.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); } });
+  // a lapsed record is resolved by the next scan (needs the candles); trigger one promptly
+  if (expired && status === 'idle' && ws) scan();
 }
 
 function row(sig) {
@@ -101,7 +163,7 @@ function render() {
   const rest = all.filter((s) => s.status !== 'signal' && s.status !== 'wait');
   const bar = $('tsStatus');
   if (bar) bar.textContent = `${status === 'scanning' ? `scanning ${scanned}/${total}…` : status}${lastScanAt ? ' · last full scan ' + new Date(lastScanAt).toLocaleTimeString() : ''} · ${live.length} setup(s) · ${wait.length} waiting`;
-  el.innerHTML = (live.length ? live.map(row).join('') : `<div class="ts-empty">${status === 'scanning' && !all.length ? 'Scanning markets…' : 'No market currently has a 30 min lean with a non-opposing 5 min entry.'}</div>`)
+  el.innerHTML = trackedHtml() + (live.length ? live.map(row).join('') : `<div class="ts-empty">${status === 'scanning' && !all.length ? 'Scanning markets…' : 'No market currently has a 30 min lean with a non-opposing 5 min entry.'}</div>`)
     + (wait.length ? `<div class="ts-h">Waiting (30 min lean, 5 min opposes)</div>` + wait.map(row).join('') : '')
     + (rest.length ? `<details class="ts-rest"><summary>No setup (${rest.length})</summary>${rest.map((s) => `<div class="ts-none"><b>${esc(s.label)}</b> — ${esc(s.reason || s.headline)}</div>`).join('')}</details>` : '');
 }
@@ -109,10 +171,11 @@ function render() {
 export function tsStart() {
   if (running) { render(); return; }
   running = true; status = 'connecting'; render();
+  clearInterval(uiTimer); uiTimer = setInterval(tickUi, 1000);
   if (!ws) connect(); else scan();
 }
 export function tsStop() {
-  running = false; clearTimeout(scanTimer); clearTimeout(marketTimer);
+  running = false; clearTimeout(scanTimer); clearTimeout(marketTimer); clearInterval(uiTimer);
   if (ws) { try { ws.onclose = null; ws.close(); } catch (_) {} ws = null; }
   status = 'idle';
 }
@@ -130,8 +193,8 @@ export function tsOpen(sym) {
 }
 
 document.addEventListener('click', (e) => {
-  const r = e.target.closest && e.target.closest('#tsList .ts-row'); if (r) tsOpen(r.dataset.sym);
+  const r = e.target.closest && e.target.closest('#tsList .ts-row, #tsList .ts-trk'); if (r) tsOpen(r.dataset.sym);
   if (e.target && e.target.id === 'tsRescan') tsRescan();
 });
-document.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && e.target.classList.contains('ts-row')) { e.preventDefault(); tsOpen(e.target.dataset.sym); } });
+document.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && (e.target.classList.contains('ts-row') || e.target.classList.contains('ts-trk'))) { e.preventDefault(); tsOpen(e.target.dataset.sym); } });
 Object.assign(window, { tsStart, tsStop, tsOpen, tsRescan, __tsResults: results });
