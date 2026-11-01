@@ -197,6 +197,30 @@ footer{text-align:center;color:var(--muted);font-size:11px;margin-top:22px;line-
 .pa-chip .sw.ote{background:rgba(129,140,248,.2);border-color:#818cf8}
 .pa-chip .sw.trend{background:repeating-linear-gradient(45deg,#16e08b 0 3px,transparent 3px 6px);border-color:#16e08b}
 .pa-chip .sw.amd{background:rgba(86,182,255,.18);border-color:#56b6ff}
+.pa-chip .sw.evid{background:rgba(59,130,246,.35);border-color:#3b82f6}
+.tf-ev{display:none;margin:0 0 8px;padding:6px 8px;border:1px solid #3b82f6;border-radius:8px;background:rgba(59,130,246,.08);font-size:11px;max-height:150px;overflow:auto}
+.tf-ev.on{display:block}
+.tf-ev .tf-ev-h{color:#60a5fa;font-weight:700;margin-bottom:3px}
+.tf-ev ol{margin:0;padding-left:18px;color:#93c5fd}
+.tf-ev li{margin:1px 0}
+.tf-ev li .g{color:#3b82f6}
+#tfFocusBar{display:none;margin:0 0 12px;padding:8px 12px;border:1px solid #3b82f6;border-radius:10px;background:rgba(59,130,246,.12);color:#93c5fd;font-size:12px;align-items:center;gap:10px}
+#tfFocusBar.on{display:flex}
+#tfFocusBar button{margin-left:auto;background:transparent;border:1px solid #3b82f6;color:#93c5fd;border-radius:6px;padding:3px 10px;cursor:pointer}
+#page-tradesignal .ts-note{font-size:11px;color:var(--muted);margin:0 0 10px}
+#page-tradesignal .ts-bar{display:flex;gap:12px;align-items:center;margin-bottom:12px;font-size:12px;color:var(--muted)}
+#page-tradesignal .ts-bar button{background:#0d121d;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:5px 12px;cursor:pointer}
+#page-tradesignal .ts-row{display:flex;align-items:center;gap:12px;padding:11px 14px;margin-bottom:8px;border:1px solid var(--line);border-left-width:4px;border-radius:10px;background:#0d121d;cursor:pointer}
+#page-tradesignal .ts-row:hover,#page-tradesignal .ts-row:focus{background:#121a29;outline:none}
+#page-tradesignal .ts-buy{border-left-color:var(--up)}#page-tradesignal .ts-sell{border-left-color:var(--down)}#page-tradesignal .ts-wait{border-left-color:#ffc44d;opacity:.85}
+#page-tradesignal .ts-badge{min-width:48px;text-align:center;font-weight:800;border-radius:6px;padding:3px 8px;font-size:12px;background:#1a2130}
+#page-tradesignal .ts-buy .ts-badge{color:var(--up)}#page-tradesignal .ts-sell .ts-badge{color:var(--down)}#page-tradesignal .ts-wait .ts-badge{color:#ffc44d}
+#page-tradesignal .ts-main{flex:1;display:flex;flex-direction:column;gap:3px;font-size:13px}
+#page-tradesignal .ts-sub{font-size:11px;color:var(--muted);font-weight:400}
+#page-tradesignal .ts-go{font-size:11px;color:#60a5fa;white-space:nowrap}
+#page-tradesignal .ts-h{margin:14px 0 6px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+#page-tradesignal .ts-empty{padding:18px;color:var(--muted);font-size:13px;border:1px dashed var(--line);border-radius:10px;margin-bottom:8px}
+#page-tradesignal .ts-rest{margin-top:12px;font-size:12px;color:var(--muted)}#page-tradesignal .ts-none{padding:3px 0}
 
 /* per-timeframe timer + order-flow readout */
 .tf-timer{font-variant-numeric:tabular-nums;font-weight:700;color:var(--accent);font-size:11px;background:#0a0e17;border:1px solid var(--line);border-radius:7px;padding:3px 8px}
@@ -642,6 +666,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     <button id="navAccounts" onclick="showPage('accounts')">👤 Accounts</button>
     <button id="navLive" class="active" onclick="showPage('live')">📈 Live Tracker</button>
     <button id="navCandles" onclick="showPage('candles')">🕯️ Candle Charts</button>
+    <button id="navTradeSignal" onclick="showPage('tradesignal')">🎯 Trade Signal</button>
     <button id="navEngine" onclick="showPage('engine')">⚡ 5-Tick Engine</button>
     <button id="navGrid" onclick="showPage('grid')">🎯 Trading Grid</button>
     <button id="navAnalysis" onclick="showPage('analysis')">🔬 Analysis Tool</button>
@@ -738,6 +763,13 @@ table.an-table tbody tr:last-child td{border-bottom:none}
 
   </div><!-- /page-live -->
 
+  <!-- ============ TRADE SIGNAL (evidence-based setups) ============ -->
+  <div id="page-tradesignal" class="page">
+    <div class="ts-note"><b>Trade Signal</b> — every market is scanned for a <b>30 min</b> evidence lean with a non-opposing <b>5 min</b> entry (1 hour and 4 hour as context). Click a setup to open Candle Charts on that market with all evidence highlighted in blue. These are rule-based readings of provisional, unvalidated evidence weights: not a forecast, not a probability, and no profitability is claimed. Nothing here places an order.</div>
+    <div class="ts-bar"><span id="tsStatus">idle</span><button id="tsRescan" type="button">Rescan now</button></div>
+    <div id="tsList"></div>
+  </div>
+
   <!-- ============ PAGE 2: CANDLE CHARTS ============ -->
   <div id="page-candles" class="page">
     <div class="pa-toolbar">
@@ -754,6 +786,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <label class="pa-chip on"><input type="checkbox" id="pa-ote" checked><span class="sw ote"></span> OTE (ICT)</label>
         <label class="pa-chip on"><input type="checkbox" id="pa-trend" checked><span class="sw trend"></span> Trendline</label>
         <label class="pa-chip on"><input type="checkbox" id="pa-amd" checked><span class="sw amd"></span> AMD (Power of 3)</label>
+        <label class="pa-chip"><input type="checkbox" id="pa-evid"><span class="sw evid"></span> Evidence highlight (blue)</label>
         <span class="pa-sep" style="color:var(--muted);font-size:11px;margin:0 4px 0 10px">Engine:</span>
         <label class="pa-chip"><input type="checkbox" id="pe-zones"><span class="sw fvg"></span> Zones (OB / FVG / BPR / RB)</label>
         <label class="pa-chip"><input type="checkbox" id="pe-struct"><span class="sw bos"></span> Structure (BOS / CHoCH / MSS)</label>
@@ -778,6 +811,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <b style="color:#ffc44d">⚠ Order-flow note:</b> synthetic indices have <b>no real volume or order book</b>. Delta, CVD, absorption, imbalance and the volume profile here are <b>proxies derived from price action</b> (the Live Tracker uses genuine tick-rule data instead). Treat them as estimates, not real institutional footprint.
       </div>
     </div>
+    <div id="tfFocusBar"><span id="tfFocusText"></span><button type="button" id="tfFocusClear">Clear</button></div>
     <div class="tf-grid" id="tfGrid"><!-- cards injected by buildTfCards() --></div>
       <div id="sigMonitor" class="tf-card" style="margin-top:16px;padding:12px">
         <div class="sm-head"><strong>Signal monitor</strong><span class="sm-sub">active Bazu signals, tracked until their predicted duration elapses &middot; click one to open that market</span></div>
@@ -26423,6 +26457,7 @@ function buildTfCards(){
         </div>
       </div>
       <div id="tf-meta-${tf.g}" class="tf-meta"></div>
+      <div id="tf-ev-${tf.g}" class="tf-ev"></div>
       <div class="tf-chart-wrap">
         <svg id="tf-chart-${tf.g}" class="tf-chart" viewBox="0 0 600 240" preserveAspectRatio="none"></svg>
         <div class="tf-nav">
@@ -26609,8 +26644,8 @@ function startTfTimers(){
 }
 
 function showPage(which){
-  const pages = { accounts:"page-accounts", live:"page-live", candles:"page-candles", engine:"page-engine", grid:"page-grid", analysis:"page-analysis", features:"page-features", predbot:"page-predbot", oubot:"page-oubot", tracker:"page-tracker", digits:"page-digits", diag:"page-diag", charts:"page-charts", adxbot:"page-adxbot", aggression:"page-aggression", mtf:"page-mtf", njanja:"page-njanja", rfabot:"page-rfabot", bazu:"page-bazu", msdexplorer:"page-msdexplorer", msdfeatures:"page-msdfeatures", msdevents:"page-msdevents", msdinspector:"page-msdinspector", msddistribution:"page-msddistribution", msdcorrelation:"page-msdcorrelation", msdsearch:"page-msdsearch", msdexperiment:"page-msdexperiment", msdknowledge:"page-msdknowledge", msdvalidation:"page-msdvalidation", msdworkbench:"page-msdworkbench", msdphase8:"page-msdphase8", msdphase9:"page-msdphase9", msdphase11:"page-msdphase11", msdphase11validation:"page-msdphase11validation" };
-  const navs  = { accounts:"navAccounts", live:"navLive",  candles:"navCandles", engine:"navEngine", grid:"navGrid", analysis:"navAnalysis", features:"navFeatures", predbot:"navPredBot", oubot:"navOuBot", tracker:"navTracker", digits:"navDigits", diag:"navDiag", charts:"navCharts", adxbot:"navAdxBot", aggression:"navAggression", mtf:"navMtf", njanja:"navNjanja", rfabot:"navRfaBot", bazu:"navBazu", msdexplorer:"navMsdExplorer", msdfeatures:"navMsdFeatures", msdevents:"navMsdEvents", msdinspector:"navMsdInspector", msddistribution:"navMsdDistribution", msdcorrelation:"navMsdCorrelation", msdsearch:"navMsdSearch", msdexperiment:"navMsdExperiment", msdknowledge:"navMsdKnowledge", msdvalidation:"navMsdValidation", msdworkbench:"navMsdWorkbench", msdphase8:"navMsdPhase8", msdphase9:"navMsdPhase9", msdphase11:"navMsdPhase11", msdphase11validation:"navMsdPhase11Validation" };
+  const pages = { accounts:"page-accounts", live:"page-live", candles:"page-candles", engine:"page-engine", grid:"page-grid", analysis:"page-analysis", features:"page-features", predbot:"page-predbot", oubot:"page-oubot", tracker:"page-tracker", digits:"page-digits", diag:"page-diag", charts:"page-charts", adxbot:"page-adxbot", aggression:"page-aggression", mtf:"page-mtf", njanja:"page-njanja", rfabot:"page-rfabot", tradesignal:"page-tradesignal", bazu:"page-bazu", msdexplorer:"page-msdexplorer", msdfeatures:"page-msdfeatures", msdevents:"page-msdevents", msdinspector:"page-msdinspector", msddistribution:"page-msddistribution", msdcorrelation:"page-msdcorrelation", msdsearch:"page-msdsearch", msdexperiment:"page-msdexperiment", msdknowledge:"page-msdknowledge", msdvalidation:"page-msdvalidation", msdworkbench:"page-msdworkbench", msdphase8:"page-msdphase8", msdphase9:"page-msdphase9", msdphase11:"page-msdphase11", msdphase11validation:"page-msdphase11validation" };
+  const navs  = { accounts:"navAccounts", live:"navLive",  candles:"navCandles", engine:"navEngine", grid:"navGrid", analysis:"navAnalysis", features:"navFeatures", predbot:"navPredBot", oubot:"navOuBot", tracker:"navTracker", digits:"navDigits", diag:"navDiag", charts:"navCharts", adxbot:"navAdxBot", aggression:"navAggression", mtf:"navMtf", njanja:"navNjanja", rfabot:"navRfaBot", tradesignal:"navTradeSignal", bazu:"navBazu", msdexplorer:"navMsdExplorer", msdfeatures:"navMsdFeatures", msdevents:"navMsdEvents", msdinspector:"navMsdInspector", msddistribution:"navMsdDistribution", msdcorrelation:"navMsdCorrelation", msdsearch:"navMsdSearch", msdexperiment:"navMsdExperiment", msdknowledge:"navMsdKnowledge", msdvalidation:"navMsdValidation", msdworkbench:"navMsdWorkbench", msdphase8:"navMsdPhase8", msdphase9:"navMsdPhase9", msdphase11:"navMsdPhase11", msdphase11validation:"navMsdPhase11Validation" };
   window.__mfxCurrentPage = which;
   Object.keys(pages).forEach(k => {
     document.getElementById(pages[k]).classList.toggle("active", k===which);
@@ -26627,6 +26662,7 @@ function showPage(which){
     }
     moduleSwitches.restorePage(pageElement);
   }
+  if (which === "tradesignal" && typeof window.tsStart === "function") window.tsStart();
   if (which === "candles"){
     if (!candlesPageReady){ candlesPageReady = true; buildTfCards(); connectTfWs(); startTfTimers(); }
     TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));
@@ -26743,7 +26779,7 @@ window.addEventListener("mfx:modules-changed", () => {
 });
 
 // Overlay toggles redraw every timeframe chart; chips also reflect on/off styling
-["pa-sr","pa-zones","pa-ob","pa-fvg","pa-liq","pa-bos","pa-eq","pa-vp","pa-ote","pa-trend","pa-amd","pe-zones","pe-struct","pe-liq","pe-cpat","pe-chart","pe-wy","pe-reg","pe-lv-sr","pe-lv-sd","pe-lv-fib","pe-lv-tl","pe-lv-ma","pe-lv-ref","pe-lv-vp","pe-lv-amd"].forEach(id => {
+["pa-sr","pa-zones","pa-ob","pa-fvg","pa-liq","pa-bos","pa-eq","pa-vp","pa-ote","pa-trend","pa-amd","pa-evid","pe-zones","pe-struct","pe-liq","pe-cpat","pe-chart","pe-wy","pe-reg","pe-lv-sr","pe-lv-sd","pe-lv-fib","pe-lv-tl","pe-lv-ma","pe-lv-ref","pe-lv-vp","pe-lv-amd"].forEach(id => {
   const el = document.getElementById(id);
   const key = "mfx_overlay_" + id;
   if (el){
@@ -26842,6 +26878,8 @@ function connectTfWs(){
 
 function requestAllTimeframes(){
   if (!tfWs || tfWs.readyState !== WebSocket.OPEN) return;
+  window.__tfMarket = SYMBOL; window.__tfSub = _tickSubscriptionSymbol;   // which market these candles belong to
+  Object.keys(_tfEvCache).forEach(k => delete _tfEvCache[k]);
   // drop any existing candle subscriptions, then request fresh per timeframe
   tfWs.send(JSON.stringify({ forget_all: "candles" }));
   tfWs.send(JSON.stringify({ forget_all: "ticks" }));
@@ -28466,6 +28504,73 @@ function tfAnalysis(g, arr, name, fn){
   if (!ent || ent.key !== key) ent = _tfAnCache[g] = { key, v: {} };
   return name in ent.v ? ent.v[name] : (ent.v[name] = fn(arr));
 }
+// ---- Evidence highlight (blue) ----------------------------------------------------------------
+// analyzeEvidence output for one timeframe (with the higher timeframes as context), recomputed when the candles
+// change but at most every 2s per chart so live ticks do not re-run the full analysis each time.
+const _tfEvCache = {};
+function tfEvidence(g){
+  const arr = tfData[g] || [];
+  if (arr.length < 2 || !window.MFXEngine) return null;
+  const idx = TIMEFRAMES.findIndex(t => t.g === g);
+  const htf = TIMEFRAMES.slice(idx + 1).map(h => ({ tf: h.label, candles: tfData[h.g] || [] })).filter(h => h.candles.length >= 60);
+  const sig = a => { const l = a[a.length - 1]; return l ? a.length + "|" + a[0].epoch + "|" + a[0].open + "|" + l.epoch + "|" + l.close : "0"; };
+  const key = sig(arr) + "#" + htf.map(h => sig(h.candles)).join(",");
+  const c = _tfEvCache[g], now = Date.now();
+  if (c && (c.key === key || now - c.t < 2000)) return c.v;
+  const v = window.MFXEngine.analyzeEvidence(arr, { htf });
+  _tfEvCache[g] = { key, t: now, v };
+  return v;
+}
+function tfEvidenceNumbered(ev){
+  // items that point at a bar get a number shared by the chart marker and the list
+  let n = 0;
+  return ev.items.slice().sort((a, b) => b.weight - a.weight).map(it => ({ it, n: it.index != null && it.index >= 0 ? ++n : 0 }));
+}
+function tfEvidenceMarks(ev, arr, start, count, xAt, y, top, bottom){
+  let s = "";
+  const used = {};
+  tfEvidenceNumbered(ev).forEach(({ it, n }) => {
+    if (!n || it.index < start || it.index >= start + count) return;
+    const c = arr[it.index]; if (!c) return;
+    const cx = xAt(it.index);
+    const below = it.dir !== -1;
+    let cy = below ? y(c.low) + 9 : y(c.high) - 9;
+    used[it.index] = (used[it.index] || 0) + 1;
+    cy += (below ? 1 : -1) * (used[it.index] - 1) * 12;
+    cy = Math.max(top + 5, Math.min(bottom - 3, cy));
+    s += `<line x1="${cx.toFixed(1)}" y1="${(below ? y(c.low) : y(c.high)).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${cy.toFixed(1)}" stroke="#3b82f6" stroke-width="0.8" opacity="0.8"/>`
+       + `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="5" fill="rgba(59,130,246,0.28)" stroke="#3b82f6" stroke-width="1.2" class="ev-mark"><title>${String(it.label).replace(/[<&>]/g, "")} [${it.group}]</title></circle>`
+       + `<text x="${cx.toFixed(1)}" y="${(cy + 2.6).toFixed(1)}" fill="#bfdbfe" font-size="7" font-weight="700" text-anchor="middle" font-family="monospace">${n}</text>`;
+  });
+  return s;
+}
+function tfRenderEvidencePanel(g, on, ev){
+  const el = $("tf-ev-" + g); if (!el) return;
+  let html = "";
+  if (on && ev){
+    const esc = t => String(t).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;"}[c]));
+    if (!ev.sufficient) html = `<div class="tf-ev-h">Evidence: insufficient data</div>`;
+    else html = `<div class="tf-ev-h">Evidence · ${esc(ev.verdict)} · balance ${ev.balance.toFixed(2)}</div><ol>`
+      + tfEvidenceNumbered(ev).map(({ it, n }) => `<li${n ? "" : ' style="list-style:none;margin-left:-4px"'}>${n ? "" : "• "}${esc(it.label)} <span class="g">[${esc(it.group)}]</span></li>`).join("") + `</ol>`;
+  }
+  el.classList.toggle("on", !!on);
+  if (el._h !== html){ el._h = html; el.innerHTML = html; }
+}
+// Focus bar + symbol check for "open from Trade Signal"
+window.mfxTfFocusRefresh = function(){
+  const bar = $("tfFocusBar"), txt = $("tfFocusText"), f = window.__tsFocus;
+  if (bar) bar.classList.toggle("on", !!f);
+  if (txt && f) txt.textContent = "Evidence highlight (blue) — " + f.headline;
+  TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));
+  // the candle socket can be opened before the market switch has resolved its symbol: re-request until they agree
+  [1500, 4000, 8000].forEach(ms => setTimeout(() => {
+    if (candlesPageReady && window.__tfMarket && (window.__tfMarket !== SYMBOL || window.__tfSub !== _tickSubscriptionSymbol)) requestAllTimeframes();
+  }, ms));
+};
+document.addEventListener("click", e => {
+  if (e.target && e.target.id === "tfFocusClear"){ window.__tsFocus = null; const c = $("pa-evid"); if (c && c.checked){ c.checked = false; c.dispatchEvent(new Event("change")); } window.mfxTfFocusRefresh(); }
+});
+
 function drawTfCandles(g){
   const svg = $("tf-chart-" + g);
   if (!svg) return;
@@ -28731,6 +28836,14 @@ function drawTfCandles(g){
       out += window.MFXEngine.renderLevels(L, geom, { showSR: want("pe-lv-sr"), showSD: want("pe-lv-sd"), showPD: want("pe-lv-fib"), showFib: want("pe-lv-fib"), showTL: want("pe-lv-tl"), showMA: want("pe-lv-ma"), showRef: want("pe-lv-ref"), showProfile: want("pe-lv-vp"), showAMD: want("pe-lv-amd") });
     }
   }
+
+  // Evidence highlight (blue): numbered markers on the bars that produced each piece of evidence
+  const evOn = want("pa-evid") && !!window.MFXEngine;
+  const evData = evOn ? tfEvidence(g) : null;
+  if (evData && evData.sufficient && evData.dropped === 0){
+    out += tfEvidenceMarks(evData, arr, start, count, xAt, y, padT, H - padB);
+  }
+  tfRenderEvidencePanel(g, evOn, evData);
 
   // current price dashed line
   const lastC = arr[arr.length-1];
@@ -33636,6 +33749,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=31"></script>
+<script type="module" src="src/analysis/tradeSignalPage.js?v=1"></script>
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>
@@ -33662,7 +33776,7 @@ try {
   setInterval(() => { if (body.offsetParent !== null) run(); }, 5000);
 })();
 </script>
-<script type="module">import * as E from "./src/analysis/all.js?v=5"; window.MFXEngine = E; if (typeof TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
+<script type="module">import * as E from "./src/analysis/all.js?v=6"; window.MFXEngine = E; if (typeof TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
 <script type="module" src="src/ldpe/under-over-bot.js?v=2"></script>
 <script type="module" src="src/consec/consecAlert.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>

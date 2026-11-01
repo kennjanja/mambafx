@@ -3,6 +3,7 @@ import { analyzeZones } from './zones.js';
 import { analyzePatterns } from './patterns.js';
 import { analyzeLevels } from './levels.js';
 export { analyzeEvidence } from './evidence.js';
+export { buildTradeSignal, TRADE_SIGNAL_TFS } from './tradeSignal.js';
 
 export function analyzeAll(candles, opts = {}) {
   const base = analyze(candles, opts);
