@@ -512,33 +512,44 @@ let monitor = (() => { try { const v = JSON.parse(localStorage.getItem(MON_KEY))
 const fmtClock = (s) => { s = Math.max(0, Math.ceil(s)); return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`; };
 function monitorTick() {
   const now = Date.now();
-  for (const m of E.state.markets.values()) {
-    const sig = m.signal;
-    if (!sig || !sig.direction || sig.gate !== GATE.OK || !(sig.durationSec > 0) || !(m.last > 0)) continue;
-    const key = sig.signalId || `${m.symbol}|${sig.direction}|${sig.duration}`;
-    const nkey = `${sig.direction}|${sig.duration}`;
-    if (monitor.some((x) => x.key === key || (x.noteKeys || []).includes(`${m.symbol}|${key}`))) continue;
-    // One signal per market at a time: a later, different signal is only a note on the active one.
-    const active = monitor.find((x) => x.symbol === m.symbol && !x.closedAt);
-    if (active) {
-      if (active.direction === sig.direction && active.dur === sig.duration) continue;
-      active.noteKeys = active.noteKeys || []; active.notes = active.notes || [];
-      active.noteKeys.push(`${m.symbol}|${key}`);
-      if (!active.notes.some((n) => n.k === nkey)) active.notes.push({ k: nkey, direction: sig.direction, dur: sig.duration, strength: sig.strength, at: now });
-      continue;
-    }
-    monitor.push({ key, symbol: m.symbol, name: m.name, direction: sig.direction, dur: sig.duration, durMs: sig.durationSec * 1000, strength: sig.strength, entry: m.last, dp: m.dp, startedAt: now, closedAt: null, exit: null, notes: [], noteKeys: [] });
-  }
-  for (const x of monitor) {
+  const endOf = (sig) => (sig.decisionTs ? sig.decisionTs * 1000 : now) + sig.durationSec * 1000;
+  const freshEntry = (m, sig, endsAt, notes) => ({ key: sig.signalId || `${m.symbol}|${sig.direction}|${sig.duration}`, symbol: m.symbol, name: m.name, direction: sig.direction, dur: sig.duration, durMs: Math.max(1000, endsAt - now), fullMs: sig.durationSec * 1000, strength: sig.strength, entry: m.last, dp: m.dp, startedAt: now, closedAt: null, exit: null, notes: notes || [], seen: [] });
+  // Close entries whose predicted duration has lapsed; a queued note whose own window is still open then becomes a fresh signal.
+  for (const x of monitor.slice()) {
     if (x.closedAt || now < x.startedAt + x.durMs) continue;
     const m = E.state.markets.get(x.symbol);
     x.closedAt = now; x.exit = m && m.last > 0 ? m.last : x.entry;
+    const live = (x.notes || []).filter((n) => n.endsAt > now);
+    if (live.length && m && m.last > 0) {
+      const n = live[0];
+      monitor.push(freshEntry(m, { signalId: n.id, direction: n.direction, duration: n.dur, durationSec: n.durSec, strength: n.strength }, n.endsAt, live.slice(1)));
+    }
+  }
+  for (const m of E.state.markets.values()) {
+    const sig = m.signal;
+    if (!sig || !sig.direction || sig.gate !== GATE.OK || !(sig.durationSec > 0) || !(m.last > 0)) continue;
+    const key = sig.signalId || `${m.symbol}|${sig.direction}|${sig.duration}`, nkey = `${sig.direction}|${sig.duration}`;
+    const endsAt = endOf(sig);
+    const active = monitor.find((x) => x.symbol === m.symbol && !x.closedAt);
+    if (active) {
+      // One signal per market at a time: a different one is a note on the active signal until it expires.
+      if (active.key === key || (active.direction === sig.direction && active.dur === sig.duration)) continue;
+      if (endsAt <= now || (active.notes || []).some((n) => n.k === nkey)) continue;
+      active.notes = active.notes || [];
+      active.notes.push({ k: nkey, id: sig.signalId || null, direction: sig.direction, dur: sig.duration, durSec: sig.durationSec, strength: sig.strength, endsAt });
+      continue;
+    }
+    if (endsAt <= now) continue;
+    // A closed signal with the same id never reopens; a new id (or an unexpired queued one) starts fresh.
+    if (sig.signalId && monitor.some((x) => x.key === key)) continue;
+    const last = monitor.filter((x) => x.symbol === m.symbol && x.key === key).pop();
+    if (last && last.closedAt && now < last.startedAt + last.fullMs + 1000) continue;
+    monitor.push(freshEntry(m, sig, endsAt));
   }
   const closed = monitor.filter((x) => x.closedAt).sort((a, b) => b.closedAt - a.closedAt).slice(0, MON_KEEP_CLOSED);
   monitor = monitor.filter((x) => !x.closedAt).concat(closed);
   try { localStorage.setItem(MON_KEY, JSON.stringify(monitor)); } catch { /* storage full or blocked */ }
-}
-function moveHtml(x, price) {
+}function moveHtml(x, price) {
   const d = (price - x.entry) * (x.direction === 'Rise' ? 1 : -1);
   const cls = d > 0 ? 'up' : d < 0 ? 'dn' : 'mu';
   return `<span class="${cls} num">${d > 0 ? 'in favour' : d < 0 ? 'against' : 'level'} ${d >= 0 ? '+' : ''}${d.toFixed(x.dp ?? 2)}</span>`;
@@ -556,7 +567,7 @@ function renderMonitor() {
     return `<div class="sm-row ${x.closedAt ? 'closed' : ''}" data-sym="${esc(x.symbol)}" title="Open ${esc(x.symbol)} on Candle Charts and Bazu">
       <div class="sm-top"><span><b>${esc(x.symbol)}</b> <span class="mu">${esc(x.name || '')}</span></span><span><b class="${x.direction === 'Rise' ? 'up' : 'dn'}">${esc(x.direction)}</b> <span class="pill">${esc(x.dur)}</span> ${status}</span></div>
       <div class="sm-bar"><i style="width:${(frac * 100).toFixed(1)}%"></i></div>
-      <div class="sm-bot num"><span>${x.closedAt ? 'closed ' + new Date(x.closedAt).toLocaleTimeString() : 'remaining <b class="up">' + fmtClock((x.startedAt + x.durMs - now) / 1000) + '</b>'}</span><span>strength ${pct(x.strength, 0)}</span><span>entry ${x.entry.toFixed(x.dp ?? 2)} &rarr; ${spot.toFixed(x.dp ?? 2)}</span>${moveHtml(x, spot)}</div>${(x.notes || []).length ? `<div class="sm-notes">${x.notes.map((n, i) => `${i + 2}${['nd', 'rd'][i] || 'th'} signal: ${esc(n.direction)} ${esc(n.dur)} (${pct(n.strength, 0)}) - queued, shown only as a note until this one expires`).join('<br>')}</div>` : ''}</div>`;
+      <div class="sm-bot num"><span>${x.closedAt ? 'closed ' + new Date(x.closedAt).toLocaleTimeString() : 'remaining <b class="up">' + fmtClock((x.startedAt + x.durMs - now) / 1000) + '</b>'}</span><span>strength ${pct(x.strength, 0)}</span><span>entry ${x.entry.toFixed(x.dp ?? 2)} &rarr; ${spot.toFixed(x.dp ?? 2)}</span>${moveHtml(x, spot)}</div>${!x.closedAt && (x.notes || []).length ? `<div class="sm-notes">${x.notes.map((n, i) => `${i + 2}${['nd', 'rd'][i] || 'th'} signal: ${esc(n.direction)} ${esc(n.dur)} (${pct(n.strength, 0)}) - queued; becomes active if still valid when this one expires`).join('<br>')}</div>` : ''}</div>`;
   }).join('');
   const html = rows || '<div class="note">No active Bazu signals. Signals appear here when Bazu marks one tradable and stay until their predicted duration lapses.</div>';
   if (host._html !== html) { host._html = html; host.innerHTML = html; }
