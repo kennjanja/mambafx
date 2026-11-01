@@ -207,6 +207,20 @@ footer{text-align:center;color:var(--muted);font-size:11px;margin-top:22px;line-
 #tfFocusBar{display:none;margin:0 0 12px;padding:8px 12px;border:1px solid #3b82f6;border-radius:10px;background:rgba(59,130,246,.12);color:#93c5fd;font-size:12px;align-items:center;gap:10px}
 #tfFocusBar.on{display:flex}
 #tfFocusBar button{margin-left:auto;background:transparent;border:1px solid #3b82f6;color:#93c5fd;border-radius:6px;padding:3px 10px;cursor:pointer}
+#page-beastmode .ts-note{font-size:11px;color:var(--muted);margin:0 0 10px}
+#page-beastmode .ts-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:12px;color:var(--muted)}
+#page-beastmode .ts-bar button{background:#0d121d;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:5px 12px;cursor:pointer}
+#page-beastmode .ts-h{margin:14px 0 6px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
+#page-beastmode .ts-empty{padding:14px;color:var(--muted);font-size:13px;border:1px dashed var(--line);border-radius:10px}
+#page-beastmode .ts-none{padding:3px 0;font-size:12px;color:var(--muted)}
+#page-beastmode .bm-row{display:flex;align-items:center;gap:12px;padding:10px 14px;margin-bottom:6px;border:1px solid var(--line);border-left:4px solid #f59e0b;border-radius:10px;background:#0d121d;cursor:pointer}
+#page-beastmode .bm-row:hover,.bm-hr:hover{background:#121a29}.bm-hr{cursor:pointer}
+#page-beastmode .bm-badge{min-width:48px;text-align:center;font-weight:800;font-size:12px;border-radius:6px;padding:3px 8px;background:#1a2130}
+#page-beastmode .up{color:var(--up)}#page-beastmode .dn{color:var(--down)}#page-beastmode .mu{color:var(--muted)}
+#page-beastmode .ts-main{flex:1;display:flex;flex-direction:column;gap:3px;font-size:13px}#page-beastmode .ts-sub{font-size:11px;color:var(--muted)}
+#page-beastmode .ts-bar{display:block}
+#page-beastmode .ts-main .ts-bar{height:5px;margin:4px 0 0;background:#1a2130;border-radius:3px;overflow:hidden}#page-beastmode .ts-main .ts-bar i{display:block;height:100%;background:#f59e0b}
+#page-beastmode .ts-res{min-width:44px;text-align:center;font-size:12px;color:#60a5fa;font-family:monospace;font-weight:800}
 #page-predhistory .ts-note{font-size:11px;color:var(--muted);margin:0 0 10px}
 #page-predhistory .ts-bar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:12px;color:var(--muted)}
 #page-predhistory .ts-bar button,#page-predhistory .ts-bar select{background:#0d121d;border:1px solid var(--line);color:var(--text);border-radius:8px;padding:5px 12px;cursor:pointer}
@@ -681,6 +695,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     <button id="navCandles" onclick="showPage('candles')">🕯️ Candle Charts</button>
     <button id="navTradeSignal" onclick="showPage('tradesignal')">🎯 Trade Signal</button>
 <button id="navPredHistory" onclick="showPage('predhistory')">🗂 Prediction History</button>
+<button id="navBeastMode" onclick="showPage('beastmode')">🦁 Beast Mode Signal</button>
     <button id="navEngine" onclick="showPage('engine')">⚡ 5-Tick Engine</button>
     <button id="navGrid" onclick="showPage('grid')">🎯 Trading Grid</button>
     <button id="navAnalysis" onclick="showPage('analysis')">🔬 Analysis Tool</button>
@@ -778,7 +793,13 @@ table.an-table tbody tr:last-child td{border-bottom:none}
   </div><!-- /page-live -->
 
   <!-- ============ TRADE SIGNAL (evidence-based setups) ============ -->
-  <div id="page-predhistory" class="page">
+  <div id="page-beastmode" class="page">
+  <h2 style="margin:0 0 4px">Beast Mode Signal</h2>
+  <p class="ts-note">A beast signal is recorded only when <b>Bazu's live Rise/Fall prediction</b> and a <b>Trade Signal entry</b> (pullback or liquidity sweep trigger) point the <b>same way</b> on the same market. It is followed for Bazu's predicted duration and scored like the contract it describes: exit price vs entry price, a tie loses. The Trade Signal target / invalidation are shown as extra information. Records advance only while this page is open (this page also runs Bazu and the Trade Signal scan); a window that lapses unobserved is marked unscored. Display only: no orders are placed, and the result is not a validated edge or a Deriv settlement.</p>
+  <div class="ts-bar"><span id="bmStatus">starting…</span><button id="bmCsv">Export CSV</button><button id="bmClear">Clear history</button></div>
+  <div id="bmList"></div>
+</div>
+<div id="page-predhistory" class="page">
   <h2 style="margin:0 0 4px">Prediction History</h2>
   <p class="ts-note">Archive of every Trade Signal prediction after its predicted time lapsed: &#10003; correct, &#10007; wrong. Predictions are followed only while the Trade Signal page is open. Stored in this browser.</p>
   <div class="ts-bar"><select id="phMarket"><option value="">All markets</option></select><select id="phResult"><option value="">All results</option><option value="correct">Correct</option><option value="wrong">Wrong</option></select><button id="phCsv">Export CSV</button><button id="phClear">Clear</button><span id="phSummary"></span></div>
@@ -26664,14 +26685,14 @@ function startTfTimers(){
 }
 
 function showPage(which){
-  const pages = { accounts:"page-accounts", live:"page-live", candles:"page-candles", engine:"page-engine", grid:"page-grid", analysis:"page-analysis", features:"page-features", predbot:"page-predbot", oubot:"page-oubot", tracker:"page-tracker", digits:"page-digits", diag:"page-diag", charts:"page-charts", adxbot:"page-adxbot", aggression:"page-aggression", mtf:"page-mtf", njanja:"page-njanja", rfabot:"page-rfabot", tradesignal:"page-tradesignal", predhistory:"page-predhistory", bazu:"page-bazu", msdexplorer:"page-msdexplorer", msdfeatures:"page-msdfeatures", msdevents:"page-msdevents", msdinspector:"page-msdinspector", msddistribution:"page-msddistribution", msdcorrelation:"page-msdcorrelation", msdsearch:"page-msdsearch", msdexperiment:"page-msdexperiment", msdknowledge:"page-msdknowledge", msdvalidation:"page-msdvalidation", msdworkbench:"page-msdworkbench", msdphase8:"page-msdphase8", msdphase9:"page-msdphase9", msdphase11:"page-msdphase11", msdphase11validation:"page-msdphase11validation" };
-  const navs  = { accounts:"navAccounts", live:"navLive",  candles:"navCandles", engine:"navEngine", grid:"navGrid", analysis:"navAnalysis", features:"navFeatures", predbot:"navPredBot", oubot:"navOuBot", tracker:"navTracker", digits:"navDigits", diag:"navDiag", charts:"navCharts", adxbot:"navAdxBot", aggression:"navAggression", mtf:"navMtf", njanja:"navNjanja", rfabot:"navRfaBot", tradesignal:"navTradeSignal", predhistory:"navPredHistory", bazu:"navBazu", msdexplorer:"navMsdExplorer", msdfeatures:"navMsdFeatures", msdevents:"navMsdEvents", msdinspector:"navMsdInspector", msddistribution:"navMsdDistribution", msdcorrelation:"navMsdCorrelation", msdsearch:"navMsdSearch", msdexperiment:"navMsdExperiment", msdknowledge:"navMsdKnowledge", msdvalidation:"navMsdValidation", msdworkbench:"navMsdWorkbench", msdphase8:"navMsdPhase8", msdphase9:"navMsdPhase9", msdphase11:"navMsdPhase11", msdphase11validation:"navMsdPhase11Validation" };
+  const pages = { accounts:"page-accounts", live:"page-live", candles:"page-candles", engine:"page-engine", grid:"page-grid", analysis:"page-analysis", features:"page-features", predbot:"page-predbot", oubot:"page-oubot", tracker:"page-tracker", digits:"page-digits", diag:"page-diag", charts:"page-charts", adxbot:"page-adxbot", aggression:"page-aggression", mtf:"page-mtf", njanja:"page-njanja", rfabot:"page-rfabot", tradesignal:"page-tradesignal", predhistory:"page-predhistory", beastmode:"page-beastmode", bazu:"page-bazu", msdexplorer:"page-msdexplorer", msdfeatures:"page-msdfeatures", msdevents:"page-msdevents", msdinspector:"page-msdinspector", msddistribution:"page-msddistribution", msdcorrelation:"page-msdcorrelation", msdsearch:"page-msdsearch", msdexperiment:"page-msdexperiment", msdknowledge:"page-msdknowledge", msdvalidation:"page-msdvalidation", msdworkbench:"page-msdworkbench", msdphase8:"page-msdphase8", msdphase9:"page-msdphase9", msdphase11:"page-msdphase11", msdphase11validation:"page-msdphase11validation" };
+  const navs  = { accounts:"navAccounts", live:"navLive",  candles:"navCandles", engine:"navEngine", grid:"navGrid", analysis:"navAnalysis", features:"navFeatures", predbot:"navPredBot", oubot:"navOuBot", tracker:"navTracker", digits:"navDigits", diag:"navDiag", charts:"navCharts", adxbot:"navAdxBot", aggression:"navAggression", mtf:"navMtf", njanja:"navNjanja", rfabot:"navRfaBot", tradesignal:"navTradeSignal", predhistory:"navPredHistory", beastmode:"navBeastMode", bazu:"navBazu", msdexplorer:"navMsdExplorer", msdfeatures:"navMsdFeatures", msdevents:"navMsdEvents", msdinspector:"navMsdInspector", msddistribution:"navMsdDistribution", msdcorrelation:"navMsdCorrelation", msdsearch:"navMsdSearch", msdexperiment:"navMsdExperiment", msdknowledge:"navMsdKnowledge", msdvalidation:"navMsdValidation", msdworkbench:"navMsdWorkbench", msdphase8:"navMsdPhase8", msdphase9:"navMsdPhase9", msdphase11:"navMsdPhase11", msdphase11validation:"navMsdPhase11Validation" };
   window.__mfxCurrentPage = which;
   Object.keys(pages).forEach(k => {
     document.getElementById(pages[k]).classList.toggle("active", k===which);
     const nav = document.getElementById(navs[k]); if (nav) nav.classList.toggle("active", k===which);
   });
-  if ((which === "bazu" || which === "candles") && typeof window.bazuPageInit === "function"){ window.bazuPageInit(); } // candles shows the live Bazu signal card
+  if ((which === "bazu" || which === "candles" || which === "beastmode") && typeof window.bazuPageInit === "function"){ window.bazuPageInit(); } // candles shows the live Bazu signal card
   else if (typeof window.bazuPageLeave === "function"){ window.bazuPageLeave(); }
   const moduleSwitches = window.mfxModuleSwitches;
   const pageElement = document.getElementById(pages[which]);
@@ -26684,6 +26705,7 @@ function showPage(which){
   }
   if (which === "tradesignal" && typeof window.tsStart === "function") window.tsStart();
   if (which === "predhistory" && typeof window.phRender === "function") window.phRender();
+  if (which === "beastmode" && typeof window.bmStart === "function") window.bmStart();
   if (which === "candles"){
     if (!candlesPageReady){ candlesPageReady = true; buildTfCards(); connectTfWs(); startTfTimers(); }
     TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));
@@ -33769,9 +33791,10 @@ try {
   </div>
 </div>
 
-<script type="module" src="src/bazu/page.js?v=31"></script>
-<script type="module" src="src/analysis/tradeSignalPage.js?v=3"></script>
+<script type="module" src="src/bazu/page.js?v=32"></script>
+<script type="module" src="src/analysis/tradeSignalPage.js?v=4"></script>
 <script type="module" src="src/analysis/predictionHistoryPage.js?v=1"></script>
+<script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>
