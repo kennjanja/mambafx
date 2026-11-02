@@ -11,7 +11,9 @@ const nowSec = () => Math.floor(Date.now() / 1000);
 // Every market: the app's list, the Jump/Step indices, and every open synthetic index Deriv reports.
 const known = () => ({ ...(typeof MARKETS !== 'undefined' ? MARKETS : {}), ...(typeof DISABLED_MARKETS !== 'undefined' ? DISABLED_MARKETS : {}) });
 const extra = new Map();   // symbol -> display name, from active_symbols
-const markets = () => [...new Set([...Object.keys(known()), ...extra.keys()])];
+// The bot trades only Volatility indices (R_n and 1HZnV), never Jump, Step, Crash/Boom or other markets.
+const isVolatilityIndex = (s) => /^(R_\d+|1HZ\d+V)$/.test(s);
+const markets = () => [...new Set([...Object.keys(known()), ...extra.keys()])].filter(isVolatilityIndex);
 const labelOf = (s) => known()[s] || extra.get(s) || s;
 
 let recs = [];
@@ -54,7 +56,7 @@ function onSymbols(m) {
   const list = m.active_symbols || []; symMap = {};
   for (const x of list) {
     const s = x.underlying_symbol || x.symbol;
-    if (s && x.market === 'synthetic_index' && !isVolatilityAbove100(s, x.display_name || x.underlying_symbol_name || '') && !x.is_trading_suspended && x.exchange_is_open !== 0 && !/^(WLD|CRASH|BOOM)?BASKET/i.test(s) && !/basket/i.test(x.submarket || '')) extra.set(s, x.display_name || x.underlying_symbol_name || s);
+    if (s && x.market === 'synthetic_index' && isVolatilityIndex(s) && !isVolatilityAbove100(s, x.display_name || x.underlying_symbol_name || '') && !x.is_trading_suspended && x.exchange_is_open !== 0 && !/^(WLD|CRASH|BOOM)?BASKET/i.test(s) && !/basket/i.test(x.submarket || '')) extra.set(s, x.display_name || x.underlying_symbol_name || s);
   }
   for (const k of markets()) {
     let d = null; try { d = typeof _findDiscoveredSymbol === 'function' ? _findDiscoveredSymbol(list, k) : null; } catch (_) {}
