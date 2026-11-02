@@ -846,17 +846,17 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     <div class="pa-toolbar">
       <div class="pa-title">📐 Price-action overlays — computed independently per timeframe</div>
       <div class="pa-chips">
-        <label class="pa-chip on"><input type="checkbox" id="pa-sr" checked><span class="sw sr"></span> Support / Resistance</label>
-        <label class="pa-chip on"><input type="checkbox" id="pa-zones" checked><span class="sw dz"></span><span class="sw sz"></span> Demand / Supply</label>
-        <label class="pa-chip on"><input type="checkbox" id="pa-ob" checked><span class="sw obb"></span><span class="sw obs"></span> Order Blocks</label>
-        <label class="pa-chip on"><input type="checkbox" id="pa-fvg" checked><span class="sw fvg"></span> Unmitigated FVG</label>
-        <label class="pa-chip on"><input type="checkbox" id="pa-liq" checked><span class="sw liq"></span> Liquidity</label>
-        <label class="pa-chip on"><input type="checkbox" id="pa-bos" checked><span class="sw bos"></span> BOS / CHoCH</label>
-        <label class="pa-chip on"><input type="checkbox" id="pa-eq" checked><span class="sw eq"></span> Premium / Discount</label>
-        <label class="pa-chip on"><input type="checkbox" id="pa-vp" checked><span class="sw vp"></span> Volume Profile</label>
-        <label class="pa-chip on"><input type="checkbox" id="pa-ote" checked><span class="sw ote"></span> OTE (ICT)</label>
-        <label class="pa-chip on"><input type="checkbox" id="pa-trend" checked><span class="sw trend"></span> Trendline</label>
-        <label class="pa-chip on"><input type="checkbox" id="pa-amd" checked><span class="sw amd"></span> AMD (Power of 3)</label>
+        <label class="pa-chip"><input type="checkbox" id="pa-sr"><span class="sw sr"></span> Support / Resistance</label>
+        <label class="pa-chip"><input type="checkbox" id="pa-zones"><span class="sw dz"></span><span class="sw sz"></span> Demand / Supply</label>
+        <label class="pa-chip"><input type="checkbox" id="pa-ob"><span class="sw obb"></span><span class="sw obs"></span> Order Blocks</label>
+        <label class="pa-chip"><input type="checkbox" id="pa-fvg"><span class="sw fvg"></span> Unmitigated FVG</label>
+        <label class="pa-chip"><input type="checkbox" id="pa-liq"><span class="sw liq"></span> Liquidity</label>
+        <label class="pa-chip"><input type="checkbox" id="pa-bos"><span class="sw bos"></span> BOS / CHoCH</label>
+        <label class="pa-chip"><input type="checkbox" id="pa-eq"><span class="sw eq"></span> Premium / Discount</label>
+        <label class="pa-chip"><input type="checkbox" id="pa-vp"><span class="sw vp"></span> Volume Profile</label>
+        <label class="pa-chip"><input type="checkbox" id="pa-ote"><span class="sw ote"></span> OTE (ICT)</label>
+        <label class="pa-chip"><input type="checkbox" id="pa-trend"><span class="sw trend"></span> Trendline</label>
+        <label class="pa-chip"><input type="checkbox" id="pa-amd"><span class="sw amd"></span> AMD (Power of 3)</label>
         <label class="pa-chip"><input type="checkbox" id="pa-evid"><span class="sw evid"></span> Evidence highlight (blue)</label>
         <span class="pa-sep" style="color:var(--muted);font-size:11px;margin:0 4px 0 10px">Engine:</span>
         <label class="pa-chip"><input type="checkbox" id="pe-zones"><span class="sw fvg"></span> Zones (OB / FVG / BPR / RB)</label>
@@ -26464,8 +26464,10 @@ function switchMarket(code){
 const TIMEFRAMES = [
   { g: 30,    label: "30 sec", num: "30", unit: "second", synth: true },   // Deriv has no 30s candles: built from ticks
   { g: 60,    label: "1 min",  num: "1",  unit: "minute" },
+  { g: 180,   label: "3 min",  num: "3",  unit: "minute" },
   { g: 300,   label: "5 min",  num: "5",  unit: "minute" },
   { g: 600,   label: "10 min", num: "10", unit: "minute" },
+  { g: 900,   label: "15 min", num: "15", unit: "minute" },
   { g: 1800,  label: "30 min", num: "30", unit: "minute" },
   { g: 3600,  label: "1 hour", num: "1",  unit: "hour" },
   { g: 14400, label: "4 hour", num: "4",  unit: "hour" },
@@ -26857,7 +26859,7 @@ window.addEventListener("mfx:modules-changed", () => {
   const el = document.getElementById(id);
   const key = "mfx_overlay_" + id;
   if (el){
-    try { const saved = localStorage.getItem(key); if (saved !== null) el.checked = saved === "1"; } catch(_){}
+    el.checked = false; // all overlays start unticked on every launch
     const chip0 = el.closest(".pa-chip"); if (chip0) chip0.classList.toggle("on", el.checked);
   }
   if (el) el.addEventListener("change", () => {
