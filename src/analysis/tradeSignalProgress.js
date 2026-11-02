@@ -37,19 +37,29 @@ export function computeModelProgress({ events = [], dir = 0, hasLocation = false
 
 export function createFunnel() {
   const data = {};
+  const bySymbol = {};
   return {
     data,
-    record(profileId, progress) {
-      if (!progress) return;
-      const p = data[profileId] || (data[profileId] = { scans: 0, bias: 0, location: 0, models: {} });
+    bySymbol,
+    record(profileId, progress, symbol) {
+      const p = data[profileId] || (data[profileId] = { scans: 0, notEvaluated: 0, bias: 0, location: 0, models: {} });
       p.scans++;
+      const s = symbol ? (bySymbol[symbol + '|' + profileId] || (bySymbol[symbol + '|' + profileId] = { scans: 0, bias: 0, location: 0, confirmed: 0 })) : null;
+      if (s) s.scans++;
+      if (!progress) { p.notEvaluated++; return; }
       if (progress.dir) p.bias++;
       if (progress.hasLocation) p.location++;
+      if (s) { if (progress.dir) s.bias++; if (progress.hasLocation) s.location++; }
+      let anyConfirmed = false;
       for (const m of progress.models) {
-        const row = p.models[m.id] || (p.models[m.id] = { total: m.total, steps: Array(m.total).fill(0), confirmed: 0 });
+        const row = p.models[m.id] || (p.models[m.id] = { total: m.total, bias: 0, location: 0, steps: Array(m.total).fill(0), completeNotConfirmed: 0, completeNoLocation: 0, confirmed: 0 });
+        if (progress.dir) row.bias++;
+        if (progress.hasLocation) row.location++;
         for (let i = 0; i < m.matched; i++) row.steps[i]++;
-        if (m.confirmed) row.confirmed++;
+        if (m.matched === m.total && !m.confirmed) { row.completeNotConfirmed++; if (!progress.hasLocation) row.completeNoLocation++; }
+        if (m.confirmed) { row.confirmed++; anyConfirmed = true; }
       }
+      if (s && anyConfirmed) s.confirmed++;
     },
   };
 }
