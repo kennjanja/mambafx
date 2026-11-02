@@ -1,17 +1,8 @@
-// Follows each Trade Signal until its predicted time lapses, then marks it correct or wrong.
-// Pure functions (no DOM / network) so the scoring rules can be tested.
-//
-// Rules (all fixed when the signal opens, never tuned afterwards):
-//  - horizon: the signal's profile hold time (default 1800 s) from the moment the signal was first seen
-
-//  - only prices after the signal opened count: scan price samples plus 5 min candles that start after it opened
-//  - END-OF-WINDOW RULE (like a Rise/Fall contract): only the price at the END of the predicted period decides. A BUY is correct
-//    if the last price is above the entry, wrong if it is at or below it; a SELL mirrors it. Dips beyond the entry during the window
-//    do not lose the signal. Exactly at the entry is not "above" (a tie loses).
-//  - the target and invalidation levels are shown for information (`targetHit`) and do not decide the result
-//  - a record resolves only at the lapse (no early exit); interim state is shown as progress
+// Trade Signal outcome tracking. Outcomes are decided only at the predicted period end.
+// Targets are informational; no stop, target, or opposing reversal ends a record early.
 
 export const HORIZON_SEC = 1800;
+export const RESOLUTION_GRANULARITY = 60;
 export const ENTRY_GRANULARITY = 300;
 
 export function openTracked(sig, nowSec) {
@@ -19,49 +10,107 @@ export function openTracked(sig, nowSec) {
   const hold = sig.holdSec > 0 ? sig.holdSec : HORIZON_SEC;
   return {
     id: sig.symbol + '|' + (sig.profile || 'intraday') + '@' + nowSec,
-    profile: sig.profile || 'intraday', profileName: sig.profileName || 'Intraday', holdLabel: sig.holdLabel || '30 min', entryG: sig.entryG || ENTRY_GRANULARITY, trigger: sig.trigger ? sig.trigger.label : null, exitOn: sig.exitOn || null,
-    symbol: sig.symbol, label: sig.label, dir: sig.dir, action: sig.action,
-    headline: sig.headline,
-    entry: sig.price,
+    profile: sig.profile || 'intraday', profileName: sig.profileName || 'Intraday', holdLabel: sig.holdLabel || '30 min', entryG: sig.entryG || ENTRY_GRANULARITY,
+    trigger: sig.trigger ? sig.trigger.label : null, exitOn: sig.exitOn || null,
+    model_id: sig.model_id ?? sig.primaryModel?.model_id ?? null, model_context: sig.model_context ?? sig.primaryModel?.context ?? null,
+    primaryModel: sig.primaryModel || null, secondaryModels: sig.secondaryModels || [], qualifyingModelIds: sig.qualifyingModelIds || [], inducementEvents: sig.inducementEvents || [],
+    entryEvidence: sig.entry || null, evidenceSnapshot: sig.evidenceSnapshot || [], familyValues: sig.familyValues || null, overallBalance: sig.overallBalance ?? null,
+    lifecycleState: sig.lifecycleState || null, lifecycleHistory: sig.lifecycleHistory || [],
+    symbol: sig.symbol, label: sig.label, dir: sig.dir, action: sig.action, headline: sig.headline,
+    entry: sig.price, confirmedAt: sig.confirmedAt ?? null, detectedAt: sig.detectedAt ?? nowSec, entryAt: nowSec,
     target: sig.target && sig.target.price != null ? sig.target.price : null,
     invalidation: sig.invalidation && sig.invalidation.price != null ? sig.invalidation.price : null,
     openedAt: nowSec, expiresAt: nowSec + hold,
     hit: null, hitAt: null, targetHit: false, rule: 'end', last: sig.price, state: 'open',
+    resolution_method: 'post-entry-1m-close', gaps: [], duplicateCandles: [],
   };
 }
 
-function touch(rec, hi, lo) {
-  const up = rec.dir === 1;
-  if (rec.target != null && (up ? hi >= rec.target : lo <= rec.target)) rec.targetHit = true;
+export function deduplicateOpenRecords(records = []) {
+  const output = [], active = new Set();
+  for (const record of records) {
+    if (!record || record.state !== 'open') { if (record) output.push(record); continue; }
+    const key = `${record.symbol}|${record.profile || 'intraday'}`;
+    if (active.has(key)) continue;
+    active.add(key); output.push(record);
+  }
+  return output;
 }
 
-/** Advance a record with new market data. candles: ascending 5 min candles; price: latest sample. Returns the record (mutated). */
-export function updateTracked(rec, { candles = [], price = null, nowSec, reversal = null }) {
-  if (rec.state !== 'open') return rec;
-  const end = Math.min(nowSec, rec.expiresAt);
-  // a bar is usable only if it starts after the signal opened (the bar containing the open also holds pre-signal prices)
-  const g = rec.entryG || ENTRY_GRANULARITY;
-  const firstBar = (Math.floor(rec.openedAt / g) + 1) * g;
-  let lastClose = null;
-  const bars = candles.filter((c) => c.epoch >= firstBar && c.epoch < rec.expiresAt).sort((a, b) => a.epoch - b.epoch);
+function validCandle(c) {
+  return c && Number.isFinite(c.epoch) && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close)
+    && c.high >= Math.max(c.open, c.close) && c.low <= Math.min(c.open, c.close) && c.high >= c.low;
+}
+
+function collectCandles(rec, candles, nowSec) {
+  const first = Math.floor(rec.openedAt / RESOLUTION_GRANULARITY) * RESOLUTION_GRANULARITY + RESOLUTION_GRANULARITY;
+  const byEpoch = new Map(), duplicates = new Set();
+  for (const c of candles) {
+    if (!validCandle(c) || c.epoch < first || c.epoch + RESOLUTION_GRANULARITY > rec.expiresAt || c.epoch + RESOLUTION_GRANULARITY > nowSec) continue;
+    if (byEpoch.has(c.epoch)) { duplicates.add(c.epoch); byEpoch.delete(c.epoch); }
+    else if (!duplicates.has(c.epoch)) byEpoch.set(c.epoch, c);
+  }
+  const bars = [...byEpoch.values()].sort((a, b) => a.epoch - b.epoch);
+  const expected = [];
+  for (let t = first; t + RESOLUTION_GRANULARITY <= rec.expiresAt; t += RESOLUTION_GRANULARITY) expected.push(t);
+  const gaps = expected.filter((t) => !byEpoch.has(t));
+  rec.duplicateCandles = [...duplicates].sort((a, b) => a - b);
+  rec.gaps = gaps;
   for (const c of bars) {
-    touch(rec, c.high, c.low);
-    lastClose = c.close;
+    const up = rec.dir === 1;
+    if (rec.target != null && (up ? c.high >= rec.target : c.low <= rec.target)) rec.targetHit = true;
   }
-  if (price != null && nowSec <= rec.expiresAt) {
-    touch(rec, price, price);
-    lastClose = price;
+  return { bars, expected, byEpoch, duplicates };
+}
+
+/**
+ * Advance a record using ascending post-entry 1-minute candles and/or timestamped ticks.
+ * `price` is accepted only when its `nowSec` is exactly the expiry timestamp.
+ * Missing/ambiguous expiry data leaves the record open; no stale close is substituted.
+ */
+export function updateTracked(rec, { candles = [], ticks = [], price = null, nowSec }) {
+  if (rec.state !== 'open') return rec;
+  const { bars, expected, byEpoch, duplicates } = collectCandles(rec, candles, Math.min(nowSec, rec.expiresAt));
+  if (bars.length) rec.last = bars[bars.length - 1].close;
+  if (Array.isArray(ticks)) {
+    const usable = ticks.filter((t) => t && Number.isFinite(t.epoch) && Number.isFinite(t.quote) && t.epoch > rec.openedAt && t.epoch <= rec.expiresAt).sort((a, b) => a.epoch - b.epoch);
+    for (const tick of usable) {
+      const up = rec.dir === 1;
+      if (rec.target != null && (up ? tick.quote >= rec.target : tick.quote <= rec.target)) rec.targetHit = true;
+    }
   }
-  if (lastClose != null) rec.last = lastClose;
-  if (nowSec >= rec.expiresAt) {
-    rec.state = (rec.last - rec.entry) * rec.dir > 0 ? 'correct' : 'wrong';
-    rec.hit = 'none';
-    rec.resolvedAt = end;
+  if (nowSec < rec.expiresAt) return rec;
+
+  const exactTick = Array.isArray(ticks) ? ticks.filter((t) => t && Number.isFinite(t.epoch) && Number.isFinite(t.quote) && t.epoch > rec.openedAt && t.epoch <= rec.expiresAt && rec.expiresAt - t.epoch <= 30).sort((a, b) => b.epoch - a.epoch)[0] : null;
+  const exactPrice = price != null && nowSec === rec.expiresAt && Number.isFinite(price) ? { epoch: rec.expiresAt, quote: price } : null;
+  const finalCandleEpoch = rec.expiresAt - RESOLUTION_GRANULARITY;
+  const finalCandle = byEpoch.get(finalCandleEpoch);
+  const ambiguousFinal = duplicates.has(finalCandleEpoch);
+  let close = null;
+  if (exactTick || exactPrice) {
+    const sample = exactTick || exactPrice;
+    close = sample.quote;
+    rec.resolution_method = exactTick ? 'expiry-tick' : 'expiry-price-sample';
+    rec.exitAt = sample.epoch;
+  } else if (finalCandle && !ambiguousFinal && finalCandleEpoch + RESOLUTION_GRANULARITY === rec.expiresAt) {
+    close = finalCandle.close;
+    rec.resolution_method = 'post-entry-1m-close';
+    rec.exitAt = rec.expiresAt;
   }
+  if (close == null) {
+    rec.resolutionPending = true;
+    rec.resolutionIssue = ambiguousFinal ? 'ambiguous-expiry-candle' : expected.length && rec.gaps.includes(finalCandleEpoch) ? 'missing-expiry-candle' : 'no-expiry-price';
+    return rec;
+  }
+  rec.last = close;
+  rec.state = (close - rec.entry) * rec.dir > 0 ? 'correct' : 'wrong';
+  rec.hit = 'none';
+  rec.resolvedAt = rec.expiresAt;
+  rec.resolutionPending = false;
+  rec.resolutionIssue = null;
   return rec;
 }
 
-/** 0..1 elapsed fraction of the predicted window */
 export function progress(rec, nowSec) {
   return Math.max(0, Math.min(1, (nowSec - rec.openedAt) / (rec.expiresAt - rec.openedAt)));
 }

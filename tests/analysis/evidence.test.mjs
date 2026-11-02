@@ -111,3 +111,12 @@ test('as-of semantics: later candles never alter the evidence of a prefix', () =
   assert.equal(JSON.stringify(analyzeEvidence(mutated.slice(0, k))), JSON.stringify(pre));
   for (const it of pre.items) if (it.index != null) assert.ok(it.index < k);
 });
+
+
+test('evidence and model events carry occurredAt and confirmedAt timestamps', () => {
+  const ltf = walk(33, 240), htf = walk(34, 240);
+  const e = analyzeEvidence(ltf, { granularity: 60, htf: [{ tf: 'H1', g: 3600, candles: htf }] });
+  assert.ok(e.items.length > 0);
+  assert.ok(e.items.every((item) => Number.isFinite(item.occurredAt) && Number.isFinite(item.confirmedAt)));
+  assert.ok(e.facts.modelEvents.every((item) => Number.isFinite(item.occurredAt) && Number.isFinite(item.confirmedAt)));
+});
