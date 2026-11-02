@@ -174,7 +174,10 @@ test('sweep: candidate, then confirmed one bar later; reaction matures; not ever
   assert.equal(cand.index, 13); assert.equal(cand.confirmedIndex, 13);
   assert.equal(conf.index, 13); assert.equal(conf.confirmedIndex, 14);
   assert.ok(conf.confirmedIndex > conf.index, 'confirmation strictly later than the wick');
-  assert.equal(conf.equal, true);
+  assert.deepEqual({ equal: cand.equal, touches: cand.touches, majorLiquidity: cand.majorLiquidity },
+    { equal: true, touches: 2, majorLiquidity: true }, 'classification metadata is frozen from the sweep candle');
+  assert.deepEqual({ equal: conf.equal, touches: conf.touches, majorLiquidity: conf.majorLiquidity },
+    { equal: cand.equal, touches: cand.touches, majorLiquidity: cand.majorLiquidity }, 'confirmation preserves sweep-candle metadata');
   assert.ok(conf.reaction && conf.reaction.atrMove > 0 && conf.reaction.matureIndex === 19);
   assert.equal(r.pools.find(p => p.side === 'buy').status, 'swept');
 });
