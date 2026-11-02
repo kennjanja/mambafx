@@ -194,7 +194,7 @@ function trackedHtml() {
     const why = endRule(r) ? (r.state === 'open' ? (((r.last - r.entry) * r.dir > 0) ? 'currently ' + (r.dir === 1 ? 'above' : 'below') + ' the entry; only the end of the period counts' : 'currently not ' + (r.dir === 1 ? 'above' : 'below') + ' the entry; only the end of the period counts') : r.state === 'correct' ? 'ended ' + (r.dir === 1 ? 'above' : 'below') + ' the entry' : 'ended ' + (r.dir === 1 ? 'at or below' : 'at or above') + ' the entry') + (r.targetHit ? ', target touched (reference only)' : '')
       : r.hit === 'exit' ? 'exited early: ' + esc(r.exitReason || 'opposing reversal')
       : r.hit === 'correct' ? 'target reached first' : r.hit === 'wrong' ? 'invalidation reached first' : (r.state === 'correct' ? 'lapsed, price moved with the signal' : 'lapsed, price moved against the signal');
-    return `<div class="ts-trk ${cls}" data-sym="${esc(r.symbol)}" role="button" tabindex="0" title="Open ${esc(r.label)} in Candle Charts">
+    return `<div class="ts-trk ${cls}" data-sym="${esc(r.symbol)}" data-track="${esc(r.id)}" role="button" tabindex="0" title="Open ${esc(r.label)} in Candle Charts">
       ${mark}<span class="ts-main"><b>${esc(r.label)} · ${esc(r.action)} @ ${fmtPrice(r.entry)} <em class="ts-prof">${esc(r.profileName || 'Intraday')} · hold ${esc(r.holdLabel || '30 min')}</em></b>
       <span class="ts-sub">${r.trigger ? 'trigger: ' + esc(r.trigger) + ' · ' : ''}${r.target != null ? 'target ' + fmtPrice(r.target) : 'no target'} · invalidation ${r.invalidation != null ? fmtPrice(r.invalidation) : '—'} · last ${fmtPrice(r.last)} · ${why} · ${new Date(r.openedAt * 1000).toLocaleTimeString()}</span>
       ${r.state === 'open' ? `<span class="ts-bar"><i data-id="${esc(r.id)}" style="width:${(progress(r, t) * 100).toFixed(1)}%"></i></span>` : ''}</span></div>`;
@@ -259,8 +259,8 @@ export function tsStop() {
 export function tsRescan() { if (running && ws && status !== 'scanning') scan(); else if (!running) tsStart(); }
 
 /** Open Candle Charts on the market with the blue evidence highlight on. */
-export function tsOpen(sym, key) {
-  const trackedRecord = key ? null : tracked.filter((record) => record.symbol === sym).sort((a, b) => b.openedAt - a.openedAt)[0];
+export function tsOpen(sym, key, trackId = null) {
+  const trackedRecord = trackId ? tracked.find((record) => record.id === trackId && record.symbol === sym) : key ? null : tracked.filter((record) => record.symbol === sym).sort((a, b) => b.openedAt - a.openedAt)[0];
   const r = trackedRecord ? { sig: { symbol: sym, label: trackedRecord.label, headline: trackedRecord.headline, profile: trackedRecord.profile,
     entryG: trackedRecord.entryG, evidenceSnapshot: trackedRecord.evidenceSnapshot, entry: trackedRecord.entryEvidence, primaryModel: trackedRecord.primaryModel,
     secondaryModels: trackedRecord.secondaryModels, inducementEvents: trackedRecord.inducementEvents, lifecycleHistory: trackedRecord.lifecycleHistory } }
@@ -274,8 +274,8 @@ export function tsOpen(sym, key) {
 }
 
 document.addEventListener('click', (e) => {
-  const r = e.target.closest && e.target.closest('#tsList .ts-row, #tsList .ts-trk'); if (r) tsOpen(r.dataset.sym, r.dataset.key);
+  const r = e.target.closest && e.target.closest('#tsList .ts-row, #tsList .ts-trk'); if (r) tsOpen(r.dataset.sym, r.dataset.key, r.dataset.track);
   if (e.target && e.target.id === 'tsRescan') tsRescan();
 });
-document.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && (e.target.classList.contains('ts-row') || e.target.classList.contains('ts-trk'))) { e.preventDefault(); tsOpen(e.target.dataset.sym, e.target.dataset.key); } });
+document.addEventListener('keydown', (e) => { if ((e.key === 'Enter' || e.key === ' ') && e.target.classList && (e.target.classList.contains('ts-row') || e.target.classList.contains('ts-trk'))) { e.preventDefault(); tsOpen(e.target.dataset.sym, e.target.dataset.key, e.target.dataset.track); } });
 Object.assign(window, { tsStart, tsStop, tsOpen, tsRescan, __tsResults: results });
