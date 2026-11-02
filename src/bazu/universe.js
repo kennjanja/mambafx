@@ -5,6 +5,8 @@
  * durations that are intersected with what Deriv says is valid.
  */
 
+import { isVolatilityAbove100 } from '../analysis/tradeSignalBot.js';
+
 const UNIT_SEC = { s: 1, m: 60, h: 3600, d: 86400 };
 
 export function parseDur(str) {
@@ -20,8 +22,9 @@ export const EXCLUDE_JUMP_STEP = true;
 const isJumpOrStep = (s) => /^(JD\d|stpRNG|STP)/i.test(s.underlying_symbol || s.symbol || '') || /jump|step/i.test(s.submarket || '') || /^(jump|step)\b/i.test(s.underlying_symbol_name || s.display_name || '');
 export function parseActiveSymbols(list) {
   return (list || [])
-    .filter((s) => s.market === 'synthetic_index' && !s.is_trading_suspended && s.exchange_is_open !== 0 && !isBasket(s) && !(EXCLUDE_JUMP_STEP && isJumpOrStep(s)))
-    .map((s) => ({ symbol: s.underlying_symbol || s.symbol, name: s.underlying_symbol_name || s.display_name || s.underlying_symbol, pip: s.pip_size, submarket: s.submarket }));
+    .filter((s) => s.market === 'synthetic_index' && !s.is_trading_suspended && s.exchange_is_open !== 0 && !isBasket(s) &&     !(EXCLUDE_JUMP_STEP && isJumpOrStep(s)) &&
+          !isVolatilityAbove100(s.underlying_symbol || s.symbol || '', s.underlying_symbol_name || s.display_name || ''))
+        .map((s) => ({ symbol: s.underlying_symbol || s.symbol, name: s.underlying_symbol_name || s.display_name || s.underlying_symbol, pip: s.pip_size, submarket: s.submarket }));
 }
 
 /** Returns null when the symbol offers no Rise/Fall (CALL+PUT callput). */

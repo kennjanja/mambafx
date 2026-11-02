@@ -2,6 +2,7 @@
 // 15-second Rise, on a Sign of Weakness a 15-second Fall, on whichever Deriv account is connected (demo or real).
 // Orders go straight to the app's authenticated trading socket (window.gridWs). Results are Deriv's own.
 import { GRANULARITIES, detectFresh, tfLabel } from './sosSow.js';
+import { isVolatilityAbove100 } from './tradeSignalBot.js';
 
 const KEY = 'mfx_sossow_v1', SET = 'mfx_sossow_set_v1', KEEP = 400, DURATION = 15, FRESH_SEC = 45, REQ_GAP_MS = 130, POLL_MS = 2000;
 const $ = (id) => document.getElementById(id);
@@ -53,7 +54,7 @@ function onSymbols(m) {
   const list = m.active_symbols || []; symMap = {};
   for (const x of list) {
     const s = x.underlying_symbol || x.symbol;
-    if (s && x.market === 'synthetic_index' && !x.is_trading_suspended && x.exchange_is_open !== 0 && !/^(WLD|CRASH|BOOM)?BASKET/i.test(s) && !/basket/i.test(x.submarket || '')) extra.set(s, x.display_name || x.underlying_symbol_name || s);
+    if (s && x.market === 'synthetic_index' && !isVolatilityAbove100(s, x.display_name || x.underlying_symbol_name || '') && !x.is_trading_suspended && x.exchange_is_open !== 0 && !/^(WLD|CRASH|BOOM)?BASKET/i.test(s) && !/basket/i.test(x.submarket || '')) extra.set(s, x.display_name || x.underlying_symbol_name || s);
   }
   for (const k of markets()) {
     let d = null; try { d = typeof _findDiscoveredSymbol === 'function' ? _findDiscoveredSymbol(list, k) : null; } catch (_) {}

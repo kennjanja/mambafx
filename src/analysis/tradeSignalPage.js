@@ -22,7 +22,19 @@ const pendingExpiryTicks = new Map();
 const TRACK_KEY = 'mfx_ts_track_v1', TRACK_MAX = 300;
 let tracked = [];
 try { tracked = deduplicateOpenRecords(JSON.parse(localStorage.getItem(TRACK_KEY) || '[]').filter((r) => r && r.id && r.expiresAt)); } catch (error) { lifecycleLoadError = lifecycleLoadError || error; }
-const saveTracked = () => { try { localStorage.setItem(TRACK_KEY, JSON.stringify(tracked.slice(-TRACK_MAX))); } catch (error) { status = 'storage error: ' + error.message; throw error; } };
+// Browser storage can be full from other data. Resolved records already live in IndexedDB Prediction History,
+// so on quota failure retry with fewer of them, and finally with open records only, instead of failing the scan.
+const saveTracked = () => {
+  const open = tracked.filter((r) => r.state !== 'correct' && r.state !== 'wrong');
+  const attempts = [tracked.slice(-TRACK_MAX), tracked.slice(-60), open.slice(-60), open.slice(-10)];
+  let lastError = null;
+  for (const rows of attempts) {
+    try { localStorage.setItem(TRACK_KEY, JSON.stringify(rows)); return; } catch (error) { lastError = error; }
+  }
+  try { localStorage.removeItem(TRACK_KEY); } catch (_) {}
+  status = 'browser storage full – open signals are tracked in memory only';
+  console.warn('Trade Signal tracking could not be persisted:', lastError && lastError.message);
+};
 const nowSec = () => Math.floor(Date.now() / 1000);
 // Resolved predictions use shared IndexedDB persistence; the legacy browser archive remains untouched until migration verification.
 let archiveError = null;
