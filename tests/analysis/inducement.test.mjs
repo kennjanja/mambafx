@@ -1,6 +1,7 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { classifySweep, detectInducements, INDUCEMENT_MINOR_PIVOT_ORDER, INDUCEMENT_MAX_PIVOT_AGE_BARS, INDUCEMENT_MAX_SWEEP_TO_DISPLACEMENT_BARS } from '../../src/analysis/inducement.js';
+import { evaluateEntryModels } from '../../src/analysis/tradeSignalArchitecture.js';
 
 const bar = (i, overrides = {}) => ({ epoch: 1_700_000_000 + i * 60, open: 100, high: 100.5, low: 99.5, close: 100, ...overrides });
 function fixture({ direction = 1, sweep = 12, displacement = 13, invalidation = null, maxAge = 20, maxDisplacement = 3, breakAt = null, equalMajor = false, sameIndexMajor = false, chochAt = null, omitDisplacement = false } = {}) {
@@ -53,9 +54,44 @@ test('bearish mirror produces a confirmed minor inducement', () => {
 
 test('close-through invalidates an unswept pivot at that candle close', () => {
   const event = only(run({ breakAt: 12 }).events);
-  assert.equal(event.state, 'invalid'); assert.equal(event.invalidationReason, 'minor pivot close-through before sweep');
+  assert.equal(event.state, 'invalid'); assert.equal(event.invalidationReason, 'bullish minor pivot close-through break before sweep');
   assert.equal(event.invalidatedAt, event.sweepConfirmedAt ?? 1_700_000_000 + 12 * 60 + 60);
   assert.equal(event.sweepIndex, null);
+});
+
+test('bearish close-through is directionally identified at its own close and cannot later requalify Model F', () => {
+  const f = fixture({ direction: -1, breakAt: 12, sweep: 14, displacement: 15 });
+  const prefix = detectInducements(f.candles.slice(0, 13), f.options)[0];
+  const full = detectInducements(f.candles, f.options)[0];
+  assert.equal(prefix.state, 'invalid');
+  assert.equal(full.state, 'invalid');
+  assert.equal(full.invalidationReason, 'bearish minor pivot close-through break before sweep');
+  assert.equal(full.invalidatedAt, f.candles[12].epoch + 60);
+  assert.equal(full.sweepIndex, null);
+  const invalidF = { type: 'inducement-confirmed', dir: -1, index: 15, confirmedIndex: 15, level: full.level,
+    state: full.state, classification: 'minor-inducement-liquidity', sequenceEvents: [] };
+  assert.equal(evaluateEntryModels({ events: [invalidF], biasDirection: -1, entryDirection: -1,
+    locations: [{ dir: -1, top: 102, bottom: 100 }], marketContext: 'trend' }).candidates.some((candidate) => candidate.model_id === 'F'), false);
+});
+
+test('bullish close-through invalidates before a later apparent sweep and cannot requalify', () => {
+  const f = fixture({ direction: 1, breakAt: 12, sweep: 14, displacement: 15 });
+  const event = detectInducements(f.candles, f.options)[0];
+  assert.equal(event.state, 'invalid');
+  assert.equal(event.invalidationReason, 'bullish minor pivot close-through break before sweep');
+  assert.equal(event.invalidatedAt, f.candles[12].epoch + 60);
+  assert.equal(event.sweepIndex, null);
+});
+
+test('sweep boundary is strict wick penetration with inclusive reclaim at pivot close', () => {
+  assert.equal(classifySweep(bar(1, { low: 98, close: 99 }), { level: 99, direction: 1, minorPivotConfirmed: true }).classification,
+    'minor-inducement-liquidity');
+  assert.equal(classifySweep(bar(1, { high: 102, close: 101 }), { level: 101, direction: -1, minorPivotConfirmed: true }).classification,
+    'minor-inducement-liquidity');
+  assert.equal(classifySweep(bar(1, { low: 99, close: 99 }), { level: 99, direction: 1, minorPivotConfirmed: true }).classification, 'none');
+  assert.equal(classifySweep(bar(1, { high: 101, close: 101 }), { level: 101, direction: -1, minorPivotConfirmed: true }).classification, 'none');
+  assert.equal(classifySweep(bar(1, { low: 98, close: 98.9 }), { level: 99, direction: 1, minorPivotConfirmed: true }).classification, 'none');
+  assert.equal(classifySweep(bar(1, { high: 102, close: 101.1 }), { level: 101, direction: -1, minorPivotConfirmed: true }).classification, 'none');
 });
 
 test('protected level taken and opposing confirmed CHoCH each invalidate before inducement confirmation', () => {
