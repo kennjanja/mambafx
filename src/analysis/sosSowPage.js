@@ -4,7 +4,7 @@
 import { GRANULARITIES, detectFresh, tfLabel } from './sosSow.js';
 import { isVolatilityAbove100 } from './tradeSignalBot.js';
 
-const KEY = 'mfx_sossow_v1', SET = 'mfx_sossow_set_v1', KEEP = 400, DURATION = 15, FRESH_SEC = 45, REQ_GAP_MS = 60, POLL_MS = 2000;
+const KEY = 'mfx_sossow_v1', SET = 'mfx_sossow_set_v1', KEEP = 400, DURATION = 15, FRESH_SEC = 45, REQ_GAP_MS = 25, POLL_MS = 400;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const nowSec = () => Math.floor(Date.now() / 1000);
@@ -79,7 +79,7 @@ function poll() {
     for (const k of markets()) {
       for (const g of cfg.tfs) {
         const b = Math.floor(t / g) * g, id = k + '|' + g;
-        if (t - b < 1 || t - b > FRESH_SEC - 10 || asked.get(id) === b) continue;
+        if (t - b > FRESH_SEC - 10 || asked.get(id) === b) continue;
         asked.set(id, b); queue.push({ sym: k, g, b });
       }
     }
@@ -89,6 +89,9 @@ function poll() {
   render();
 }
 function onCandles(p, candles) {
+  // The just-closed candle may not be served yet at the exact boundary; ask again at once instead of waiting for the next poll.
+  const lastClosed = candles.filter((c) => c.epoch + p.g <= nowSec()).pop();
+  if (p.b && (!lastClosed || lastClosed.epoch < p.b - p.g) && (p.n || 0) < 6) { setTimeout(() => { queue.unshift({ ...p, n: (p.n || 0) + 1 }); if (!sendTimer) pump(); }, 300); return; }
   const ev = detectFresh(candles, p.g, nowSec(), FRESH_SEC);
   if (!ev) return;
   const key = p.sym + '|' + ev.g + '|' + ev.candleEpoch + '|' + ev.kind;
