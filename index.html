@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -28582,10 +28582,12 @@ function tfAnalysis(g, arr, name, fn){
 // analyzeEvidence output for one timeframe (with the higher timeframes as context), recomputed when the candles
 // change but at most every 2s per chart so live ticks do not re-run the full analysis each time.
 const _tfEvCache = {};
+// A Trade Signal entry timeframe with no chart of its own (3 min, 15 min) is drawn on the largest chart timeframe that divides it, so bar epochs still line up.
+function tfFocusG(focus){ const e = focus && focus.entryG; if (!e) return null; return TIMEFRAMES.map(t => t.g).filter(g => e % g === 0).sort((a, b) => b - a)[0] || null; }
 function tfEvidence(g){
   const arr = tfData[g] || [];
   const focus = window.__tsFocus;
-  if (focus && focus.symbol === SYMBOL && focus.entryG === g && Array.isArray(focus.evidenceSnapshot)){
+  if (focus && focus.symbol === SYMBOL && tfFocusG(focus) === g && Array.isArray(focus.evidenceSnapshot)){
     const items = focus.evidenceSnapshot.map(it => ({ ...it, index: arr.findIndex(c => c.epoch === it.occurredAt) })).filter(it => it.index >= 0);
     return { ...(focus.entryEvidence || {}), sufficient: true, items, verdict: focus.entryEvidence?.verdict || "inconclusive", balance: focus.entryEvidence?.balance ?? 0, snapshot: true };
   }
@@ -28640,7 +28642,7 @@ function tfRenderEvidencePanel(g, on, ev){
     else html = `<div class="tf-ev-h">Evidence · ${esc(ev.verdict)} · balance ${ev.balance.toFixed(2)}</div><ol>`
       + tfEvidenceNumbered(ev).map(({ it, n }) => `<li${n ? "" : ' style="list-style:none;margin-left:-4px"'}>${n ? "" : "• "}${esc(it.label)} <span class="g">[${esc(it.group)}]</span></li>`).join("") + `</ol>`;
       const focus = window.__tsFocus;
-      if (focus && focus.symbol === SYMBOL && focus.entryG === g){
+      if (focus && focus.symbol === SYMBOL && tfFocusG(focus) === g){
         if (focus.primaryModel) html += `<div class="tf-ev-h">Primary model: ${esc(focus.primaryModel.name || focus.primaryModel.model_id)}</div>`;
         if (focus.secondaryModels?.length) html += `<div class="g">Secondary: ${focus.secondaryModels.map(m => esc(m.name || m.model_id)).join(", ")}</div>`;
         if (focus.lifecycleHistory?.length) html += `<div class="g">Lifecycle: ${focus.lifecycleHistory.map(x => esc(x.to) + " @ " + esc(new Date(x.at * 1000).toLocaleTimeString())).join(" | ")}</div>`;
@@ -28935,7 +28937,7 @@ function drawTfCandles(g){
   const evOn = want("pa-evid") && !!window.MFXEngine;
   const evData = evOn ? tfEvidence(g) : null;
   const focus = window.__tsFocus;
-  const focusedEvidence = focus && focus.symbol === SYMBOL && focus.entryG === g;
+  const focusedEvidence = focus && focus.symbol === SYMBOL && tfFocusG(focus) === g;
   const markerEvidence = evData && focusedEvidence ? { ...evData, items: Array.isArray(focus.evidenceSnapshot) ? focus.evidenceSnapshot : [], sufficient: true, dropped: 0,
     verdict: focus.entryEvidence?.verdict || evData.verdict, balance: Number.isFinite(focus.entryEvidence?.balance) ? focus.entryEvidence.balance : evData.balance } : evData;
   if (markerEvidence && markerEvidence.sufficient && markerEvidence.dropped === 0){
@@ -33847,7 +33849,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=32"></script>
-<script type="module" src="src/analysis/tradeSignalPage.js?v=14"></script>
+<script type="module" src="src/analysis/tradeSignalPage.js?v=15"></script>
 <script type="module" src="src/analysis/predictionHistoryPage.js?v=5"></script>
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/analysis/sosSowPage.js?v=3"></script>

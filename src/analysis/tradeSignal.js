@@ -73,6 +73,7 @@ export function buildTradeSignal({ symbol, label = symbol, candles = {}, profile
   base.price = price;
   if (!dir) return { ...base, reason: `${tfs.bias.label} evidence is ${bias.verdict}`, headline: `${label}: no ${tfs.bias.label} lean` };
   base.dir = dir;
+  if (activeInducement && activeInducement.direction !== dir) delete base.waitingCondition;   // an inducement against the bias lean is not what this setup waits for
   const reversal = findReversal(entry, dir, get(tfs.entry));
   base.reversal = reversal;   // informational only; active records never exit early on a reversal
   const word = dir === 1 ? 'BULLISH' : 'BEARISH', action = dir === 1 ? 'BUY' : 'SELL';

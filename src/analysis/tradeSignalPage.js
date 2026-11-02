@@ -18,12 +18,6 @@ try { lifecycleRegistry.load(); } catch (error) { lifecycleLoadError = error; }
 let ws = null, running = false, endpointIdx = 0, symMap = {}, scanTimer = null, marketTimer = null;
 let queue = [], cur = null, scanned = 0, total = 0, lastScanAt = null, reqSeq = 7100, status = lifecycleLoadError ? 'lifecycle storage error' : 'idle';
 const pendingExpiryTicks = new Map();
-for (const record of lifecycleRegistry.list()) {
-  const profile = PROFILE_LIST.find((item) => item.id === record.key?.split('|').slice(-1)[0]);
-  const symbol = record.key?.slice(0, record.key.lastIndexOf('|'));
-  if (!profile || !symbol) continue;
-  results.set(record.key, { sig: { symbol, label: labelOf(symbol), profile: profile.id, profileName: record.profileName || profile.name, holdLabel: record.holdLabel || profile.holdLabel, entryG: record.entryG || profile.tfs.entry.g, dir: record.direction || 0, status: record.state === 'Signal Active' ? 'signal' : ['Watching', 'Approaching Location', 'Trigger Detected'].includes(record.state) ? 'watching' : 'none', action: record.action, headline: record.headline || `${labelOf(symbol)}: ${record.state}`, reason: record.reason || '', waitingCondition: record.waitingCondition || '', nearestLevel: record.nearestLevel, bias: record.bias || { balance: record.overallBalance || 0 }, entry: record.entry || null, overallBalance: record.overallBalance, familyValues: record.familyValues || [], primaryModel: record.primaryModel, secondaryModels: record.secondaryModels || [], inducementEvents: record.inducementEvents || [], evidenceSnapshot: record.evidenceSnapshot || [], target: record.target, invalidation: record.invalidation, lifecycleState: record.state, lifecycleHistory: record.lifecycleHistory || [] }, at: record.updatedAt || Date.now() });
-}
 // Every signal produced is followed until its predicted window lapses, then marked correct (green tick) or wrong (red X).
 const TRACK_KEY = 'mfx_ts_track_v1', TRACK_MAX = 300;
 let tracked = [];
@@ -44,6 +38,13 @@ const pending = new Map();     // req_id -> request type and candle granularity
 const isActive = () => ['page-tradesignal', 'page-beastmode'].some((id) => { const p = $(id); return !!p && p.classList.contains('active'); });
 const markets = () => (typeof MARKETS !== 'undefined' ? Object.keys(MARKETS) : []);
 const labelOf = (s) => (typeof MARKETS !== 'undefined' && MARKETS[s]) || s;
+// restore persisted setups here: labelOf must be initialised first
+for (const record of lifecycleRegistry.list()) {
+  const profile = PROFILE_LIST.find((item) => item.id === record.key?.split('|').slice(-1)[0]);
+  const symbol = record.key?.slice(0, record.key.lastIndexOf('|'));
+  if (!profile || !symbol) continue;
+  results.set(record.key, { sig: { symbol, label: labelOf(symbol), profile: profile.id, profileName: record.profileName || profile.name, holdLabel: record.holdLabel || profile.holdLabel, entryG: record.entryG || profile.tfs.entry.g, dir: record.direction || 0, status: record.state === 'Signal Active' ? 'signal' : ['Watching', 'Approaching Location', 'Trigger Detected'].includes(record.state) ? 'watching' : 'none', action: record.action, headline: record.headline || `${labelOf(symbol)}: ${record.state}`, reason: record.reason || '', waitingCondition: record.waitingCondition || '', nearestLevel: record.nearestLevel, bias: record.bias || { balance: record.overallBalance || 0 }, entry: record.entry || null, overallBalance: record.overallBalance, familyValues: record.familyValues || [], primaryModel: record.primaryModel, secondaryModels: record.secondaryModels || [], inducementEvents: record.inducementEvents || [], evidenceSnapshot: record.evidenceSnapshot || [], target: record.target, invalidation: record.invalidation, lifecycleState: record.state, lifecycleHistory: record.lifecycleHistory || [] }, at: record.updatedAt || Date.now() });
+}
 
 function send(o) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(o)); }
 
