@@ -96,13 +96,19 @@ export function evaluateEntryModels({ events = [], biasDirection = 0, entryDirec
         const scopedEvents = model.model_id === 'A'
           ? activeEvents.filter((event) => event.type !== 'significant-sweep' || (event.context || 'swing') === context)
           : activeEvents;
-        const matched = orderedSequence(scopedEvents, model.sequence, direction);
+        const sequenceEvents = model.sequence.includes('reaction') && Number.isFinite(asOfIndex)
+          ? scopedEvents.filter((event) => event.type !== 'reaction' || event.confirmedIndex >= asOfIndex - 2)
+          : scopedEvents;
+        const matched = orderedSequence(sequenceEvents, model.sequence, direction);
         if (!matched) continue;
         if (model.model_id === 'A' && !matched.some((event) => event.type === 'significant-sweep' && event.classification === 'significant-liquidity' && event.dir === direction && (event.context || 'swing') === context)) continue;
         const locationEvent = ({ A: 'significant-sweep', B: 'ob-retest', C: 'fvg-retest', D: 'breaker-retest', F: 'inducement-confirmed', G: 'broken-level-retest', J: 'lps-or-lpsy' })[model.model_id];
         const relevantLocationLevel = matched.find((event) => event.type === locationEvent)?.level;
         if (!Number.isFinite(relevantLocationLevel) || !alignedLocations.some((location) => Number.isFinite(location.top) && Number.isFinite(location.bottom)
           && relevantLocationLevel <= location.top && relevantLocationLevel >= location.bottom)) continue;
+        const invalidationType = model.model_id === 'B' ? 'ob-break' : model.model_id === 'C' ? 'fvg-invalidated' : null;
+        if (invalidationType && scopedEvents.some((event) => event.type === invalidationType && event.dir === -direction
+          && event.level === relevantLocationLevel && event.confirmedIndex <= asOfIndex)) continue;
         if (model.model_id === 'F') {
           const inducement = matched.find((event) => event.type === 'inducement-confirmed' && event.state === 'confirmed' && event.classification === 'minor-inducement-liquidity');
           const requiredSequence = ['minor-pivot-confirmed', 'minor-inducement-sweep', 'inducement-displacement'];
@@ -161,7 +167,7 @@ export function detectTradingRanges(candles = [], { lookback = 20, maxRangeAtr =
     const window = candles.slice(i - lookback, i);
     const high = Math.max(...window.map((bar) => bar.high)), low = Math.min(...window.map((bar) => bar.low));
     if (high - low > maxRangeAtr * a) continue;
-    active = { high, low, startIndex: i - lookback, confirmedIndex: i - 1, endIndex: null, status: 'active' };
+    active = { high, low, startIndex: i - lookback, confirmedIndex: i, endIndex: null, status: 'active' };
     ranges.push({ ...active });
     events.push({ type: 'range-established', dir: 0, index: active.startIndex, confirmedIndex: active.confirmedIndex, level: high, range: { ...active }, label: 'trading range established' });
     const body = Math.abs(c.close - c.open);

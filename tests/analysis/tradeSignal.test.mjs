@@ -1,6 +1,6 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTradeSignal, buildTradeSignalEvidenceSnapshot, TRADE_SIGNAL_TFS, PROFILE_LIST, PROFILES, ALL_GRANULARITIES } from '../../src/analysis/tradeSignal.js';
+import { buildTradeSignal, buildTradeSignalEvidenceSnapshot, selectClosedCandles, TRADE_SIGNAL_TFS, PROFILE_LIST, PROFILES, ALL_GRANULARITIES } from '../../src/analysis/tradeSignal.js';
 import { analyzeEvidence } from '../../src/analysis/evidence.js';
 
 // Synthetic data only: these tests check the composition rules, not market behaviour.
@@ -97,6 +97,38 @@ test('closed-bar as-of outputs are invariant to truncation, forming candles, and
   }
 });
 
+
+test('each profile excludes and ignores mutable forming bias and HTF context candles until close', () => {
+  const base = Object.fromEntries(ALL_GRANULARITIES.map((g, index) => [g,
+    walk(10_000 + index, 100, g, 0.08).map((c, i) => ({ ...c, epoch: 1_800_000_000 + i * g }))]));
+  for (const profile of PROFILE_LIST) {
+    const relevant = [...new Set([profile.tfs.bias.g, ...profile.tfs.htf.map((tf) => tf.g)])];
+    for (const g of relevant) {
+      const completed = base[g];
+      const forming = { epoch: completed.at(-1).epoch + g, open: 100, high: 1000, low: 1, close: 900 };
+      const nowSec = forming.epoch + 1;
+      const before = selectClosedCandles([...completed, forming], g, nowSec);
+      assert.equal(before.length, completed.length, `${profile.id} ${g}: forming bar excluded`);
+      const changed = { ...forming, open: 900, high: 901, low: 0.1, close: 0.2 };
+      assert.deepEqual(selectClosedCandles([...completed, changed], g, nowSec), before);
+      const candlesA = { ...base, [g]: [...completed, forming] };
+      const candlesB = { ...base, [g]: [...completed, changed] };
+      const changedFormingSignal = buildTradeSignal({ symbol: 'X', candles: candlesB, profile, nowSec });
+      const originalFormingSignal = buildTradeSignal({ symbol: 'X', candles: candlesA, profile, nowSec });
+      assert.deepEqual(changedFormingSignal, originalFormingSignal, `${profile.id} ${g}: forming bar must not change evidence, bias, location or entry`);
+      assert.deepEqual(changedFormingSignal.bias, originalFormingSignal.bias, `${profile.id} ${g}: bias excludes forming bar`);
+      assert.deepEqual(changedFormingSignal.entry, originalFormingSignal.entry, `${profile.id} ${g}: entry evidence excludes forming bar`);
+      assert.deepEqual(changedFormingSignal.layers, originalFormingSignal.layers, `${profile.id} ${g}: location and trigger layers exclude forming bar`);
+      assert.deepEqual(changedFormingSignal.qualifyingModelIds, originalFormingSignal.qualifyingModelIds, `${profile.id} ${g}: model triggers exclude forming bar`);
+      const afterClose = selectClosedCandles([...completed, forming], g, forming.epoch + g);
+      assert.equal(afterClose.length, completed.length + 1, `${profile.id} ${g}: closed bar becomes eligible`);
+      assert.equal(afterClose.at(-1), forming);
+      const closedEvidence = analyzeEvidence([...completed, forming], { granularity: g });
+      assert.ok(closedEvidence.facts.modelEvents.some((event) => event.type === 'displacement' && event.confirmedIndex === completed.length),
+        `${profile.id} ${g}: the large candle is confirmed as evidence only once its timeframe closes`);
+    }
+  }
+});
 
 test('signal snapshots carry event and confirmation timestamps', () => {
   const candles = {};

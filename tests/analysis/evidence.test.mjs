@@ -104,6 +104,16 @@ test('deterministic', () => {
   const c = walk(18, 220);
   assert.equal(JSON.stringify(analyzeEvidence(c)), JSON.stringify(analyzeEvidence(c)));
 });
+test('current location evidence timestamps the current reading rather than an older reference level', () => {
+  const evidence = analyzeEvidence(walk(7, 180), { granularity: 60 });
+  for (const item of evidence.items.filter((candidate) => ['location', 'level'].includes(candidate.group))) {
+    assert.equal(item.index, evidence.candles.length - 1);
+    assert.equal(item.confirmedIndex, evidence.candles.length - 1);
+    assert.equal(item.occurredAt, evidence.candles.at(-1).epoch);
+    assert.equal(item.confirmedAt, evidence.candles.at(-1).epoch + 60);
+  }
+});
+
 test('as-of semantics: later candles never alter the evidence of a prefix', () => {
   const data = walk(19, 300, 0.1);
   const k = 200, pre = analyzeEvidence(data.slice(0, k));
@@ -119,4 +129,55 @@ test('evidence and model events carry occurredAt and confirmedAt timestamps', ()
   assert.ok(e.items.length > 0);
   assert.ok(e.items.every((item) => Number.isFinite(item.occurredAt) && Number.isFinite(item.confirmedAt)));
   assert.ok(e.facts.modelEvents.every((item) => Number.isFinite(item.occurredAt) && Number.isFinite(item.confirmedAt)));
+});
+
+
+test('closed FVG creation and retest events remain historical after later fill or invalidation', () => {
+  const candles = walk(67, 180, 60, 0.1);
+  const prefix = analyzeEvidence(candles.slice(0, 60), { granularity: 60 });
+  const full = analyzeEvidence(candles, { granularity: 60 });
+  const project = (evidence) => evidence.facts.modelEvents.filter((event) => ['fvg-created', 'fvg-retest'].includes(event.type)
+    && event.confirmedIndex < 60).map(({ type, dir, index, confirmedIndex, level }) => ({ type, dir, index, confirmedIndex, level }));
+  assert.deepEqual(project(full), project(prefix), 'later zone lifecycle must not erase already-confirmed FVG facts');
+});
+
+
+test('breaker retest evidence is timestamped at the actual first mitigation, never its creation', () => {
+  const evidence = analyzeEvidence(walk(4, 180), { granularity: 60 });
+  const retests = evidence.facts.modelEvents.filter((event) => event.type === 'breaker-retest');
+  assert.ok(retests.length > 0);
+  for (const event of retests) {
+    assert.ok(event.confirmedIndex > 0);
+    assert.equal(event.index, event.confirmedIndex);
+    assert.equal(event.occurredAt, evidence.candles[event.index].epoch);
+    assert.equal(event.confirmedAt, evidence.candles[event.confirmedIndex].epoch + 60);
+  }
+});
+
+
+test('all evidence items and model event types retain source-bar and closed-bar timestamps', () => {
+  const candles = walk(4, 180);
+  const higher = walk(77, 120, 0.12).map((bar, index) => ({ ...bar, epoch: 1_700_000_000 + index * 3600 }));
+  const evidence = analyzeEvidence(candles, { granularity: 60, htf: [{ tf: '1 hour', g: 3600, candles: higher }] });
+  const itemTypes = new Map();
+  for (const item of evidence.items) {
+    const source = item.tf === '1 hour' ? higher : candles;
+    const granularity = item.tf === '1 hour' ? 3600 : 60;
+    const eventIndex = Number.isInteger(item.index) ? item.index : source.length - 1;
+    const confirmationIndex = Number.isInteger(item.confirmedIndex) ? item.confirmedIndex : eventIndex;
+    assert.equal(item.occurredAt, source[eventIndex]?.epoch, `${item.group}/${item.label} occurredAt is source-bar time`);
+    assert.equal(item.confirmedAt, source[confirmationIndex]?.epoch + granularity, `${item.group}/${item.label} confirmedAt is source-bar close`);
+    const key = `${item.group}/${item.label}`;
+    itemTypes.set(key, (itemTypes.get(key) || 0) + 1);
+  }
+  assert.ok([...itemTypes.keys()].some((key) => key.startsWith('htf/')), 'higher-timeframe evidence is included');
+  const modelTypes = new Map();
+  for (const event of evidence.facts.modelEvents) {
+    assert.ok(Number.isInteger(event.index) && Number.isInteger(event.confirmedIndex), `${event.type} has event indices`);
+    assert.equal(event.occurredAt, candles[event.index]?.epoch, `${event.type} occurredAt maps to the event bar`);
+    assert.equal(event.confirmedAt, candles[event.confirmedIndex]?.epoch + 60, `${event.type} confirmedAt maps to the event bar close`);
+    assert.ok(event.confirmedIndex <= candles.length - 1, `${event.type} is not usable before confirmation`);
+    modelTypes.set(event.type, (modelTypes.get(event.type) || 0) + 1);
+  }
+  assert.ok(modelTypes.has('breaker-retest'), 'fixture exercises actual breaker mitigation');
 });

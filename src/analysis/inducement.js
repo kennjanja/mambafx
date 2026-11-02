@@ -86,7 +86,11 @@ export function detectInducements(candles = [], { granularity = 60, structure = 
         if (event.state === 'formed' && age > maxPivotAgeBars) { invalidate(event, candles, i, granularity, 'maximum pivot age exceeded'); break; }
         if (event.state === 'formed') {
           const closeThrough = dir === 1 ? candle.close < pivot.price : candle.close > pivot.price;
-          if (closeThrough) { invalidate(event, candles, i, granularity, 'minor pivot close-through before sweep'); break; }
+          if (closeThrough) {
+            const side = dir === 1 ? 'bullish minor pivot' : 'bearish minor pivot';
+            invalidate(event, candles, i, granularity, `${side} close-through break before sweep`);
+            break;
+          }
           const classification = classifySweep(candle, { level: pivot.price, direction: dir, protectedLevel: protectedPivot.price, minorPivotConfirmed: true });
           if (classification.classification === 'significant-liquidity') { invalidate(event, candles, i, granularity, 'protected structural liquidity taken'); break; }
           if (classification.classification === 'minor-inducement-liquidity') {

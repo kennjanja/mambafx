@@ -124,7 +124,7 @@ function resolve(candles, pat, startIdx, trigger, invalid, P) {
       if (pat.dir === 1 ? c.close < v : c.close > v) { pat.status = 'failed'; pat.failIndex = i; pat.history.push({ status: 'failed', index: i }); break; }
     }
   }
-  pat.confirmedIndex = pat.formedIndex;
+  pat.confirmedIndex = pat.breakIndex ?? pat.history.at(-1)?.index ?? pat.formedIndex;
   return pat;
 }
 
@@ -228,9 +228,9 @@ export function chartPatterns(candles, atr, opts = {}) {
             seen.add(key); pat.id = key;
             for (let i = f + 1; i < candles.length; i++) {
               const cl = candles[i].close;
-              if (cl > upper(i)) { pat.status = 'confirmed'; pat.dir = 1; pat.breakIndex = i; pat.history.push({ status: 'confirmed', index: i }); break; }
-              if (cl < lower(i)) { pat.status = 'confirmed'; pat.dir = -1; pat.breakIndex = i; pat.history.push({ status: 'confirmed', index: i }); break; }
-              if (i - f > P.patternMaxAge) { pat.status = 'expired'; pat.history.push({ status: 'expired', index: i }); break; }
+              if (cl > upper(i)) { pat.status = 'confirmed'; pat.dir = 1; pat.breakIndex = i; pat.confirmedIndex = i; pat.history.push({ status: 'confirmed', index: i }); break; }
+              if (cl < lower(i)) { pat.status = 'confirmed'; pat.dir = -1; pat.breakIndex = i; pat.confirmedIndex = i; pat.history.push({ status: 'confirmed', index: i }); break; }
+              if (i - f > P.patternMaxAge) { pat.status = 'expired'; pat.confirmedIndex = i; pat.history.push({ status: 'expired', index: i }); break; }
             }
             out.push(pat);
           }

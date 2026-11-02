@@ -69,7 +69,7 @@ export function analyzeEvidence(input, opts = {}) {
   for (const e of [...sw, ...inn]) if (recent(e.index)) breaks.push({ dir: e.dir, w: e.type === 'CHoCH' ? 1 : 0.8, label: `${e.type}${e.mss ? '/MSS' : ''}`, index: e.index, confirmedIndex: e.confirmedIndex ?? e.index });
   for (const d of base.displacement) if (recent(d.index)) breaks.push({ dir: d.dir, w: 0.7, label: `displacement ${d.strength.toFixed(1)}×ATR`, index: d.index });
   for (const e of pat.wyckoff) if ((e.kind === 'SOS' || e.kind === 'SOW') && recent(e.index)) breaks.push({ dir: e.dir, w: 0.6, label: e.kind, index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, family: 'wyckoff' });
-  for (const p of pat.chart) if (p.status === 'confirmed' && p.breakIndex != null && recent(p.breakIndex)) breaks.push({ dir: p.dir, w: 0.6, label: `${p.kind} break`, index: p.breakIndex, confirmedIndex: p.confirmedIndex ?? p.breakIndex });
+  for (const p of pat.chart) if (p.status === 'confirmed' && p.breakIndex != null && recent(p.breakIndex)) breaks.push({ dir: p.dir, w: 0.6, label: `${p.kind} break`, index: p.breakIndex, confirmedIndex: p.breakIndex });
   for (const b of breaks) add('break', b.dir, O.weights.break * b.w, b.label, { index: b.index, confirmedIndex: b.confirmedIndex, family: b.family, kind: 'fact' });
 
   // --- liquidity: confirmed sweeps, springs/upthrusts (same group: both describe a stop run + reversal)
@@ -85,7 +85,7 @@ export function analyzeEvidence(input, opts = {}) {
 
   // --- location: premium/discount (mean-reversion flavoured, deliberately weak)
   const pd = lv.premiumDiscount;
-  if (pd) add('location', pd.zone === 'premium' ? -1 : pd.zone === 'discount' ? 1 : 0, O.weights.location, `price in ${pd.zone} of the latest swing range (${(pd.position * 100).toFixed(0)}%)`, { top: pd.top, bottom: pd.bottom, confirmedIndex: pd.confirmedIndex });
+  if (pd) add('location', pd.zone === 'premium' ? -1 : pd.zone === 'discount' ? 1 : 0, O.weights.location, `price in ${pd.zone} of the latest swing range (${(pd.position * 100).toFixed(0)}%)`, { index: last, confirmedIndex: last, rangeConfirmedIndex: pd.confirmedIndex, top: pd.top, bottom: pd.bottom });
   else missing.push('premium-discount');
 
   // --- live zones near price: demand-like below/at price support, supply-like above/at price oppose
@@ -113,7 +113,7 @@ export function analyzeEvidence(input, opts = {}) {
   // --- level reaction: price just beyond a strong S/R zone with role flip
   if (a != null) {
     const srNear = lv.sr.filter((z) => z.status === 'active' && Math.abs(price - z.level) <= O.nearAtr * a).sort((x, y) => y.score - x.score)[0];
-    if (srNear) add('level', srNear.role === 'support' ? 1 : -1, O.weights.level, `at ${srNear.role} (×${srNear.touches}${srNear.flips ? ', flipped' : ''})`, { index: srNear.createdIndex, confirmedIndex: srNear.confirmedIndex ?? srNear.createdIndex, price: srNear.level, top: srNear.level, bottom: srNear.level, kind: 'fact' });
+    if (srNear) add('level', srNear.role === 'support' ? 1 : -1, O.weights.level, `at ${srNear.role} (×${srNear.touches}${srNear.flips ? ', flipped' : ''})`, { index: last, confirmedIndex: last, levelCreatedIndex: srNear.createdIndex, levelConfirmedIndex: srNear.confirmedIndex ?? srNear.createdIndex, price: srNear.level, top: srNear.level, bottom: srNear.level, kind: 'fact' });
   }
 
   // --- trend: EMA alignment (one item)
@@ -188,7 +188,7 @@ export function analyzeEvidence(input, opts = {}) {
   }
   for (const z of zonesRes.zones) {
     if (z.kind === 'OB' && z.confirmedIndex != null) modelEvents.push({ type: 'ob-confirmed-for-breaker', dir: -z.dir, index: z.createdIndex, confirmedIndex: z.confirmedIndex, level: z.bottom, label: 'valid order block before breaker' });
-    if (z.kind === 'OB' && z.confirmedIndex != null && !['invalidated', 'expired', 'candidate'].includes(z.status)) {
+    if (z.kind === 'OB' && z.confirmedIndex != null) {
       modelEvents.push({ type: 'ob-confirmed', dir: z.dir, index: z.createdIndex, confirmedIndex: z.confirmedIndex, level: z.bottom, label: 'valid order block' });
       if (z.firstMitigationIndex != null) modelEvents.push({ type: 'ob-retest', dir: z.dir, index: z.firstMitigationIndex, confirmedIndex: z.firstMitigationIndex, level: z.bottom, label: 'order block retest' });
     }
@@ -196,12 +196,14 @@ export function analyzeEvidence(input, opts = {}) {
       const broken = (z.history || []).find((h) => h.status === 'invalidated');
       if (broken) modelEvents.push({ type: 'ob-break', dir: -z.dir, index: broken.index, confirmedIndex: broken.index, level: z.bottom, label: 'order block failed' });
     }
-    if (z.kind === 'BREAKER' && z.confirmedIndex != null) {
-      modelEvents.push({ type: 'breaker-retest', dir: z.dir, index: z.firstMitigationIndex ?? z.confirmedIndex, confirmedIndex: z.firstMitigationIndex ?? z.confirmedIndex, level: z.bottom, label: 'breaker retest' });
+    if (z.kind === 'BREAKER' && z.confirmedIndex != null && z.firstMitigationIndex != null) {
+      modelEvents.push({ type: 'breaker-retest', dir: z.dir, index: z.firstMitigationIndex, confirmedIndex: z.firstMitigationIndex, level: z.bottom, label: 'breaker retest' });
     }
-    if (z.kind === 'FVG' && z.confirmedIndex != null && !['invalidated', 'expired', 'filled'].includes(z.status)) {
+    if (z.kind === 'FVG' && z.confirmedIndex != null) {
       modelEvents.push({ type: 'fvg-created', dir: z.dir, index: z.createdIndex, confirmedIndex: z.confirmedIndex, level: z.bottom, label: 'FVG created' });
       if (z.firstMitigationIndex != null) modelEvents.push({ type: 'fvg-retest', dir: z.dir, index: z.firstMitigationIndex, confirmedIndex: z.firstMitigationIndex, level: z.bottom, label: 'FVG retest' });
+      const invalidation = z.history.find((state) => ['invalidated', 'inverted'].includes(state.status));
+      if (invalidation) modelEvents.push({ type: 'fvg-invalidated', dir: -z.dir, index: invalidation.index, confirmedIndex: invalidation.index, level: z.bottom, label: 'FVG invalidated' });
     }
   }
   for (const e of pat.wyckoff) {
@@ -217,7 +219,7 @@ export function analyzeEvidence(input, opts = {}) {
     if (e.type === 'LPS' || e.type === 'LPSY') modelEvents.push({ type: 'lps-or-lpsy', dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex, level: e.level, label: e.type });
     if (e.type === 'SOS' || e.type === 'SOW') modelEvents.push({ type: 'sos-or-sow', dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex, level: e.level, label: e.type });
   }
-  for (const it of items) if (it.group === 'candle' && Number.isInteger(it.index)) modelEvents.push({ type: 'reaction', dir: it.dir, index: it.index, confirmedIndex: it.confirmedIndex ?? it.index, label: it.label });
+  for (const reaction of pat.candle) if (reaction.dir !== 0) modelEvents.push({ type: 'reaction', dir: reaction.dir, index: reaction.index, confirmedIndex: reaction.confirmedIndex ?? reaction.index, label: reaction.label || reaction.kind });
   modelEvents.sort((x, y) => x.confirmedIndex - y.confirmedIndex || x.type.localeCompare(y.type));
   const timedModelEvents = modelEvents.map((event) => ({ ...event, occurredAt: candles[event.index]?.epoch ?? null, confirmedAt: candles[event.confirmedIndex]?.epoch == null ? null : candles[event.confirmedIndex].epoch + (opts.granularity || 0) }));
 

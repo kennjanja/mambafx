@@ -50,6 +50,7 @@ test('double top detected, confirmed on neckline close', () => {
   assert.equal(pats[0].dir, -1);
   assert.ok(['confirmed', 'failed'].includes(pats[0].status));
   assert.ok(pats[0].breakIndex > pats[0].formedIndex);
+  assert.equal(pats[0].confirmedIndex, pats[0].breakIndex, 'a confirmed pattern becomes usable at the breakout close');
 });
 test('spring / upthrust', () => {
   const c = walk(3, 60);
