@@ -4,7 +4,7 @@
 import { GRANULARITIES, detectFresh, tfLabel } from './sosSow.js';
 import { isVolatilityAbove100 } from './tradeSignalBot.js';
 
-const KEY = 'mfx_sossow_v1', SET = 'mfx_sossow_set_v1', KEEP = 400, DURATION = 15, FRESH_SEC = 45, REQ_GAP_MS = 130, POLL_MS = 2000;
+const KEY = 'mfx_sossow_v1', SET = 'mfx_sossow_set_v1', KEEP = 400, DURATION = 15, FRESH_SEC = 45, REQ_GAP_MS = 60, POLL_MS = 2000;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const nowSec = () => Math.floor(Date.now() / 1000);
@@ -63,7 +63,7 @@ function onSymbols(m) {
 }
 function pump() {
   clearTimeout(sendTimer);
-  const j = queue.shift(); if (!j) return;
+  const j = queue.shift(); if (!j) { sendTimer = null; return; }
   if (nowSec() - j.b <= FRESH_SEC - 5 && ws && ws.readyState === WebSocket.OPEN) {   // skip jobs that went stale in the queue
     const id = ++reqSeq; pending.set(id, j);
     send({ ticks_history: symMap[j.sym] || j.sym, end: 'latest', count: 45, style: 'candles', granularity: j.g, req_id: id });
@@ -138,7 +138,9 @@ async function trade(r) {
     const prop = await call({ proposal: 1, amount: cfg.stake, basis: 'stake', contract_type: r.contractType, currency: a.ccy, duration: DURATION, duration_unit: 's', underlying_symbol: sym });
     if (!prop || !prop.id) throw new Error('no proposal id from Deriv');
     const buy = await call({ buy: prop.id, price: prop.ask_price });
-    r.contractId = String(buy.buy.contract_id); r.buyPrice = buy.buy.buy_price; r.payout = buy.buy.payout; r.boughtAt = Date.now(); r.state = 'open';
+    const bought = (buy && buy.buy) || buy;   // the host socket hands back the buy object itself
+    if (!bought || bought.contract_id == null) throw new Error('Deriv returned no contract id');
+    r.contractId = String(bought.contract_id); r.buyPrice = bought.buy_price; r.payout = bought.payout; r.boughtAt = Date.now(); r.state = 'open';
     if (window.gridWs && window.gridWs.readyState === 1) window.gridWs.send(JSON.stringify({ proposal_open_contract: 1, contract_id: Number(r.contractId), subscribe: 1 }));
   } catch (e) { r.state = 'failed'; r.reason = e.message; }
   save(); render();
