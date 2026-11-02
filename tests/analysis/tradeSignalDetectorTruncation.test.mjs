@@ -98,7 +98,7 @@ function checkSeries(candles, context, isStructured = false, seed = null) {
   }
   if (context.startsWith('inducement-seed=') && detectInducements(candles, { structure: analyze(candles) }).length) inducementCount.detectedSeeds++;
   const fullInducements = detectInducements(candles, { structure: analyze(candles) });
-  for (let cut = 60; cut < candles.length; cut++) {
+  for (let cut = 1; cut < candles.length; cut++) {
     const prefix = outputs(candles.slice(0, cut));
     for (const label of labels) {
       const comparable = (items) => label === 'pattern events'
