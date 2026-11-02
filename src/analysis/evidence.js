@@ -188,7 +188,7 @@ export function analyzeEvidence(input, opts = {}) {
   }
   for (const z of zonesRes.zones) {
     if (z.kind === 'OB' && z.confirmedIndex != null) modelEvents.push({ type: 'ob-confirmed-for-breaker', dir: -z.dir, index: z.createdIndex, confirmedIndex: z.confirmedIndex, level: z.bottom, label: 'valid order block before breaker' });
-    if (z.kind === 'OB' && z.confirmedIndex != null && !['invalidated', 'expired', 'candidate'].includes(z.status)) {
+    if (z.kind === 'OB' && z.confirmedIndex != null) {
       modelEvents.push({ type: 'ob-confirmed', dir: z.dir, index: z.createdIndex, confirmedIndex: z.confirmedIndex, level: z.bottom, label: 'valid order block' });
       if (z.firstMitigationIndex != null) modelEvents.push({ type: 'ob-retest', dir: z.dir, index: z.firstMitigationIndex, confirmedIndex: z.firstMitigationIndex, level: z.bottom, label: 'order block retest' });
     }
@@ -196,12 +196,14 @@ export function analyzeEvidence(input, opts = {}) {
       const broken = (z.history || []).find((h) => h.status === 'invalidated');
       if (broken) modelEvents.push({ type: 'ob-break', dir: -z.dir, index: broken.index, confirmedIndex: broken.index, level: z.bottom, label: 'order block failed' });
     }
-    if (z.kind === 'BREAKER' && z.confirmedIndex != null) {
-      modelEvents.push({ type: 'breaker-retest', dir: z.dir, index: z.firstMitigationIndex ?? z.confirmedIndex, confirmedIndex: z.firstMitigationIndex ?? z.confirmedIndex, level: z.bottom, label: 'breaker retest' });
+    if (z.kind === 'BREAKER' && z.confirmedIndex != null && z.firstMitigationIndex != null) {
+      modelEvents.push({ type: 'breaker-retest', dir: z.dir, index: z.firstMitigationIndex, confirmedIndex: z.firstMitigationIndex, level: z.bottom, label: 'breaker retest' });
     }
-    if (z.kind === 'FVG' && z.confirmedIndex != null && !['invalidated', 'expired', 'filled'].includes(z.status)) {
+    if (z.kind === 'FVG' && z.confirmedIndex != null) {
       modelEvents.push({ type: 'fvg-created', dir: z.dir, index: z.createdIndex, confirmedIndex: z.confirmedIndex, level: z.bottom, label: 'FVG created' });
       if (z.firstMitigationIndex != null) modelEvents.push({ type: 'fvg-retest', dir: z.dir, index: z.firstMitigationIndex, confirmedIndex: z.firstMitigationIndex, level: z.bottom, label: 'FVG retest' });
+      const invalidation = z.history.find((state) => ['invalidated', 'inverted'].includes(state.status));
+      if (invalidation) modelEvents.push({ type: 'fvg-invalidated', dir: -z.dir, index: invalidation.index, confirmedIndex: invalidation.index, level: z.bottom, label: 'FVG invalidated' });
     }
   }
   for (const e of pat.wyckoff) {
@@ -217,7 +219,7 @@ export function analyzeEvidence(input, opts = {}) {
     if (e.type === 'LPS' || e.type === 'LPSY') modelEvents.push({ type: 'lps-or-lpsy', dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex, level: e.level, label: e.type });
     if (e.type === 'SOS' || e.type === 'SOW') modelEvents.push({ type: 'sos-or-sow', dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex, level: e.level, label: e.type });
   }
-  for (const it of items) if (it.group === 'candle' && Number.isInteger(it.index)) modelEvents.push({ type: 'reaction', dir: it.dir, index: it.index, confirmedIndex: it.confirmedIndex ?? it.index, label: it.label });
+  for (const reaction of pat.candle) if (reaction.dir !== 0) modelEvents.push({ type: 'reaction', dir: reaction.dir, index: reaction.index, confirmedIndex: reaction.confirmedIndex ?? reaction.index, label: reaction.label || reaction.kind });
   modelEvents.sort((x, y) => x.confirmedIndex - y.confirmedIndex || x.type.localeCompare(y.type));
   const timedModelEvents = modelEvents.map((event) => ({ ...event, occurredAt: candles[event.index]?.epoch ?? null, confirmedAt: candles[event.confirmedIndex]?.epoch == null ? null : candles[event.confirmedIndex].epoch + (opts.granularity || 0) }));
 
