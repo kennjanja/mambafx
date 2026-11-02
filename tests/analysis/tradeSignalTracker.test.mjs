@@ -1,4 +1,4 @@
-import test from 'node:test';
+﻿import test from 'node:test';
 import assert from 'node:assert/strict';
 import { openTracked, updateTracked, progress, summarize, deduplicateOpenRecords, HORIZON_SEC } from '../../src/analysis/tradeSignalTracker.js';
 
@@ -100,4 +100,43 @@ test('open outcome records keep their entry evidence, model and references froze
   assert.deepEqual(record.entryEvidence, { verdict: 'bullish-lean', balance: 0.4 });
   assert.deepEqual(record.primaryModel, model);
   assert.equal(record.target, 102); assert.equal(record.invalidation, 99);
+});
+
+
+test('complete qualification snapshot and finalized outcome survive mutation, reload and repeated resolution', () => {
+  const source = sig(1, {
+    confirmedAt: T0 - 30, detectedAt: T0 - 10,
+    primaryModel: { model_id: 'F', context: 'trend', sequence: [{ type: 'sweep', confirmedAt: T0 - 30 }] },
+    secondaryModels: [{ model_id: 'G' }], qualifyingModelIds: ['F', 'G'],
+    entry: { verdict: 'bullish-lean', balance: 0.55, families: [{ family: 'liquidity', value: 0.7 }] },
+    evidenceSnapshot: [{ group: 'liquidity', occurredAt: T0 - 60, confirmedAt: T0 - 30, label: 'sweep' }],
+    familyValues: [{ family: 'liquidity', value: 0.7 }], overallBalance: 0.55,
+    inducementEvents: [{ state: 'confirmed', sweepIndex: 9 }],
+    lifecycleHistory: [{ to: 'Signal Active', at: T0 - 1 }],
+  });
+  const record = openTracked(source, T0);
+  const entryFields = ['confirmedAt', 'detectedAt', 'entryAt', 'entry', 'dir', 'model_id', 'model_context', 'primaryModel',
+    'secondaryModels', 'qualifyingModelIds', 'entryEvidence', 'evidenceSnapshot', 'familyValues', 'overallBalance',
+    'target', 'invalidation', 'inducementEvents', 'lifecycleHistory'];
+  const frozen = Object.fromEntries(entryFields.map((key) => [key, JSON.parse(JSON.stringify(record[key]))]));
+  assert.equal(record.state, 'open');
+  assert.equal(record.exitAt, undefined);
+  source.primaryModel.sequence[0].confirmedAt = -1;
+  source.entry.families[0].value = -1;
+  source.evidenceSnapshot[0].label = 'mutated';
+  source.inducementEvents[0].state = 'invalid';
+  updateTracked(record, { candles: minuteSeries(T0, record.expiresAt, 101), nowSec: T0 + 60 });
+  assert.deepEqual(Object.fromEntries(entryFields.map((key) => [key, record[key]])), frozen);
+  assert.equal(record.state, 'open');
+  assert.equal(record.exitAt, undefined);
+
+  updateTracked(record, { price: 101, nowSec: record.expiresAt });
+  assert.equal(record.state, 'correct');
+  assert.equal(record.last, 101);
+  assert.equal(record.exitAt, record.expiresAt);
+  const resolvedOutcome = { state: record.state, last: record.last, exitAt: record.exitAt, resolvedAt: record.resolvedAt };
+  const reloaded = JSON.parse(JSON.stringify(record));
+  updateTracked(reloaded, { price: 1, nowSec: reloaded.expiresAt + 120 });
+  assert.deepEqual({ state: reloaded.state, last: reloaded.last, exitAt: reloaded.exitAt, resolvedAt: reloaded.resolvedAt }, resolvedOutcome);
+  assert.deepEqual(Object.fromEntries(entryFields.map((key) => [key, reloaded[key]])), frozen);
 });

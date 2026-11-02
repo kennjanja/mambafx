@@ -1,4 +1,4 @@
-// Trade-signal composer: turns the evidence engine's reading of a higher "bias" timeframe and a lower "entry"
+﻿// Trade-signal composer: turns the evidence engine's reading of a higher "bias" timeframe and a lower "entry"
 // timeframe into one descriptive setup per market. Pure and deterministic.
 //
 //   bias  (30 min): must report a bullish/bearish lean, with 1 hour + 4 hour as higher-timeframe context
@@ -53,11 +53,14 @@ function pickTarget(dir, price, evidences) {
 }
 
 /** candles: { [granularity]: candle[] } -> setup description for one market. */
+export function selectClosedCandles(series = [], granularity, nowSec = null) {
+  return Number.isFinite(nowSec)
+    ? series.filter((c) => Number.isFinite(c.epoch) && c.epoch + granularity <= nowSec)
+    : series;
+}
+
 export function buildTradeSignal({ symbol, label = symbol, candles = {}, profile = PROFILES.intraday, tfs = profile.tfs, nowSec = null }) {
-  const get = (t) => {
-    const series = candles[t.g] || [];
-    return Number.isFinite(nowSec) ? series.filter((c) => Number.isFinite(c.epoch) && c.epoch + t.g <= nowSec) : series;
-  };
+  const get = (t) => selectClosedCandles(candles[t.g] || [], t.g, nowSec);
   const htf = tfs.htf.map((h) => ({ tf: h.label, g: h.g, candles: get(h) })).filter((h) => h.candles.length >= 60);
   const bias = analyzeEvidence(get(tfs.bias), { htf, granularity: tfs.bias.g });
   const entry = analyzeEvidence(get(tfs.entry), { htf: [{ tf: tfs.bias.label, g: tfs.bias.g, candles: get(tfs.bias) }, ...htf].filter((h) => h.candles.length >= 60), granularity: tfs.entry.g });

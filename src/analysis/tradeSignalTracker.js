@@ -1,9 +1,13 @@
-// Trade Signal outcome tracking. Outcomes are decided only at the predicted period end.
+﻿// Trade Signal outcome tracking. Outcomes are decided only at the predicted period end.
 // Targets are informational; no stop, target, or opposing reversal ends a record early.
 
 export const HORIZON_SEC = 1800;
 export const RESOLUTION_GRANULARITY = 60;
 export const ENTRY_GRANULARITY = 300;
+
+function copySnapshot(value) {
+  return value == null ? value : JSON.parse(JSON.stringify(value));
+}
 
 export function openTracked(sig, nowSec) {
   if (!sig || sig.status !== 'signal' || !(sig.dir === 1 || sig.dir === -1) || !(sig.price > 0)) return null;
@@ -13,9 +17,9 @@ export function openTracked(sig, nowSec) {
     profile: sig.profile || 'intraday', profileName: sig.profileName || 'Intraday', holdLabel: sig.holdLabel || '30 min', entryG: sig.entryG || ENTRY_GRANULARITY,
     trigger: sig.trigger ? sig.trigger.label : null, exitOn: sig.exitOn || null,
     model_id: sig.model_id ?? sig.primaryModel?.model_id ?? null, model_context: sig.model_context ?? sig.primaryModel?.context ?? null,
-    primaryModel: sig.primaryModel || null, secondaryModels: sig.secondaryModels || [], qualifyingModelIds: sig.qualifyingModelIds || [], inducementEvents: sig.inducementEvents || [],
-    entryEvidence: sig.entry || null, evidenceSnapshot: sig.evidenceSnapshot || [], familyValues: sig.familyValues || null, overallBalance: sig.overallBalance ?? null,
-    lifecycleState: sig.lifecycleState || null, lifecycleHistory: sig.lifecycleHistory || [],
+    primaryModel: copySnapshot(sig.primaryModel || null), secondaryModels: copySnapshot(sig.secondaryModels || []), qualifyingModelIds: copySnapshot(sig.qualifyingModelIds || []), inducementEvents: copySnapshot(sig.inducementEvents || []),
+    entryEvidence: copySnapshot(sig.entry || null), evidenceSnapshot: copySnapshot(sig.evidenceSnapshot || []), familyValues: copySnapshot(sig.familyValues || null), overallBalance: sig.overallBalance ?? null,
+    lifecycleState: sig.lifecycleState || null, lifecycleHistory: copySnapshot(sig.lifecycleHistory || []),
     symbol: sig.symbol, label: sig.label, dir: sig.dir, action: sig.action, headline: sig.headline,
     entry: sig.price, confirmedAt: sig.confirmedAt ?? null, detectedAt: sig.detectedAt ?? nowSec, entryAt: nowSec,
     target: sig.target && sig.target.price != null ? sig.target.price : null,

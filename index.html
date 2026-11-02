@@ -28584,13 +28584,13 @@ function tfAnalysis(g, arr, name, fn){
 // analyzeEvidence output for one timeframe (with the higher timeframes as context), recomputed when the candles
 // change but at most every 2s per chart so live ticks do not re-run the full analysis each time.
 const _tfEvCache = {};
-// A Trade Signal entry timeframe with no chart of its own (3 min, 15 min) is drawn on the largest chart timeframe that divides it, so bar epochs still line up.
-function tfFocusG(focus){ const e = focus && focus.entryG; if (!e) return null; return TIMEFRAMES.map(t => t.g).filter(g => e % g === 0).sort((a, b) => b - a)[0] || null; }
+// Prefer the entry timeframe chart; when unavailable, use the largest displayed divisor so event epochs align.
+function tfFocusG(focus){ const e = focus && focus.entryG; if (!e) return null; return window.MFXTradeSignalMarkers?.selectFocusGranularity(e, TIMEFRAMES.map(t => t.g)) || TIMEFRAMES.map(t => t.g).filter(g => e % g === 0).sort((a, b) => b - a)[0] || null; }
 function tfEvidence(g){
   const arr = tfData[g] || [];
   const focus = window.__tsFocus;
   if (focus && focus.symbol === SYMBOL && tfFocusG(focus) === g && Array.isArray(focus.evidenceSnapshot)){
-    const items = focus.evidenceSnapshot.map(it => ({ ...it, index: arr.findIndex(c => c.epoch === it.occurredAt) })).filter(it => it.index >= 0);
+    const items = window.MFXTradeSignalMarkers ? window.MFXTradeSignalMarkers.mapSnapshotEvidence(focus.evidenceSnapshot, arr, g).map(({ item, index }) => ({ ...item, index })) : focus.evidenceSnapshot.map(it => ({ ...it, index: arr.findIndex(c => c.epoch === it.occurredAt) })).filter(it => it.index >= 0);
     return { ...(focus.entryEvidence || {}), sufficient: true, items, verdict: focus.entryEvidence?.verdict || "inconclusive", balance: focus.entryEvidence?.balance ?? 0, snapshot: true };
   }
   if (arr.length < 2 || !window.MFXEngine) return null;
@@ -33881,7 +33881,7 @@ try {
   setInterval(() => { if (body.offsetParent !== null) run(); }, 5000);
 })();
 </script>
-<script type="module">import * as E from "./src/analysis/all.js?v=6"; window.MFXEngine = E; if (typeof TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
+<script type="module">import * as E from "./src/analysis/all.js?v=6"; import * as TSM from "./src/analysis/tradeSignalMarkers.js?v=1"; window.MFXEngine = E; window.MFXTradeSignalMarkers = TSM; if (typeof TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
 <script type="module" src="src/ldpe/under-over-bot.js?v=2"></script>
 <script type="module" src="src/consec/consecAlert.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>

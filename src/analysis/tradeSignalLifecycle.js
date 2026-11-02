@@ -1,4 +1,4 @@
-import { transitionLifecycle, WATCHING_EXPIRY_SEC, TERMINAL_STATES } from './tradeSignalArchitecture.js';
+﻿import { transitionLifecycle, WATCHING_EXPIRY_SEC, TERMINAL_STATES } from './tradeSignalArchitecture.js';
 
 export const LIFECYCLE_STORAGE_KEY = 'mfx_ts_lifecycle_v1';
 
@@ -73,7 +73,20 @@ export function createLifecycleRegistry({ storage = globalThis.localStorage, key
     if (['Watching', 'Approaching Location'].includes(record.state) && at - record.watchingSince >= WATCHING_EXPIRY_SEC[profile.id]) {
       transitionLifecycle(record, 'Expired Without Entry', at, 'profile watching window elapsed without entry confirmation');
     }
-    Object.assign(record, { direction: sig.dir || 0, bias: sig.bias || null, waitingCondition: sig.status === 'signal' ? 'holding until the profile period ends' : (sig.waitingCondition || sig.reason || ''), nearestLevel: sig.nearestLevel ?? sig.layers?.location?.evidence?.[0]?.price ?? null, updatedAt: at, profileName: sig.profileName || profile.name || profile.id, entry: sig.entry || record.entry || null, status: sig.status, action: sig.action || null, headline: sig.headline || '', reason: sig.reason || '', overallBalance: sig.overallBalance ?? null, familyValues: sig.familyValues || null, primaryModel: sig.primaryModel || null, secondaryModels: sig.secondaryModels || [], target: sig.target || null, invalidation: sig.invalidation || null, holdLabel: sig.holdLabel || null, trigger: sig.trigger || null, entryG: sig.entryG || null, price: sig.price ?? null, inducementEvents: sig.inducementEvents || [], evidenceSnapshot: sig.evidenceSnapshot || record.evidenceSnapshot || [] });
+    const entrySnapshot = { direction: sig.dir || record.direction || 0, entry: sig.entry || record.entry || null, overallBalance: sig.overallBalance ?? record.overallBalance ?? null,
+      familyValues: sig.familyValues || record.familyValues || null, primaryModel: sig.primaryModel || record.primaryModel || null, secondaryModels: sig.secondaryModels?.length ? sig.secondaryModels : record.secondaryModels || [],
+      target: sig.target || record.target || null, invalidation: sig.invalidation || record.invalidation || null, holdLabel: sig.holdLabel || record.holdLabel || null,
+      trigger: sig.trigger || record.trigger || null, entryG: sig.entryG || record.entryG || null, price: sig.price ?? record.price ?? null,
+      confirmedAt: sig.confirmedAt ?? record.confirmedAt ?? null, detectedAt: sig.detectedAt ?? record.detectedAt ?? null,
+      model_id: sig.model_id ?? sig.primaryModel?.model_id ?? record.model_id ?? null,
+      model_context: sig.model_context ?? sig.primaryModel?.context ?? record.model_context ?? null,
+      inducementEvents: sig.inducementEvents?.length ? sig.inducementEvents : record.inducementEvents || [], evidenceSnapshot: sig.evidenceSnapshot?.length ? sig.evidenceSnapshot : record.evidenceSnapshot || [] };
+    const entryFrozen = record.entryFrozenAt != null;
+    Object.assign(record, { bias: sig.bias || null, waitingCondition: sig.status === 'signal' ? 'holding until the profile period ends' : (sig.waitingCondition || sig.reason || ''), nearestLevel: sig.nearestLevel ?? sig.layers?.location?.evidence?.[0]?.price ?? null, updatedAt: at, profileName: sig.profileName || profile.name || profile.id, status: sig.status, action: sig.action || null, headline: sig.headline || '', reason: sig.reason || '' });
+    if (!entryFrozen) {
+      Object.assign(record, entrySnapshot);
+      if (record.state === 'Trigger Detected' || record.state === 'Signal Active') record.entryFrozenAt = at;
+    }
     if (sig.status === 'signal' && record.state === 'Signal Active' && previousState !== 'Signal Active') {
       record.signalId = `${id}@${sig.entryAt ?? sig.detectedAt ?? at}`;
     }

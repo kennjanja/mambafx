@@ -90,3 +90,35 @@ test('an opposing bias terminalizes an approaching setup', () => {
   registry.update(sig({ status: 'wait', dir: -1, reason: 'entry context opposes bias' }), profile, 120);
   assert.equal(registry.get('R_10|scalp').state, 'Opposed');
 });
+
+
+test('entry qualification snapshot freezes at Trigger Detected through later scans and reload', () => {
+  const storage = memoryStorage(), registry = createLifecycleRegistry({ storage });
+  registry.load();
+  registry.update(sig(), profile, 100);
+  const located = sig({ layers: { location: { status: 'Approaching Location', evidence: [{ price: 99 }] } } });
+  registry.update(located, profile, 110);
+  const trigger = sig({ status: 'watching', dir: 1, detectedAt: 109, confirmedAt: 108, price: 100,
+    entry: { verdict: 'bullish-lean', balance: 0.6 }, overallBalance: 0.6,
+    familyValues: [{ family: 'liquidity', value: 0.8 }], primaryModel: { model_id: 'F', context: 'trend' },
+    secondaryModels: [{ model_id: 'G' }], target: { price: 105 }, invalidation: { price: 95 },
+    trigger: { kind: 'model', label: 'confirmed inducement' }, entryG: 180,
+    inducementEvents: [{ state: 'confirmed', sweepIndex: 5 }], evidenceSnapshot: [{ occurredAt: 105, confirmedAt: 108, label: 'sweep' }],
+    layers: { location: { status: 'Approaching Location', evidence: [{ price: 99 }] } } });
+  registry.update(trigger, profile, 120);
+  assert.equal(registry.get('R_10|scalp').state, 'Trigger Detected');
+  assert.equal(registry.get('R_10|scalp').entryFrozenAt, 120);
+  const keys = ['direction', 'entry', 'overallBalance', 'familyValues', 'primaryModel', 'secondaryModels', 'target', 'invalidation',
+    'trigger', 'entryG', 'price', 'confirmedAt', 'detectedAt', 'model_id', 'model_context', 'inducementEvents', 'evidenceSnapshot'];
+  const frozen = Object.fromEntries(keys.map((key) => [key, JSON.parse(JSON.stringify(registry.get('R_10|scalp')[key]))]));
+  const later = sig({ status: 'signal', dir: -1, detectedAt: 999, confirmedAt: 998, price: 120,
+    entry: { verdict: 'bearish-lean', balance: -0.9 }, overallBalance: -0.9, familyValues: [{ family: 'structure', value: -1 }],
+    primaryModel: { model_id: 'A', context: 'swing' }, secondaryModels: [], target: { price: 80 }, invalidation: { price: 130 },
+    trigger: { kind: 'model', label: 'different later trigger' }, entryG: 900, inducementEvents: [{ state: 'invalid' }], evidenceSnapshot: [{ label: 'later' }],
+    layers: { location: { status: 'Approaching Location', evidence: [] } } });
+  registry.update(later, profile, 130);
+  assert.equal(registry.get('R_10|scalp').state, 'Signal Active');
+  assert.deepEqual(Object.fromEntries(keys.map((key) => [key, registry.get('R_10|scalp')[key]])), frozen);
+  const reloaded = createLifecycleRegistry({ storage }); reloaded.load();
+  assert.deepEqual(Object.fromEntries(keys.map((key) => [key, reloaded.get('R_10|scalp')[key]])), frozen);
+});
