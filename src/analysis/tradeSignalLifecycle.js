@@ -36,6 +36,8 @@ export function createLifecycleRegistry({ storage = globalThis.localStorage, key
       sig.lifecycleHistory = record.lifecycleHistory;
       sig.waitingCondition = record.waitingCondition || 'setup is terminal';
       sig.nearestLevel = record.nearestLevel ?? null;
+      sig.status = record.state === 'Opposed' ? 'wait' : 'none';
+      sig.headline = `${sig.label || sig.symbol}: ${record.state}`;
       return record;
     }
     const previousState = record.state;
@@ -58,18 +60,20 @@ export function createLifecycleRegistry({ storage = globalThis.localStorage, key
       else if (hasLocation) move('Approaching Location', 'price is interacting with a qualifying location');
     }
     if (record.state === 'Approaching Location') {
-      if (!hasLocation) move('Watching', 'location condition no longer qualifies');
+      if (sig.status === 'wait') move('Opposed', sig.reason);
+      else if (!hasLocation) move('Watching', 'location condition no longer qualifies');
       else if (hasModel) move('Trigger Detected', 'ordered entry model confirmed');
     }
     if (record.state === 'Trigger Detected') {
-      if (sig.status === 'signal') move('Signal Active', 'all three analysis layers agree');
-      else if (sig.preEntryInvalidated) move('Invalidated Before Entry', sig.preEntryInvalidationReason || 'model invalidated before entry');
+      if (sig.status === 'wait') move('Opposed', sig.reason);
+      else if (sig.status === 'signal') move('Signal Active', 'all three analysis layers agree');
+      else if (sig.preEntryInvalidated || !hasModel || !hasLocation) move('Invalidated Before Entry', sig.preEntryInvalidationReason || 'confirmed model or location no longer qualifies before entry');
     }
     if (['Watching', 'Approaching Location'].includes(record.state) && record.watchingSince == null) record.watchingSince = at;
     if (['Watching', 'Approaching Location'].includes(record.state) && at - record.watchingSince >= WATCHING_EXPIRY_SEC[profile.id]) {
       transitionLifecycle(record, 'Expired Without Entry', at, 'profile watching window elapsed without entry confirmation');
     }
-    Object.assign(record, { direction: sig.dir || 0, bias: sig.bias || null, waitingCondition: sig.waitingCondition || sig.reason || '', nearestLevel: sig.nearestLevel ?? sig.layers?.location?.evidence?.[0]?.price ?? null, updatedAt: at });
+    Object.assign(record, { direction: sig.dir || 0, bias: sig.bias || null, waitingCondition: sig.waitingCondition || sig.reason || '', nearestLevel: sig.nearestLevel ?? sig.layers?.location?.evidence?.[0]?.price ?? null, updatedAt: at, profileName: sig.profileName || profile.name || profile.id, status: sig.status, action: sig.action || null, headline: sig.headline || '', reason: sig.reason || '', overallBalance: sig.overallBalance ?? null, familyValues: sig.familyValues || null, primaryModel: sig.primaryModel || null, secondaryModels: sig.secondaryModels || [], target: sig.target || null, invalidation: sig.invalidation || null, holdLabel: sig.holdLabel || null, trigger: sig.trigger || null, entryG: sig.entryG || null, price: sig.price ?? null, inducementEvents: sig.inducementEvents || [], evidenceSnapshot: sig.evidenceSnapshot || record.evidenceSnapshot || [] });
     if (sig.status === 'signal' && record.state === 'Signal Active' && previousState !== 'Signal Active') {
       record.signalId = `${id}@${sig.entryAt ?? sig.detectedAt ?? at}`;
     }

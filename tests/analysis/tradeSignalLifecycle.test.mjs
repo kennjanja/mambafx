@@ -64,3 +64,27 @@ test('persistence errors are surfaced and not swallowed', () => {
   assert.equal(registry.get('R_10|scalp').state, 'Watching');
   assert.match(registry.persistenceError.message, /quota/);
 });
+
+test('lifecycle persists evidence snapshots and invalidates a triggered model before entry', () => {
+  const storage = memoryStorage(), registry = createLifecycleRegistry({ storage });
+  registry.load();
+  const snapshot = [{ sequenceNumber: 1, label: 'pivot' }];
+  registry.update(sig({ evidenceSnapshot: snapshot, inducementEvents: [{ state: 'confirmed' }] }), profile, 100);
+  assert.deepEqual(registry.get('R_10|scalp').evidenceSnapshot, snapshot);
+  const located = sig({ status: 'watching', layers: { location: { status: 'Approaching Location', evidence: [] } }, primaryModel: { model_id: 'F' }, evidenceSnapshot: snapshot });
+  registry.update(located, profile, 110);
+  assert.equal(registry.get('R_10|scalp').state, 'Trigger Detected');
+  registry.update(sig({ status: 'watching', layers: { location: { status: 'Approaching Location', evidence: [] } }, reason: 'protected level failed' }), profile, 120);
+  assert.equal(registry.get('R_10|scalp').state, 'Invalidated Before Entry');
+  assert.match(registry.get('R_10|scalp').lifecycleHistory.at(-1).reason, /no longer qualifies/);
+  const reloaded = createLifecycleRegistry({ storage }); reloaded.load();
+  assert.deepEqual(reloaded.get('R_10|scalp').evidenceSnapshot, snapshot);
+});
+
+test('an opposing bias terminalizes an approaching setup', () => {
+  const registry = createLifecycleRegistry({ storage: memoryStorage() }); registry.load();
+  registry.update(sig(), profile, 100);
+  registry.update(sig({ layers: { location: { status: 'Approaching Location', evidence: [] } }, primaryModel: { model_id: 'B' } }), profile, 110);
+  registry.update(sig({ status: 'wait', dir: -1, reason: 'entry context opposes bias' }), profile, 120);
+  assert.equal(registry.get('R_10|scalp').state, 'Opposed');
+});

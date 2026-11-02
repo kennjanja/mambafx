@@ -18,6 +18,7 @@ import { analyzeZones } from './zones.js';
 import { analyzePatterns } from './patterns.js';
 import { analyzeLevels, premiumDiscount } from './levels.js';
 import { aggregateEvidenceFamilies, FAMILY_WEIGHTS, detectTradingRanges } from './tradeSignalArchitecture.js';
+import { classifySweep, detectInducements, INDUCEMENT_LIQUIDITY_FAMILY_VALUE } from './inducement.js';
 
 export const EVIDENCE_DEFAULTS = Object.freeze({
   minCandles: 60,
@@ -73,14 +74,18 @@ export function analyzeEvidence(input, opts = {}) {
 
   // --- liquidity: confirmed sweeps, springs/upthrusts (same group: both describe a stop run + reversal)
   for (const e of base.liquidity.events) {
-    if (e.kind === 'sweep-confirmed' && recent(e.index)) add('liquidity', e.side === 'buy' ? -1 : 1, O.weights.liquidity, `${e.side}-side liquidity swept then rejected`, { index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, kind: 'fact' });
+    if (e.kind === 'sweep-confirmed' && recent(e.index)) {
+      const dir = e.side === 'buy' ? -1 : 1;
+      const classification = classifySweep(candles[e.index], { level: e.level, direction: dir, minorPivotConfirmed: e.source === 'pivot' && !e.majorLiquidity, majorLiquidity: !!e.majorLiquidity });
+      add('liquidity', dir, O.weights.liquidity, `${e.side}-side liquidity swept then rejected`, { index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, classification: classification.classification, kind: 'fact' });
+    }
     if (e.kind === 'sweep-failed' && recent(e.index)) add('liquidity', e.side === 'buy' ? 1 : -1, O.weights.liquidity * 0.6, `${e.side}-side sweep accepted (continuation)`, { index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, kind: 'fact' });
   }
   for (const e of pat.wyckoff) if ((e.kind === 'spring' || e.kind === 'upthrust') && recent(e.index)) add('liquidity', e.dir, O.weights.liquidity * 0.8, e.kind, { index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, family: 'wyckoff', kind: 'fact' });
 
   // --- location: premium/discount (mean-reversion flavoured, deliberately weak)
   const pd = lv.premiumDiscount;
-  if (pd) add('location', pd.zone === 'premium' ? -1 : pd.zone === 'discount' ? 1 : 0, O.weights.location, `price in ${pd.zone} of the latest swing range (${(pd.position * 100).toFixed(0)}%)`);
+  if (pd) add('location', pd.zone === 'premium' ? -1 : pd.zone === 'discount' ? 1 : 0, O.weights.location, `price in ${pd.zone} of the latest swing range (${(pd.position * 100).toFixed(0)}%)`, { top: pd.top, bottom: pd.bottom, confirmedIndex: pd.confirmedIndex });
   else missing.push('premium-discount');
 
   // --- live zones near price: demand-like below/at price support, supply-like above/at price oppose
@@ -93,11 +98,11 @@ export function analyzeEvidence(input, opts = {}) {
     }
     near.sort((x, y) => x.dist - y.dist);
     const bestZ = near[0];
-    if (bestZ) add('zone', bestZ.z.dir, O.weights.zone * (bestZ.dist === 0 ? 1 : 0.7), `${bestZ.z.kind} ${bestZ.z.dir === 1 ? 'bullish' : 'bearish'} ${bestZ.dist === 0 ? 'retest in progress' : 'nearby'}`, { index: bestZ.z.createdIndex, confirmedIndex: bestZ.z.confirmedIndex ?? bestZ.z.createdIndex, kind: 'fact' });
+    if (bestZ) add('zone', bestZ.z.dir, O.weights.zone * (bestZ.dist === 0 ? 1 : 0.7), `${bestZ.z.kind} ${bestZ.z.dir === 1 ? 'bullish' : 'bearish'} ${bestZ.dist === 0 ? 'retest in progress' : 'nearby'}`, { index: bestZ.z.createdIndex, confirmedIndex: bestZ.z.confirmedIndex ?? bestZ.z.createdIndex, top: bestZ.z.top, bottom: bestZ.z.bottom, kind: 'fact' });
     for (const z of lv.supplyDemand) {
       if (z.status !== 'active') continue;
       const d = price > z.top ? price - z.top : price < z.bottom ? z.bottom - price : 0;
-      if (d <= O.nearAtr * a) { add('zone', z.dir, O.weights.zone * 0.6, `${z.kind.toLowerCase()} zone nearby`, { index: z.createdIndex, confirmedIndex: z.confirmedIndex ?? z.createdIndex, kind: 'fact' }); break; }
+      if (d <= O.nearAtr * a) { add('zone', z.dir, O.weights.zone * 0.6, `${z.kind.toLowerCase()} zone nearby`, { index: z.createdIndex, confirmedIndex: z.confirmedIndex ?? z.createdIndex, top: z.top, bottom: z.bottom, kind: 'fact' }); break; }
     }
   }
 
@@ -108,7 +113,7 @@ export function analyzeEvidence(input, opts = {}) {
   // --- level reaction: price just beyond a strong S/R zone with role flip
   if (a != null) {
     const srNear = lv.sr.filter((z) => z.status === 'active' && Math.abs(price - z.level) <= O.nearAtr * a).sort((x, y) => y.score - x.score)[0];
-    if (srNear) add('level', srNear.role === 'support' ? 1 : -1, O.weights.level, `at ${srNear.role} (×${srNear.touches}${srNear.flips ? ', flipped' : ''})`, { index: srNear.createdIndex, confirmedIndex: srNear.confirmedIndex ?? srNear.createdIndex, kind: 'fact' });
+    if (srNear) add('level', srNear.role === 'support' ? 1 : -1, O.weights.level, `at ${srNear.role} (×${srNear.touches}${srNear.flips ? ', flipped' : ''})`, { index: srNear.createdIndex, confirmedIndex: srNear.confirmedIndex ?? srNear.createdIndex, price: srNear.level, top: srNear.level, bottom: srNear.level, kind: 'fact' });
   }
 
   // --- trend: EMA alignment (one item)
@@ -159,19 +164,27 @@ export function analyzeEvidence(input, opts = {}) {
     if (e.type === 'CHoCH') modelEvents.push({ type: 'opposite-structure', dir: e.dir, index: e.index, confirmedIndex, label: e.type });
   }
   for (const d of base.displacement) modelEvents.push({ type: 'displacement', dir: d.dir, index: d.index, confirmedIndex: d.confirmedIndex ?? d.index, label: 'displacement' });
-  for (const e of base.liquidity.events) if (e.kind === 'sweep-confirmed') {
-    const dir = e.side === 'buy' ? -1 : 1;
-    const significant = e.source !== 'pivot' || e.equal || e.touches > 1;
-    const sweepEvent = { type: significant ? 'significant-sweep' : 'minor-sweep', dir, index: e.index, confirmedIndex: e.confirmedIndex, level: e.level, source: e.source, context: 'swing', label: `${significant ? 'significant' : 'minor'} ${e.side}-side sweep` };
-    modelEvents.push(sweepEvent);
-    const eventIndex = e.confirmedIndex ?? e.index;
-    const eventPd = Number.isInteger(eventIndex) ? premiumDiscount(candles.slice(0, eventIndex + 1)) : null;
-    if (significant && eventPd && ((dir === 1 && eventPd.zone === 'discount') || (dir === -1 && eventPd.zone === 'premium'))) modelEvents.push({ ...sweepEvent, context: 'dealing-range', label: `${sweepEvent.label} in ${eventPd.zone}` });
-    if (!significant) {
-      const pool = base.liquidity.pools.find((candidate) => candidate.id === e.poolId);
-      const pivot = pool && pool.pivotIndices.map((index) => base.internal.pivots.confirmed.find((p) => p.index === index)).filter(Boolean).sort((a, b) => b.confirmedIndex - a.confirmedIndex)[0];
-      if (pivot && pivot.confirmedIndex < e.confirmedIndex) modelEvents.push({ type: 'minor-countertrend-swing', dir, index: pivot.index, confirmedIndex: pivot.confirmedIndex, level: pivot.price, label: 'confirmed minor countertrend swing' });
+  for (const e of base.liquidity.events) if (e.kind === 'sweep-candidate') {
+    const dir = e.side === 'buy' ? -1 : 1, candle = candles[e.index];
+    const classification = classifySweep(candle, { level: e.level, direction: dir, minorPivotConfirmed: e.source === 'pivot' && !e.majorLiquidity, majorLiquidity: !!e.majorLiquidity });
+    if (classification.classification === 'significant-liquidity') {
+      const sweepEvent = { type: 'significant-sweep', dir, index: e.index, confirmedIndex: e.confirmedIndex, level: e.level, source: e.source, classification: classification.classification, context: 'swing', label: `significant ${e.side}-side sweep` };
+      modelEvents.push(sweepEvent);
+      const eventPd = premiumDiscount(candles.slice(0, e.index + 1));
+      if (eventPd && ((dir === 1 && eventPd.zone === 'discount') || (dir === -1 && eventPd.zone === 'premium'))) modelEvents.push({ ...sweepEvent, context: 'dealing-range', label: `${sweepEvent.label} in ${eventPd.zone}` });
     }
+  }
+  const inducements = detectInducements(candles, { granularity: opts.granularity || 60, structure: base });
+  for (const event of inducements) {
+    if (event.state !== 'confirmed') continue;
+    const sequenceEvents = [
+      { type: 'minor-pivot-confirmed', dir: event.direction, index: event.minorPivot.index, confirmedIndex: event.minorPivot.confirmedIndex, level: event.level, label: 'minor inducement pivot' },
+      { type: 'minor-inducement-sweep', dir: event.direction, index: event.sweepIndex, confirmedIndex: event.sweepIndex, level: event.level, classification: event.sharedSweepClassification.classification, label: 'minor inducement sweep' },
+      { type: 'inducement-displacement', dir: event.direction, index: event.displacementIndex, confirmedIndex: event.displacementIndex, level: event.level, label: 'post-sweep continuation displacement' },
+    ];
+    event.sequenceEvents = sequenceEvents;
+    modelEvents.push({ type: 'inducement-confirmed', dir: event.direction, index: event.displacementIndex, confirmedIndex: event.displacementIndex, level: event.level, state: 'confirmed', classification: event.sharedSweepClassification.classification, sequenceEvents, evidence: event, label: 'confirmed minor inducement' });
+    add('liquidity', event.direction, O.weights.liquidity * INDUCEMENT_LIQUIDITY_FAMILY_VALUE, 'confirmed minor inducement (provisional heuristic)', { index: event.sweepIndex, confirmedIndex: event.displacementIndex, family: 'liquidity', kind: 'fact', level: event.level, inducement: event });
   }
   for (const z of zonesRes.zones) {
     if (z.kind === 'OB' && z.confirmedIndex != null) modelEvents.push({ type: 'ob-confirmed-for-breaker', dir: -z.dir, index: z.createdIndex, confirmedIndex: z.confirmedIndex, level: z.bottom, label: 'valid order block before breaker' });
@@ -193,7 +206,10 @@ export function analyzeEvidence(input, opts = {}) {
   }
   for (const e of pat.wyckoff) {
     if (e.kind === 'SOS' || e.kind === 'SOW') modelEvents.push({ type: 'sos-or-sow', dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, label: e.kind });
-    if (e.kind === 'spring' || e.kind === 'upthrust') modelEvents.push({ type: 'significant-sweep', dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, context: 'range', label: e.kind });
+    if (e.kind === 'spring' || e.kind === 'upthrust') {
+      const classification = classifySweep(candles[e.index], { level: e.level, direction: e.dir, majorLiquidity: true });
+      if (classification.classification === 'significant-liquidity') modelEvents.push({ type: 'significant-sweep', dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, context: 'range', classification: classification.classification, label: e.kind });
+    }
   }
   const ranges = detectTradingRanges(candles, { atr: base.atr });
   for (const r of ranges.ranges) modelEvents.push({ type: 'range-established', dir: 0, index: r.startIndex, confirmedIndex: r.confirmedIndex, level: r.high, label: 'trading range established' });
@@ -259,7 +275,7 @@ export function analyzeEvidence(input, opts = {}) {
       regime: pat.volatility.series[last]?.regime ?? 'unknown', squeeze: pat.volatility.series[last]?.squeeze ?? null,
       nearZones: near.slice(0, 5).map((x) => ({ kind: x.z.kind, dir: x.z.dir, status: x.z.status, top: x.z.top, bottom: x.z.bottom, distance: x.dist })),
       recentEvents: [...sw, ...inn].filter((e) => recent(e.index)).map((e) => ({ type: e.type, dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, scale: sw.includes(e) ? 'swing' : 'internal' })),
-      modelEvents: timedModelEvents, ranges, htf: htfBias,
+      modelEvents: timedModelEvents, inducements, ranges, htf: htfBias,
     },
     disclaimer: DISCLAIMER,
   };

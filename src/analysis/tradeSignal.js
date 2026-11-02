@@ -62,7 +62,9 @@ export function buildTradeSignal({ symbol, label = symbol, candles = {}, profile
   const bias = analyzeEvidence(get(tfs.bias), { htf, granularity: tfs.bias.g });
   const entry = analyzeEvidence(get(tfs.entry), { htf: [{ tf: tfs.bias.label, g: tfs.bias.g, candles: get(tfs.bias) }, ...htf].filter((h) => h.candles.length >= 60), granularity: tfs.entry.g });
   const families = bias.families || aggregateEvidenceFamilies(bias.items, FAMILY_WEIGHTS).families;
-  const base = { symbol, label, profile: profile.id, profileName: profile.name, holdSec: profile.holdSec, holdLabel: profile.holdLabel, entryG: tfs.entry.g, biasTf: tfs.bias.label, entryTf: tfs.entry.label, bias: summary(bias), entry: summary(entry), familyValues: families, overallBalance: bias.overallBalance ?? bias.balance, dir: 0, status: 'none', detectedAt: Number.isFinite(nowSec) ? nowSec : null };
+  const base = { symbol, label, profile: profile.id, profileName: profile.name, holdSec: profile.holdSec, holdLabel: profile.holdLabel, entryG: tfs.entry.g, biasTf: tfs.bias.label, entryTf: tfs.entry.label, bias: summary(bias), entry: summary(entry), familyValues: families, overallBalance: bias.overallBalance ?? bias.balance, dir: 0, status: 'none', detectedAt: Number.isFinite(nowSec) ? nowSec : null, inducementEvents: entry.facts?.inducements || [], evidenceSnapshot: buildSnapshot(entry, tfs.entry.g) };
+  const activeInducement = (entry.facts?.inducements || []).find((event) => ['formed', 'swept'].includes(event.state));
+  if (activeInducement) base.waitingCondition = activeInducement.state === 'formed' ? 'Waiting for inducement sweep' : 'Waiting for displacement';
   if (!bias.sufficient || !entry.sufficient) {
     return { ...base, status: 'insufficient', reason: `not enough candles (${!bias.sufficient ? tfs.bias.label : tfs.entry.label})`, headline: `${label}: waiting for candle history` };
   }
@@ -78,11 +80,14 @@ export function buildTradeSignal({ symbol, label = symbol, candles = {}, profile
   if (entryVerdictDir === -dir) {
     return { ...base, status: 'wait', action, reason: `${tfs.entry.label} evidence leans ${entryVerdictDir === 1 ? 'bullish' : 'bearish'}, against the ${tfs.bias.label} ${word.toLowerCase()} lean`, headline: `${label}: ${word} lean on ${tfs.bias.label}, but ${tfs.entry.label} opposes - wait` };
   }
-  const locationEvidence = entry.items.filter((item) => ['level', 'zone'].includes(item.group) && item.dir === dir);
+  const locationEvidence = entry.items.filter((item) => ['level', 'zone', 'location'].includes(item.group) && item.dir === dir);
   const scenario = entry.scenarios.find((s) => s.dir === dir);
   const invalidation = scenario && scenario.invalidation ? { ...scenario.invalidation, tf: tfs.entry.label } : null;
   const entryDirection = entry.verdict === 'bullish-lean' ? 1 : entry.verdict === 'bearish-lean' ? -1 : entry.facts.swingBias;
-  const evaluatedModels = evaluateEntryModels({ events: entry.facts.modelEvents || [], biasDirection: dir, entryDirection,
+  const modelEvents = entry.facts.modelEvents || [];
+  const hasWyckoffSequence = modelEvents.some((event) => event.type === 'range-established') && modelEvents.some((event) => event.type === 'sos-or-sow') && modelEvents.some((event) => event.type === 'lps-or-lpsy');
+  const marketContext = hasWyckoffSequence ? ['trend', 'range'] : ['trend'];
+  const evaluatedModels = evaluateEntryModels({ events: modelEvents, biasDirection: dir, entryDirection, marketContext,
     locations: locationEvidence, nearestInvalidationDistance: invalidation ? Math.abs(price - invalidation.price) : Infinity, asOfIndex: entry.candles.length - 1 });
   const reversalIndex = reversal ? entry.candles.findIndex((c) => c.epoch === reversal.epoch) : -1;
   const eligible = evaluatedModels.candidates.filter((candidate) => {
@@ -110,10 +115,7 @@ export function buildTradeSignal({ symbol, label = symbol, candles = {}, profile
   const target = pickTarget(dir, price, [{ ev: entry, tf: tfs.entry.label }, { ev: bias, tf: tfs.bias.label }]);
   const until = target ? ` toward the ${target.kind} at ${fmtPrice(target.price)}` : ' (no target area identified)';
   const triggerCandle = Number.isInteger(trigger.confirmedIndex) ? get(tfs.entry)[trigger.confirmedIndex] : null;
-  const evidenceSnapshot = entry.items.map((item) => ({ ...item,
-    occurredAt: item.occurredAt ?? (Number.isInteger(item.index) ? get(tfs.entry)[item.index]?.epoch ?? null : null),
-    confirmedAt: item.confirmedAt ?? (Number.isInteger(item.confirmedIndex) ? (get(tfs.entry)[item.confirmedIndex]?.epoch ?? null) + tfs.entry.g : null),
-  }));
+  const evidenceSnapshot = base.evidenceSnapshot;
   return {
     ...base, status: 'signal', action, target, invalidation, trigger, primaryModel: model, secondaryModels: modelSelection.secondary,
     qualifyingModelIds: [...new Set(modelSelection.candidates.map((candidate) => candidate.model_id))],
@@ -125,3 +127,25 @@ export function buildTradeSignal({ symbol, label = symbol, candles = {}, profile
 /** Display precision by magnitude (the feed's own decimals are not known here). */
 export function fmtPrice(p) { const a = Math.abs(p); return p.toFixed(a >= 1000 ? 2 : a >= 100 ? 3 : a >= 1 ? 4 : 5); }
 function summary(e) { return { verdict: e.verdict, balance: e.balance, overallBalance: e.overallBalance ?? e.balance, families: e.families || [] }; }
+function buildSnapshot(evidence, granularity) {
+  const candles = evidence.candles || [];
+  const items = (evidence.items || []).map((item) => ({ ...item,
+    occurredAt: item.occurredAt ?? (Number.isInteger(item.index) ? candles[item.index]?.epoch ?? null : null),
+    confirmedAt: item.confirmedAt ?? (Number.isInteger(item.confirmedIndex) ? (candles[item.confirmedIndex]?.epoch ?? null) + granularity : null),
+  }));
+  for (const event of evidence.facts?.inducements || []) {
+    const points = [
+      { number: 1, index: event.minorPivot.index, confirmedIndex: event.minorPivot.confirmedIndex, price: event.level, label: 'Inducement minor pivot' },
+      { number: 2, index: event.sweepIndex, confirmedIndex: event.sweepIndex, price: event.level, label: 'Inducement sweep' },
+      { number: 3, index: event.displacementStartIndex, confirmedIndex: event.displacementIndex, price: event.level, label: 'Inducement displacement' },
+      { number: 4, index: event.protectedPivot.index, confirmedIndex: event.protectedPivot.confirmedIndex, price: event.protectedLevel, label: 'Protected structural level' },
+    ];
+    for (const point of points) {
+      if (!Number.isInteger(point.index) || !candles[point.index]) continue;
+      items.push({ group: 'liquidity', family: 'liquidity', dir: event.direction, weight: 0.25, kind: 'fact', index: point.index,
+        confirmedIndex: point.confirmedIndex, occurredAt: candles[point.index].epoch, confirmedAt: Number.isInteger(point.confirmedIndex) && candles[point.confirmedIndex] ? candles[point.confirmedIndex].epoch + granularity : null,
+        label: point.label, price: point.price, sequenceNumber: point.number, snapshotKind: 'inducement' });
+    }
+  }
+  return items;
+}

@@ -109,7 +109,7 @@ export function analyzeLiquidity(candles, opts = {}) {
           const ev = addEvent({
             kind: 'sweep-confirmed', poolId: pool.id, source: pool.source, side: pool.side, level: pool.level,
             index: pool.pending.index, epoch: candles[pool.pending.index].epoch, confirmedIndex: i, confirmedEpoch: c.epoch,
-            excess: pool.pending.excess, equal: pool.equal, touches: pool.touches, reaction: null,
+            excess: pool.pending.excess, equal: pool.pending.equal, touches: pool.pending.touches, majorLiquidity: pool.pending.majorLiquidity, reaction: null,
           });
           pool.status = 'swept'; pool.sweptIndex = i; pool.pending = null; ev.reactionDue = i + reactionBars;
         }
@@ -117,11 +117,11 @@ export function analyzeLiquidity(candles, opts = {}) {
       }
       if (through && inside) {
         const excess = above ? c.high - pool.level : pool.level - c.low;
-        pool.pending = { index: i, excess };
-        addEvent({ kind: 'sweep-candidate', poolId: pool.id, source: pool.source, side: pool.side, level: pool.level, index: i, epoch: c.epoch, confirmedIndex: i, excess });
+        pool.pending = { index: i, excess, equal: pool.equal, touches: pool.touches, majorLiquidity: pool.source !== 'pivot' || pool.equal || pool.touches > 1 };
+        addEvent({ kind: 'sweep-candidate', poolId: pool.id, source: pool.source, side: pool.side, level: pool.level, index: i, epoch: c.epoch, confirmedIndex: i, excess, equal: pool.equal, touches: pool.touches, majorLiquidity: pool.source !== 'pivot' || pool.equal || pool.touches > 1 });
         if (confirmBars === 0) {
-          pool.pending = { index: i, excess };
-          const ev = addEvent({ kind: 'sweep-confirmed', poolId: pool.id, source: pool.source, side: pool.side, level: pool.level, index: i, epoch: c.epoch, confirmedIndex: i, confirmedEpoch: c.epoch, excess, equal: pool.equal, touches: pool.touches, reaction: null });
+          pool.pending = { index: i, excess, equal: pool.equal, touches: pool.touches, majorLiquidity: pool.source !== 'pivot' || pool.equal || pool.touches > 1 };
+          const ev = addEvent({ kind: 'sweep-confirmed', poolId: pool.id, source: pool.source, side: pool.side, level: pool.level, index: i, epoch: c.epoch, confirmedIndex: i, confirmedEpoch: c.epoch, excess, equal: pool.equal, touches: pool.touches, majorLiquidity: pool.source !== 'pivot' || pool.equal || pool.touches > 1, reaction: null });
           pool.status = 'swept'; pool.sweptIndex = i; pool.pending = null; ev.reactionDue = i + reactionBars;
         }
       } else if (through && !inside) {
