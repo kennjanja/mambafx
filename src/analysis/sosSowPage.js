@@ -1,10 +1,10 @@
 // SOS / SOW bot page. Scans every market on every timeframe; the moment a closed candle prints a Sign of Strength it buys a
-// 15-second Rise, on a Sign of Weakness a 15-second Fall, on whichever Deriv account is connected (demo or real).
+// Rise on a Sign of Strength, Fall on a Sign of Weakness, for a user-set duration (default 15 s), on whichever Deriv account is connected (demo or real).
 // Orders go straight to the app's authenticated trading socket (window.gridWs). Results are Deriv's own.
 import { GRANULARITIES, detectFresh, tfLabel } from './sosSow.js';
 import { isVolatilityAbove100 } from './tradeSignalBot.js';
 
-const KEY = 'mfx_sossow_v1', SET = 'mfx_sossow_set_v1', KEEP = 400, DURATION = 15, FRESH_SEC = 45, REQ_GAP_MS = 25, POLL_MS = 400;
+const KEY = 'mfx_sossow_v1', SET = 'mfx_sossow_set_v1', KEEP = 400, FRESH_SEC = 45, REQ_GAP_MS = 25, POLL_MS = 400;
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const nowSec = () => Math.floor(Date.now() / 1000);
@@ -20,8 +20,16 @@ let recs = [];
 try { recs = JSON.parse(localStorage.getItem(KEY) || '[]').filter((r) => r && r.id); } catch (_) {}
 for (const r of recs) if (r.state === 'placing') { r.state = 'failed'; r.reason = 'page closed while placing; outcome unknown, check Deriv'; }
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(recs.slice(-KEEP))); } catch (_) {} };
-let cfg = { stake: 1, maxOpen: 3, tfs: GRANULARITIES.slice() };
+let cfg = { stake: 1, maxOpen: 3, tfs: GRANULARITIES.slice(), durValue: 15, durUnit: 's' };
 try { cfg = { ...cfg, ...JSON.parse(localStorage.getItem(SET) || '{}') }; } catch (_) {}
+// Deriv Rise/Fall: 1-10 ticks, or at least 15 seconds.
+const DUR_LIMITS = { t: [1, 10], s: [15, 86400] };
+function clampDuration(value, unit) {
+  const u = unit === 't' ? 't' : 's', [lo, hi] = DUR_LIMITS[u], n = Math.round(Number(value));
+  return { value: Number.isFinite(n) ? Math.min(hi, Math.max(lo, n)) : (u === 't' ? 5 : 15), unit: u };
+}
+const durText = (n, u) => n + (u === 't' ? (n === 1 ? ' tick' : ' ticks') : 's');
+const curDur = () => clampDuration(cfg.durValue, cfg.durUnit);
 const saveCfg = () => { try { localStorage.setItem(SET, JSON.stringify(cfg)); } catch (_) {} };
 
 let armed = false, ws = null, endpointIdx = 0, symMap = {}, pollTimer = null, uiTimer = null, running = false, lastSeq = 0;
@@ -137,10 +145,11 @@ async function trade(r) {
   if (recs.some((x) => x !== r && x.symbol === r.symbol && (x.state === 'placing' || x.state === 'open'))) { r.state = 'skipped'; r.reason = 'market already has an open trade'; return; }
   if (openN >= cfg.maxOpen) { r.state = 'skipped'; r.reason = 'max open trades reached'; return; }
   r.state = 'placing'; r.account = a.demo ? 'demo' : 'real'; r.loginId = a.id; r.stake = cfg.stake;
+  const dur = curDur(); r.durValue = dur.value; r.durUnit = dur.unit;
   try {
     watch();
     const sym = symMap[r.symbol] || r.symbol;
-    const prop = await call({ proposal: 1, amount: cfg.stake, basis: 'stake', contract_type: r.contractType, currency: a.ccy, duration: DURATION, duration_unit: 's', underlying_symbol: sym });
+    const prop = await call({ proposal: 1, amount: cfg.stake, basis: 'stake', contract_type: r.contractType, currency: a.ccy, duration: dur.value, duration_unit: dur.unit, underlying_symbol: sym });
     if (!prop || !prop.id) throw new Error('no proposal id from Deriv');
     const buy = await call({ buy: prop.id, price: prop.ask_price });
     const bought = (buy && buy.buy) || buy;   // the host socket hands back the buy object itself
@@ -160,7 +169,7 @@ function render() {
   const pl = (k) => done.filter((r) => r.account === k).reduce((s, r) => s + (Number.isFinite(r.profit) ? r.profit : 0), 0);
   const st = $('ssStatus');
   if (st) st.innerHTML = `Account: <b class="${a.connected ? (a.demo ? 'ss-demo' : 'ss-real') : ''}">${a.connected ? (a.demo ? 'DEMO' : 'REAL') + ' ' + esc(a.id || '') : 'not connected'}</b> · bot <b>${armed ? 'ON' : 'off'}</b> · scanning ${markets().length} markets × ${cfg.tfs.length} timeframes${lastScanAt ? '' : ' (starting…)'} · ${open.length} open · ${done.filter((r) => r.state === 'won').length} won / ${done.filter((r) => r.state === 'lost').length} lost · P/L demo ${pl('demo').toFixed(2)} · real ${pl('real').toFixed(2)}`;
-  const row = (r) => `<tr><td>${clockTxt(r.at)}</td><td>${esc(r.label)}</td><td><b class="${r.kind === 'SOS' ? 'ss-up' : 'ss-dn'}">${r.kind}</b> ${esc(r.tf)}</td><td>${r.side} ${DURATION}s</td><td>${r.account ? esc(r.account) : '—'}</td><td>${r.state === 'won' ? '<b class="ss-up">&#10003; won</b>' : r.state === 'lost' ? '<b class="ss-dn">&#10007; lost</b>' : esc(r.state)}</td><td>${r.profit != null && Number.isFinite(r.profit) ? (r.profit >= 0 ? '+' : '') + r.profit.toFixed(2) : '—'}</td><td class="mu">${esc(r.reason || (r.entry != null ? 'entry ' + r.entry + (r.exit != null ? ' exit ' + r.exit : '') : ''))}</td></tr>`;
+  const row = (r) => `<tr><td>${clockTxt(r.at)}</td><td>${esc(r.label)}</td><td><b class="${r.kind === 'SOS' ? 'ss-up' : 'ss-dn'}">${r.kind}</b> ${esc(r.tf)}</td><td>${r.side} ${durText(r.durValue || 15, r.durUnit || 's')}</td><td>${r.account ? esc(r.account) : '—'}</td><td>${r.state === 'won' ? '<b class="ss-up">&#10003; won</b>' : r.state === 'lost' ? '<b class="ss-dn">&#10007; lost</b>' : esc(r.state)}</td><td>${r.profit != null && Number.isFinite(r.profit) ? (r.profit >= 0 ? '+' : '') + r.profit.toFixed(2) : '—'}</td><td class="mu">${esc(r.reason || (r.entry != null ? 'entry ' + r.entry + (r.exit != null ? ' exit ' + r.exit : '') : ''))}</td></tr>`;
   const list = recs.slice(-80).reverse();
   const html = list.length ? `<table class="ph-t"><thead><tr><th>Time</th><th>Market</th><th>Event</th><th>Trade</th><th>Account</th><th>Result</th><th>P/L</th><th>Note</th></tr></thead><tbody>${list.map(row).join('')}</tbody></table>` : '<div class="ts-empty">No SOS/SOW seen yet. Events appear here the moment a candle closes with one.</div>';
   if (el.dataset.h !== html) { el.dataset.h = html; el.innerHTML = html; }
@@ -173,10 +182,16 @@ function readInputs() {
   if (Number.isFinite(s) && s >= 0.35) cfg.stake = +s.toFixed(2);
   if (Number.isFinite(m) && m >= 1) cfg.maxOpen = m;
   cfg.tfs = GRANULARITIES.filter((g) => { const c = $('ssTf' + g); return c ? c.checked : true; });
+  const d = clampDuration(($('ssDur') || {}).value, ($('ssDurUnit') || {}).value);
+  cfg.durValue = d.value; cfg.durUnit = d.unit;
+  paintInputs();
   saveCfg();
 }
 function paintInputs() {
   if ($('ssStake')) $('ssStake').value = cfg.stake; if ($('ssMax')) $('ssMax').value = cfg.maxOpen;
+  const d = curDur(), du = $('ssDur'), dun = $('ssDurUnit');
+  if (dun) dun.value = d.unit;
+  if (du) { du.value = d.value; du.min = DUR_LIMITS[d.unit][0]; du.max = DUR_LIMITS[d.unit][1]; }
   const host = $('ssTfs'); if (host && !host.dataset.done) { host.dataset.done = 1; host.innerHTML = GRANULARITIES.map((g) => `<label><input type="checkbox" id="ssTf${g}" ${cfg.tfs.includes(g) ? 'checked' : ''}> ${tfLabel(g)}</label>`).join(' '); }
 }
 // Switch the app's Deriv connection between the demo and real account of the current login. The bot is always switched off first.
@@ -200,19 +215,19 @@ function arm(on) {
   if (on) {
     readInputs(); const a = acct();
     if (!a.connected) { window.alert('Connect a Deriv account first.'); render(); return; }
-    if (!a.demo && !window.confirm('REAL account ' + (a.id || '') + ': this bot will place REAL-money ' + DURATION + 's trades of ' + cfg.stake + ' ' + a.ccy + ' on every SOS/SOW it sees, with no further prompts. Continue?')) { render(); return; }
+    if (!a.demo && !window.confirm('REAL account ' + (a.id || '') + ': this bot will place REAL-money ' + durText(curDur().value, curDur().unit) + ' trades of ' + cfg.stake + ' ' + a.ccy + ' on every SOS/SOW it sees, with no further prompts. Continue?')) { render(); return; }
   }
   armed = on; render();
 }
 
 export function ssStart() { paintInputs(); if (!running) { running = true; clearInterval(pollTimer); pollTimer = setInterval(poll, POLL_MS); } poll(); }
 export function ssLeave() { if (!armed) { running = false; clearInterval(pollTimer); pollTimer = null; } }
-document.addEventListener('change', (e) => { const t = e.target; if (t && t.id === 'ssArm') arm(t.checked); else if (t && /^ss(Stake|Max|Tf)/.test(t.id || '')) { readInputs(); } });
+document.addEventListener('change', (e) => { const t = e.target; if (t && t.id === 'ssArm') arm(t.checked); else if (t && /^ss(Stake|Max|Tf|Dur)/.test(t.id || '')) { readInputs(); } });
 document.addEventListener('click', (e) => { const t = e.target; if (t && t.id === 'ssAcctDemo') switchAcct('demo'); if (t && t.id === 'ssAcctReal') switchAcct('real'); if (t && t.id === 'ssCsv') csv(); if (t && t.id === 'ssClear' && window.confirm('Delete the SOS/SOW trade log?')) { recs = recs.filter((r) => r.state === 'open' || r.state === 'placing'); save(); render(); } });
 window.addEventListener('pagehide', () => { armed = false; });
 function csv() {
   const q = (v) => '"' + String(v ?? '').replace(/"/g, '""') + '"';
-  const lines = ['time_utc,market,event,timeframe,side,duration_s,account,stake,state,profit,entry,exit,contract_id,note', ...recs.map((r) => [new Date(r.at).toISOString(), r.symbol, r.kind, r.tf, r.side, DURATION, r.account, r.stake, r.state, r.profit, r.entry, r.exit, r.contractId, r.reason].map(q).join(','))];
+  const lines = ['time_utc,market,event,timeframe,side,duration_s,account,stake,state,profit,entry,exit,contract_id,note', ...recs.map((r) => [new Date(r.at).toISOString(), r.symbol, r.kind, r.tf, r.side, r.durValue ? durText(r.durValue, r.durUnit) : '15s', r.account, r.stake, r.state, r.profit, r.entry, r.exit, r.contractId, r.reason].map(q).join(','))];
   const url = URL.createObjectURL(new Blob([lines.join('\n')], { type: 'text/csv' }));
   const a = document.createElement('a'); a.href = url; a.download = 'sos-sow-trades.csv'; a.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
