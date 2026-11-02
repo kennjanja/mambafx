@@ -1,4 +1,4 @@
-﻿import { transitionLifecycle, WATCHING_EXPIRY_SEC, TERMINAL_STATES } from './tradeSignalArchitecture.js';
+import { transitionLifecycle, WATCHING_EXPIRY_SEC, TERMINAL_STATES } from './tradeSignalArchitecture.js';
 
 export const LIFECYCLE_STORAGE_KEY = 'mfx_ts_lifecycle_v1';
 
@@ -17,15 +17,31 @@ export function createLifecycleRegistry({ storage = globalThis.localStorage, key
     return list();
   }
 
+  // Pre-entry records are re-derived from the next scan, so their bulky evidence is not worth persisting. Frozen entry
+  // records (Trigger Detected, Signal Active, terminal) keep everything. If storage is still full the minimal form
+  // keeps only the active signal's evidence.
+  const BULKY_FIELDS = ['evidenceSnapshot', 'inducementEvents', 'familyValues', 'entry', 'bias', 'secondaryModels'];
+  const serialize = (level) => JSON.stringify(Object.fromEntries([...records].map(([id, record]) => {
+    const keepFull = level === 0 ? record.entryFrozenAt != null : record.state === 'Signal Active';
+    if (keepFull) return [id, record];
+    const slim = { ...record };
+    for (const field of BULKY_FIELDS) delete slim[field];
+    return [id, slim];
+  })));
+
   function persist() {
-    try {
-      storage?.setItem(key, JSON.stringify(Object.fromEntries(records)));
-      persistenceError = null;
-      return true;
-    } catch (error) {
-      persistenceError = error;
-      throw error;
+    let lastError = null;
+    for (const level of [0, 1]) {
+      try {
+        storage?.setItem(key, serialize(level));
+        persistenceError = null;
+        return true;
+      } catch (error) {
+        lastError = error;
+      }
     }
+    persistenceError = lastError;
+    throw lastError;
   }
 
   function update(sig, profile, at) {
@@ -91,11 +107,12 @@ export function createLifecycleRegistry({ storage = globalThis.localStorage, key
       record.signalId = `${id}@${sig.entryAt ?? sig.detectedAt ?? at}`;
     }
     records.set(id, record);
-    persist();
+    // The row must show the real state even when storage is full, so apply it before persisting.
     sig.lifecycleState = record.state;
     sig.lifecycleHistory = record.lifecycleHistory;
     sig.waitingCondition = record.waitingCondition || (record.state === 'Signal Active' ? 'holding until the profile period ends' : '');
     sig.nearestLevel = record.nearestLevel;
+    persist();
     return record;
   }
 

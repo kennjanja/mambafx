@@ -4,6 +4,9 @@ import { buildTradeSignal, PROFILE_LIST, ALL_GRANULARITIES, fmtPrice } from './t
 import { openTracked, updateTracked, progress, summarize, deduplicateOpenRecords } from './tradeSignalTracker.js';
 import { predictionHistoryStore } from './tradeSignalStorage.js';
 import { createLifecycleRegistry } from './tradeSignalLifecycle.js';
+import { createFunnel } from './tradeSignalProgress.js';
+const funnel = createFunnel();
+if (typeof window !== 'undefined') window.__tsFunnel = funnel.data;
 import { isVolatilityAbove100, nextSignalStake, signalDuration, signalPriceState, signalTradeKey, tradeBotLimitReached, validateTradeBotSettings } from './tradeSignalBot.js';
 
 const TFS = [...new Set([60, ...ALL_GRANULARITIES])].sort((a, b) => a - b).map((g) => ({ g }));
@@ -139,6 +142,7 @@ function finishMarket() {
     catch (e) { sig = { symbol: sym, label: labelOf(sym), profile: profile.id, profileName: profile.name, status: 'insufficient', dir: 0, reason: 'analysis error: ' + e.message, headline: labelOf(sym) + ': analysis error' }; }
     if (tick && Number.isFinite(tick.quote) && tick.quote > 0) { sig.price = tick.quote; sig.entryAt = tick.epoch; sig.detectedAt = scanTime; }
     updateLifecycle(sig, profile, scanTime);
+    funnel.record(profile.id, sig.modelProgress);
     results.set(sym + '|' + profile.id, { sig, at: Date.now() });
     if (tsBotAuto && sig.status === 'signal') tsBotSubmit(sig, 'ts-auto');
     track(sym, sig, candles[60] || []);
@@ -154,7 +158,7 @@ function updateLifecycle(sig, profile, at) {
     return;
   }
   try { lifecycleRegistry.update(sig, profile, at); }
-  catch (error) { status = 'lifecycle storage error: ' + error.message; sig.waitingCondition = 'could not persist lifecycle state'; }
+  catch (error) { status = 'lifecycle state not saved (browser storage full): ' + error.message; }
 }
 
 function track(sym, sig, resolutionCandles) {
@@ -253,7 +257,8 @@ function row(sig) {
   const buy = sig.dir === 1, cls = sig.status === 'signal' ? (buy ? 'ts-buy' : 'ts-sell') : 'ts-wait';
   const trg = sig.trigger ? ` | trigger ${esc(sig.trigger.kind)}: ${esc(sig.trigger.label)}` : '';
   const inv = sig.invalidation ? ` | invalidation ${fmtPrice(sig.invalidation.price)}` : '';
-  const model = sig.primaryModel ? sig.primaryModel.name : '?';
+  const model = sig.primaryModel ? sig.primaryModel.name : sig.modelProgress?.best ? sig.modelProgress.best.text : 'none progressing (no bias lean)';
+  const waiting = String(sig.waitingCondition || '').replace(/^waiting for\s+/i, '') || 'a model sequence';
   const nearest = sig.nearestLevel != null ? fmtPrice(sig.nearestLevel) : '?';
   const familyText = (sig.familyValues || []).map((f) => `${f.family} ${f.value >= 0 ? '+' : ''}${f.value.toFixed(2)}`).join(' | ');
   const tradeKey = signalTradeKey(sig);
@@ -264,7 +269,7 @@ function row(sig) {
   return `<div class="ts-row ${cls}" data-sym="${esc(sig.symbol)}" data-key="${esc(sig.symbol + '|' + sig.profile)}" role="button" tabindex="0" title="Open ${esc(sig.label)} in Candle Charts with the stored evidence highlighted">
     <span class="ts-badge">${sig.status === 'watching' ? 'WAIT' : esc(sig.action || '')}</span>
     <span class="ts-main"><b><em class="ts-prof">${esc(sig.profileName || '')} | ${esc(sig.lifecycleState || 'No Setup')}</em> ${esc(sig.headline)}</b>
-      <span class="ts-sub">direction ${sig.dir === 1 ? 'Bullish' : sig.dir === -1 ? 'Bearish' : '?'} | evidence balance ${sig.overallBalance == null ? '?' : sig.overallBalance.toFixed(2)} | model ${esc(model)} | waiting for ${esc(sig.waitingCondition || '?')} | nearest ${nearest} | target ${sig.target ? fmtPrice(sig.target.price) : '?'}${inv} | hold ${esc(sig.holdLabel || '?')}${trg}</span>
+      <span class="ts-sub">direction ${sig.dir === 1 ? 'Bullish' : sig.dir === -1 ? 'Bearish' : '?'} | evidence balance ${sig.overallBalance == null ? '?' : sig.overallBalance.toFixed(2)} | model ${esc(model)} | waiting for ${esc(waiting)} | nearest ${nearest} | target ${sig.target ? fmtPrice(sig.target.price) : '?'}${inv} | hold ${esc(sig.holdLabel || '?')}${trg}</span>
       ${familyText ? `<span class="ts-sub">families: ${esc(familyText)} (heuristic, provisional)</span>` : ''}${tradeButton}</span>
     <span class="ts-go">Open charts</span></div>`;
 }
@@ -396,8 +401,8 @@ function render() {
   const rest = all.filter((s) => !['signal', 'watching', 'wait'].includes(s.status));
   const bar = $('tsStatus');
   if (bar) bar.textContent = `${status === 'scanning' ? `scanning ${scanned}/${total}…` : status}${lastScanAt ? ' · last full scan ' + new Date(lastScanAt).toLocaleTimeString() : ''} · ${live.length} entry signal(s) · ${watch.length} watching for a trigger · ${wait.length} opposed`;
-  el.innerHTML = trackedHtml() + (live.length ? live.map(row).join('') : `<div class="ts-empty">${status === 'scanning' && !all.length ? 'Scanning markets…' : 'No market has an entry trigger right now (pullback or liquidity sweep).'}</div>`)
-    + (watch.length ? `<div class="ts-h">Watching - lean found, waiting for a pullback / swing / liquidity sweep</div>` + watch.map(row).join('') : '')
+  el.innerHTML = trackedHtml() + (live.length ? live.map(row).join('') : `<div class="ts-empty">${status === 'scanning' && !all.length ? 'Scanning markets…' : 'No market has an entry trigger right now.'}</div>`)
+    + (watch.length ? `<div class="ts-h">Watching - lean found, waiting for a model sequence to complete</div>` + watch.map(row).join('') : '')
     + (wait.length ? `<div class="ts-h">Opposed (bias lean, entry timeframe against it)</div>` + wait.map(row).join('') : '')
     + (rest.length ? `<details class="ts-rest"><summary>No setup (${rest.length})</summary>${rest.map((s) => `<div class="ts-none"><b>${esc(s.label)} · ${esc(s.profileName || '')}</b> — ${esc(s.reason || s.headline)}</div>`).join('')}</details>` : '');
   tsBotUpdateUi();
