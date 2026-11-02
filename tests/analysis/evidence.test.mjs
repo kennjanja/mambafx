@@ -104,6 +104,16 @@ test('deterministic', () => {
   const c = walk(18, 220);
   assert.equal(JSON.stringify(analyzeEvidence(c)), JSON.stringify(analyzeEvidence(c)));
 });
+test('current location evidence timestamps the current reading rather than an older reference level', () => {
+  const evidence = analyzeEvidence(walk(7, 180), { granularity: 60 });
+  for (const item of evidence.items.filter((candidate) => ['location', 'level'].includes(candidate.group))) {
+    assert.equal(item.index, evidence.candles.length - 1);
+    assert.equal(item.confirmedIndex, evidence.candles.length - 1);
+    assert.equal(item.occurredAt, evidence.candles.at(-1).epoch);
+    assert.equal(item.confirmedAt, evidence.candles.at(-1).epoch + 60);
+  }
+});
+
 test('as-of semantics: later candles never alter the evidence of a prefix', () => {
   const data = walk(19, 300, 0.1);
   const k = 200, pre = analyzeEvidence(data.slice(0, k));

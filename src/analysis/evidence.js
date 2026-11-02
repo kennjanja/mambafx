@@ -69,7 +69,7 @@ export function analyzeEvidence(input, opts = {}) {
   for (const e of [...sw, ...inn]) if (recent(e.index)) breaks.push({ dir: e.dir, w: e.type === 'CHoCH' ? 1 : 0.8, label: `${e.type}${e.mss ? '/MSS' : ''}`, index: e.index, confirmedIndex: e.confirmedIndex ?? e.index });
   for (const d of base.displacement) if (recent(d.index)) breaks.push({ dir: d.dir, w: 0.7, label: `displacement ${d.strength.toFixed(1)}×ATR`, index: d.index });
   for (const e of pat.wyckoff) if ((e.kind === 'SOS' || e.kind === 'SOW') && recent(e.index)) breaks.push({ dir: e.dir, w: 0.6, label: e.kind, index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, family: 'wyckoff' });
-  for (const p of pat.chart) if (p.status === 'confirmed' && p.breakIndex != null && recent(p.breakIndex)) breaks.push({ dir: p.dir, w: 0.6, label: `${p.kind} break`, index: p.breakIndex, confirmedIndex: p.confirmedIndex ?? p.breakIndex });
+  for (const p of pat.chart) if (p.status === 'confirmed' && p.breakIndex != null && recent(p.breakIndex)) breaks.push({ dir: p.dir, w: 0.6, label: `${p.kind} break`, index: p.breakIndex, confirmedIndex: p.breakIndex });
   for (const b of breaks) add('break', b.dir, O.weights.break * b.w, b.label, { index: b.index, confirmedIndex: b.confirmedIndex, family: b.family, kind: 'fact' });
 
   // --- liquidity: confirmed sweeps, springs/upthrusts (same group: both describe a stop run + reversal)
@@ -85,7 +85,7 @@ export function analyzeEvidence(input, opts = {}) {
 
   // --- location: premium/discount (mean-reversion flavoured, deliberately weak)
   const pd = lv.premiumDiscount;
-  if (pd) add('location', pd.zone === 'premium' ? -1 : pd.zone === 'discount' ? 1 : 0, O.weights.location, `price in ${pd.zone} of the latest swing range (${(pd.position * 100).toFixed(0)}%)`, { top: pd.top, bottom: pd.bottom, confirmedIndex: pd.confirmedIndex });
+  if (pd) add('location', pd.zone === 'premium' ? -1 : pd.zone === 'discount' ? 1 : 0, O.weights.location, `price in ${pd.zone} of the latest swing range (${(pd.position * 100).toFixed(0)}%)`, { index: last, confirmedIndex: last, rangeConfirmedIndex: pd.confirmedIndex, top: pd.top, bottom: pd.bottom });
   else missing.push('premium-discount');
 
   // --- live zones near price: demand-like below/at price support, supply-like above/at price oppose
@@ -113,7 +113,7 @@ export function analyzeEvidence(input, opts = {}) {
   // --- level reaction: price just beyond a strong S/R zone with role flip
   if (a != null) {
     const srNear = lv.sr.filter((z) => z.status === 'active' && Math.abs(price - z.level) <= O.nearAtr * a).sort((x, y) => y.score - x.score)[0];
-    if (srNear) add('level', srNear.role === 'support' ? 1 : -1, O.weights.level, `at ${srNear.role} (×${srNear.touches}${srNear.flips ? ', flipped' : ''})`, { index: srNear.createdIndex, confirmedIndex: srNear.confirmedIndex ?? srNear.createdIndex, price: srNear.level, top: srNear.level, bottom: srNear.level, kind: 'fact' });
+    if (srNear) add('level', srNear.role === 'support' ? 1 : -1, O.weights.level, `at ${srNear.role} (×${srNear.touches}${srNear.flips ? ', flipped' : ''})`, { index: last, confirmedIndex: last, levelCreatedIndex: srNear.createdIndex, levelConfirmedIndex: srNear.confirmedIndex ?? srNear.createdIndex, price: srNear.level, top: srNear.level, bottom: srNear.level, kind: 'fact' });
   }
 
   // --- trend: EMA alignment (one item)

@@ -161,7 +161,7 @@ export function detectTradingRanges(candles = [], { lookback = 20, maxRangeAtr =
     const window = candles.slice(i - lookback, i);
     const high = Math.max(...window.map((bar) => bar.high)), low = Math.min(...window.map((bar) => bar.low));
     if (high - low > maxRangeAtr * a) continue;
-    active = { high, low, startIndex: i - lookback, confirmedIndex: i - 1, endIndex: null, status: 'active' };
+    active = { high, low, startIndex: i - lookback, confirmedIndex: i, endIndex: null, status: 'active' };
     ranges.push({ ...active });
     events.push({ type: 'range-established', dir: 0, index: active.startIndex, confirmedIndex: active.confirmedIndex, level: high, range: { ...active }, label: 'trading range established' });
     const body = Math.abs(c.close - c.open);
