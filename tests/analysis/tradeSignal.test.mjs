@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { buildTradeSignal, TRADE_SIGNAL_TFS, PROFILE_LIST, PROFILES, ALL_GRANULARITIES } from '../../src/analysis/tradeSignal.js';
+import { buildTradeSignal, buildTradeSignalEvidenceSnapshot, TRADE_SIGNAL_TFS, PROFILE_LIST, PROFILES, ALL_GRANULARITIES } from '../../src/analysis/tradeSignal.js';
 import { analyzeEvidence } from '../../src/analysis/evidence.js';
 
 // Synthetic data only: these tests check the composition rules, not market behaviour.
@@ -106,4 +106,17 @@ test('signal snapshots carry event and confirmation timestamps', () => {
     assert.ok(Number.isFinite(s.confirmedAt));
     assert.ok(s.evidenceSnapshot.every((item) => 'occurredAt' in item && 'confirmedAt' in item));
   }
+});
+
+test('frozen evidence snapshots preserve inducement marker order, indices and timestamps', () => {
+  const candles = Array.from({ length: 12 }, (_, i) => K(100, 101, 99, 100, i, 60));
+  const event = { direction: 1, level: 99, protectedLevel: 95, state: 'confirmed', minorPivot: { index: 5, confirmedIndex: 7 }, sweepIndex: 8, displacementStartIndex: 9, displacementIndex: 10, protectedPivot: { index: 2, confirmedIndex: 4 } };
+  const evidence = { candles, items: [], facts: { inducements: [event] } };
+  const snapshot = buildTradeSignalEvidenceSnapshot(evidence, 60);
+  const markers = snapshot.filter((item) => item.snapshotKind === 'inducement');
+  assert.deepEqual(markers.map((item) => item.sequenceNumber), [1, 2, 3, 4]);
+  assert.deepEqual(markers.map((item) => item.index), [5, 8, 9, 2]);
+  assert.deepEqual(markers.map((item) => item.confirmedIndex), [7, 8, 10, 4]);
+  assert.deepEqual(markers.map((item) => item.occurredAt), [candles[5].epoch, candles[8].epoch, candles[9].epoch, candles[2].epoch]);
+  assert.deepEqual(buildTradeSignalEvidenceSnapshot(evidence, 60), snapshot, 'later chart data cannot mutate the stored snapshot');
 });

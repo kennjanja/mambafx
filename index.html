@@ -28613,13 +28613,17 @@ function tfEvidenceMarks(ev, arr, start, count, xAt, y, top, bottom){
   let s = "";
   const used = {};
   tfEvidenceNumbered(ev).forEach(({ it, n }) => {
-    if (!n || it.index < start || it.index >= start + count) return;
-    const c = arr[it.index]; if (!c) return;
-    const cx = xAt(it.index);
+    if (!n) return;
+    const timedIndex = Number.isFinite(it.occurredAt) ? arr.findIndex((c) => c.epoch === it.occurredAt) : -1;
+    const index = timedIndex >= 0 ? timedIndex : it.index;
+    if (!Number.isInteger(index) || index < start || index >= start + count) return;
+    const c = arr[index]; if (!c) return;
+    const cx = xAt(index);
     const below = it.dir !== -1;
-    let cy = below ? y(c.low) + 9 : y(c.high) - 9;
-    used[it.index] = (used[it.index] || 0) + 1;
-    cy += (below ? 1 : -1) * (used[it.index] - 1) * 12;
+    const anchorY = Number.isFinite(it.price) ? y(it.price) : (below ? y(c.low) : y(c.high));
+    let cy = Number.isFinite(it.price) ? anchorY : (below ? anchorY + 9 : anchorY - 9);
+    used[index] = (used[index] || 0) + 1;
+    cy += (below ? 1 : -1) * (used[index] - 1) * 12;
     cy = Math.max(top + 5, Math.min(bottom - 3, cy));
     s += `<line x1="${cx.toFixed(1)}" y1="${(below ? y(c.low) : y(c.high)).toFixed(1)}" x2="${cx.toFixed(1)}" y2="${cy.toFixed(1)}" stroke="#3b82f6" stroke-width="0.8" opacity="0.8"/>`
        + `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="5" fill="rgba(59,130,246,0.28)" stroke="#3b82f6" stroke-width="1.2" class="ev-mark"><title>${String(it.label).replace(/[<&>]/g, "")} [${it.group}]</title></circle>`
@@ -28930,10 +28934,14 @@ function drawTfCandles(g){
   // Evidence highlight (blue): numbered markers on the bars that produced each piece of evidence
   const evOn = want("pa-evid") && !!window.MFXEngine;
   const evData = evOn ? tfEvidence(g) : null;
-  if (evData && evData.sufficient && evData.dropped === 0){
-    out += tfEvidenceMarks(evData, arr, start, count, xAt, y, padT, H - padB);
+  const focus = window.__tsFocus;
+  const focusedEvidence = focus && focus.symbol === SYMBOL && focus.entryG === g;
+  const markerEvidence = evData && focusedEvidence ? { ...evData, items: Array.isArray(focus.evidenceSnapshot) ? focus.evidenceSnapshot : [], sufficient: true, dropped: 0,
+    verdict: focus.entryEvidence?.verdict || evData.verdict, balance: Number.isFinite(focus.entryEvidence?.balance) ? focus.entryEvidence.balance : evData.balance } : evData;
+  if (markerEvidence && markerEvidence.sufficient && markerEvidence.dropped === 0){
+    out += tfEvidenceMarks(markerEvidence, arr, start, count, xAt, y, padT, H - padB);
   }
-  tfRenderEvidencePanel(g, evOn, evData);
+  tfRenderEvidencePanel(g, evOn, markerEvidence);
 
   // current price dashed line
   const lastC = arr[arr.length-1];
@@ -33839,7 +33847,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=32"></script>
-<script type="module" src="src/analysis/tradeSignalPage.js?v=11"></script>
+<script type="module" src="src/analysis/tradeSignalPage.js?v=13"></script>
 <script type="module" src="src/analysis/predictionHistoryPage.js?v=5"></script>
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/analysis/sosSowPage.js?v=3"></script>

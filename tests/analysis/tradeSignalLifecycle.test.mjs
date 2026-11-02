@@ -69,8 +69,9 @@ test('lifecycle persists evidence snapshots and invalidates a triggered model be
   const storage = memoryStorage(), registry = createLifecycleRegistry({ storage });
   registry.load();
   const snapshot = [{ sequenceNumber: 1, label: 'pivot' }];
-  registry.update(sig({ evidenceSnapshot: snapshot, inducementEvents: [{ state: 'confirmed' }] }), profile, 100);
+  registry.update(sig({ evidenceSnapshot: snapshot, entry: { verdict: 'bullish-lean', balance: 0.4 }, inducementEvents: [{ state: 'confirmed' }] }), profile, 100);
   assert.deepEqual(registry.get('R_10|scalp').evidenceSnapshot, snapshot);
+  assert.deepEqual(registry.get('R_10|scalp').entry, { verdict: 'bullish-lean', balance: 0.4 });
   const located = sig({ status: 'watching', layers: { location: { status: 'Approaching Location', evidence: [] } }, primaryModel: { model_id: 'F' }, evidenceSnapshot: snapshot });
   registry.update(located, profile, 110);
   assert.equal(registry.get('R_10|scalp').state, 'Trigger Detected');
@@ -79,6 +80,7 @@ test('lifecycle persists evidence snapshots and invalidates a triggered model be
   assert.match(registry.get('R_10|scalp').lifecycleHistory.at(-1).reason, /no longer qualifies/);
   const reloaded = createLifecycleRegistry({ storage }); reloaded.load();
   assert.deepEqual(reloaded.get('R_10|scalp').evidenceSnapshot, snapshot);
+  assert.deepEqual(reloaded.get('R_10|scalp').entry, { verdict: 'bullish-lean', balance: 0.4 });
 });
 
 test('an opposing bias terminalizes an approaching setup', () => {

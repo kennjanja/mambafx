@@ -91,3 +91,13 @@ test('duplicate active records for a market/profile are collapsed while terminal
   const records = [{ id: 'a', symbol: 'R_10', profile: 'scalp', state: 'open' }, { id: 'b', symbol: 'R_10', profile: 'scalp', state: 'open' }, { id: 'c', symbol: 'R_10', profile: 'scalp', state: 'correct' }, { id: 'd', symbol: 'R_10', profile: 'swing', state: 'open' }];
   assert.deepEqual(deduplicateOpenRecords(records).map((record) => record.id), ['a', 'c', 'd']);
 });
+
+test('open outcome records keep their entry evidence, model and references frozen while advancing', () => {
+  const snapshot = [{ sequenceNumber: 1, occurredAt: T0 - 60 }], model = { model_id: 'F', context: 'trend' };
+  const record = openTracked(sig(1, { entry: { verdict: 'bullish-lean', balance: 0.4 }, evidenceSnapshot: snapshot, primaryModel: model, target: { price: 102 }, invalidation: { price: 99 } }), T0);
+  updateTracked(record, { candles: [candle(T0 + 60, 101)], nowSec: T0 + 60 });
+  assert.deepEqual(record.evidenceSnapshot, snapshot);
+  assert.deepEqual(record.entryEvidence, { verdict: 'bullish-lean', balance: 0.4 });
+  assert.deepEqual(record.primaryModel, model);
+  assert.equal(record.target, 102); assert.equal(record.invalidation, 99);
+});

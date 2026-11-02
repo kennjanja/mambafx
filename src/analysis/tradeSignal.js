@@ -62,7 +62,7 @@ export function buildTradeSignal({ symbol, label = symbol, candles = {}, profile
   const bias = analyzeEvidence(get(tfs.bias), { htf, granularity: tfs.bias.g });
   const entry = analyzeEvidence(get(tfs.entry), { htf: [{ tf: tfs.bias.label, g: tfs.bias.g, candles: get(tfs.bias) }, ...htf].filter((h) => h.candles.length >= 60), granularity: tfs.entry.g });
   const families = bias.families || aggregateEvidenceFamilies(bias.items, FAMILY_WEIGHTS).families;
-  const base = { symbol, label, profile: profile.id, profileName: profile.name, holdSec: profile.holdSec, holdLabel: profile.holdLabel, entryG: tfs.entry.g, biasTf: tfs.bias.label, entryTf: tfs.entry.label, bias: summary(bias), entry: summary(entry), familyValues: families, overallBalance: bias.overallBalance ?? bias.balance, dir: 0, status: 'none', detectedAt: Number.isFinite(nowSec) ? nowSec : null, inducementEvents: entry.facts?.inducements || [], evidenceSnapshot: buildSnapshot(entry, tfs.entry.g) };
+  const base = { symbol, label, profile: profile.id, profileName: profile.name, holdSec: profile.holdSec, holdLabel: profile.holdLabel, entryG: tfs.entry.g, biasTf: tfs.bias.label, entryTf: tfs.entry.label, bias: summary(bias), entry: summary(entry), familyValues: families, overallBalance: bias.overallBalance ?? bias.balance, dir: 0, status: 'none', detectedAt: Number.isFinite(nowSec) ? nowSec : null, inducementEvents: entry.facts?.inducements || [], evidenceSnapshot: buildTradeSignalEvidenceSnapshot(entry, tfs.entry.g) };
   const activeInducement = (entry.facts?.inducements || []).find((event) => ['formed', 'swept'].includes(event.state));
   if (activeInducement) base.waitingCondition = activeInducement.state === 'formed' ? 'Waiting for inducement sweep' : 'Waiting for displacement';
   if (!bias.sufficient || !entry.sufficient) {
@@ -127,7 +127,7 @@ export function buildTradeSignal({ symbol, label = symbol, candles = {}, profile
 /** Display precision by magnitude (the feed's own decimals are not known here). */
 export function fmtPrice(p) { const a = Math.abs(p); return p.toFixed(a >= 1000 ? 2 : a >= 100 ? 3 : a >= 1 ? 4 : 5); }
 function summary(e) { return { verdict: e.verdict, balance: e.balance, overallBalance: e.overallBalance ?? e.balance, families: e.families || [] }; }
-function buildSnapshot(evidence, granularity) {
+export function buildTradeSignalEvidenceSnapshot(evidence, granularity) {
   const candles = evidence.candles || [];
   const items = (evidence.items || []).map((item) => ({ ...item,
     occurredAt: item.occurredAt ?? (Number.isInteger(item.index) ? candles[item.index]?.epoch ?? null : null),
