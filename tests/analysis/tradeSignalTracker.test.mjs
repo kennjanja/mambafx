@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { openTracked, updateTracked, progress, summarize, HORIZON_SEC } from '../../src/analysis/tradeSignalTracker.js';
+import { openTracked, updateTracked, progress, summarize, deduplicateOpenRecords, HORIZON_SEC } from '../../src/analysis/tradeSignalTracker.js';
 
 const sig = (dir, o = {}) => ({ status: 'signal', symbol: 'R_100', label: 'V100', dir, action: dir === 1 ? 'BUY' : 'SELL', headline: 'h',
   price: 100, target: { price: dir === 1 ? 102 : 98 }, invalidation: { price: dir === 1 ? 99 : 101 }, ...o });
@@ -84,4 +84,10 @@ test('profile hold time and opposing reversal do not end early', () => {
   assert.equal(r.expiresAt, T0 + 180); assert.equal(r.profile, 'scalp');
   updateTracked(r, { price: 100.5, nowSec: T0 + 60, reversal: { epoch: T0 + 40, label: 'upthrust' } }); assert.equal(r.state, 'open');
   updateTracked(r, { price: 100.5, nowSec: r.expiresAt }); assert.equal(r.state, 'correct');
+});
+
+
+test('duplicate active records for a market/profile are collapsed while terminal history remains', () => {
+  const records = [{ id: 'a', symbol: 'R_10', profile: 'scalp', state: 'open' }, { id: 'b', symbol: 'R_10', profile: 'scalp', state: 'open' }, { id: 'c', symbol: 'R_10', profile: 'scalp', state: 'correct' }, { id: 'd', symbol: 'R_10', profile: 'swing', state: 'open' }];
+  assert.deepEqual(deduplicateOpenRecords(records).map((record) => record.id), ['a', 'c', 'd']);
 });

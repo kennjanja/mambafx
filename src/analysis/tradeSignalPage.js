@@ -2,8 +2,8 @@
 // the setups. Clicking one opens Candle Charts on that market with all evidence highlighted in blue.
 // Uses its own read-only WebSocket (public candle history); it never places orders.
 import { buildTradeSignal, PROFILE_LIST, ALL_GRANULARITIES, fmtPrice } from './tradeSignal.js';
-import { openTracked, updateTracked, progress, summarize } from './tradeSignalTracker.js';
-import { ARCHIVE_KEY, loadArchive, mergeArchiveRecords } from './tradeSignalStorage.js';
+import { openTracked, updateTracked, progress, summarize, deduplicateOpenRecords } from './tradeSignalTracker.js';
+import { predictionHistoryStore } from './tradeSignalStorage.js';
 import { createLifecycleRegistry } from './tradeSignalLifecycle.js';
 
 const TFS = [...new Set([60, ...ALL_GRANULARITIES])].sort((a, b) => a - b).map((g) => ({ g }));
@@ -18,22 +18,26 @@ try { lifecycleRegistry.load(); } catch (error) { lifecycleLoadError = error; }
 let ws = null, running = false, endpointIdx = 0, symMap = {}, scanTimer = null, marketTimer = null;
 let queue = [], cur = null, scanned = 0, total = 0, lastScanAt = null, reqSeq = 7100, status = lifecycleLoadError ? 'lifecycle storage error' : 'idle';
 const pendingExpiryTicks = new Map();
+for (const record of lifecycleRegistry.list()) {
+  const profile = PROFILE_LIST.find((item) => item.id === record.key?.split('|').slice(-1)[0]);
+  const symbol = record.key?.slice(0, record.key.lastIndexOf('|'));
+  if (!profile || !symbol) continue;
+  results.set(record.key, { sig: { symbol, label: labelOf(symbol), profile: profile.id, profileName: record.profileName || profile.name, holdLabel: record.holdLabel || profile.holdLabel, entryG: record.entryG || profile.tfs.entry.g, dir: record.direction || 0, status: record.state === 'Signal Active' ? 'signal' : ['Watching', 'Approaching Location', 'Trigger Detected'].includes(record.state) ? 'watching' : 'none', action: record.action, headline: record.headline || `${labelOf(symbol)}: ${record.state}`, reason: record.reason || '', waitingCondition: record.waitingCondition || '', nearestLevel: record.nearestLevel, bias: record.bias || { balance: record.overallBalance || 0 }, overallBalance: record.overallBalance, familyValues: record.familyValues || [], primaryModel: record.primaryModel, secondaryModels: record.secondaryModels || [], target: record.target, invalidation: record.invalidation, lifecycleState: record.state, lifecycleHistory: record.lifecycleHistory || [] }, at: record.updatedAt || Date.now() });
+}
 // Every signal produced is followed until its predicted window lapses, then marked correct (green tick) or wrong (red X).
 const TRACK_KEY = 'mfx_ts_track_v1', TRACK_MAX = 300;
 let tracked = [];
-try { tracked = JSON.parse(localStorage.getItem(TRACK_KEY) || '[]').filter((r) => r && r.id && r.expiresAt); } catch (_) {}
+try { tracked = deduplicateOpenRecords(JSON.parse(localStorage.getItem(TRACK_KEY) || '[]').filter((r) => r && r.id && r.expiresAt)); } catch (error) { lifecycleLoadError = lifecycleLoadError || error; }
 const saveTracked = () => { try { localStorage.setItem(TRACK_KEY, JSON.stringify(tracked.slice(-TRACK_MAX))); } catch (error) { status = 'storage error: ' + error.message; throw error; } };
 const nowSec = () => Math.floor(Date.now() / 1000);
-// Resolved predictions are archived permanently (separate store, read by the Prediction History page).
-const ARCHIVE_MAX = 5000;
-loadArchive();
+// Resolved predictions use shared IndexedDB persistence; the legacy browser archive remains untouched until migration verification.
+let archiveError = null;
 function archive(recs) {
-  if (!recs.length) return;
-  const a = mergeArchiveRecords(loadArchive(), recs);
-  try { localStorage.setItem(ARCHIVE_KEY, JSON.stringify(a.slice(-ARCHIVE_MAX))); } catch (_) {}
-  window.dispatchEvent(new Event('mfx-prediction-archived'));
+  if (!recs.length) return Promise.resolve();
+  return predictionHistoryStore.add(recs).then(() => { archiveError = null; window.dispatchEvent(new Event('mfx-prediction-archived')); })
+    .catch((error) => { archiveError = error; status = 'Prediction History storage error'; render(); });
 }
-archive(tracked.filter((r) => r.state === 'correct' || r.state === 'wrong'));
+predictionHistoryStore.migrateLegacy().then(() => archive(tracked.filter((r) => r.state === 'correct' || r.state === 'wrong'))).catch((error) => { archiveError = error; status = 'Prediction History storage error'; });
 let uiTimer = null;
 const pending = new Map();     // req_id -> request type and candle granularity
 
@@ -187,9 +191,8 @@ function trackedHtml() {
     const endRule = (x) => x.rule === 'end' || (x.rule === 'hold' && x.hit !== 'wrong');
     const buy = r.dir === 1, cls = r.state === 'correct' ? 'ts-ok' : r.state === 'wrong' ? 'ts-bad' : '';
     const mark = r.state === 'correct' ? '<span class="ts-res ok" title="Correct">&#10003;</span>' : r.state === 'wrong' ? '<span class="ts-res bad" title="Wrong">&#10007;</span>' : `<span class="ts-res run" title="Running">${fmtLeft(r.expiresAt - t)}</span>`;
-    const why = r.state === 'open' ? (r.hit ? (r.hit === 'correct' ? 'target reached, waiting for lapse' : 'invalidated, waiting for lapse') : endRule(r) ? (((r.last - r.entry) * r.dir > 0) ? 'currently ' + (r.dir === 1 ? 'above' : 'below') + ' the entry; only the end of the period counts' : 'currently not ' + (r.dir === 1 ? 'above' : 'below') + ' the entry; only the end of the period counts') + (r.targetHit ? ', target touched' : '') : 'in progress')
+    const why = endRule(r) ? (r.state === 'open' ? (((r.last - r.entry) * r.dir > 0) ? 'currently ' + (r.dir === 1 ? 'above' : 'below') + ' the entry; only the end of the period counts' : 'currently not ' + (r.dir === 1 ? 'above' : 'below') + ' the entry; only the end of the period counts') : r.state === 'correct' ? 'ended ' + (r.dir === 1 ? 'above' : 'below') + ' the entry' : 'ended ' + (r.dir === 1 ? 'at or below' : 'at or above') + ' the entry') + (r.targetHit ? ', target touched (reference only)' : '')
       : r.hit === 'exit' ? 'exited early: ' + esc(r.exitReason || 'opposing reversal')
-      : endRule(r) ? (r.hit === 'wrong' ? 'price went through the entry' : r.state === 'correct' ? 'ended ' + (r.dir === 1 ? 'above' : 'below') + ' the entry' : 'ended ' + (r.dir === 1 ? 'at or below' : 'at or above') + ' the entry') + (r.targetHit ? ', target touched' : '')
       : r.hit === 'correct' ? 'target reached first' : r.hit === 'wrong' ? 'invalidation reached first' : (r.state === 'correct' ? 'lapsed, price moved with the signal' : 'lapsed, price moved against the signal');
     return `<div class="ts-trk ${cls}" data-sym="${esc(r.symbol)}" role="button" tabindex="0" title="Open ${esc(r.label)} in Candle Charts">
       ${mark}<span class="ts-main"><b>${esc(r.label)} · ${esc(r.action)} @ ${fmtPrice(r.entry)} <em class="ts-prof">${esc(r.profileName || 'Intraday')} · hold ${esc(r.holdLabel || '30 min')}</em></b>
@@ -228,6 +231,7 @@ function render() {
   const el = $('tsList'); if (!el) return;
   const all = [...results.values()].map((r) => r.sig);
   if (lifecycleLoadError) status = 'lifecycle storage error';
+  if (archiveError) status = 'Prediction History storage error';
   const live = all.filter((s) => s.status === 'signal').sort((a, b) => Math.abs(b.bias.balance) - Math.abs(a.bias.balance));
   const watch = all.filter((s) => s.status === 'watching').sort((a, b) => Math.abs(b.bias.balance) - Math.abs(a.bias.balance));
   const wait = all.filter((s) => s.status === 'wait');

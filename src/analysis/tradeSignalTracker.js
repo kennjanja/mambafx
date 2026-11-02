@@ -26,6 +26,17 @@ export function openTracked(sig, nowSec) {
   };
 }
 
+export function deduplicateOpenRecords(records = []) {
+  const output = [], active = new Set();
+  for (const record of records) {
+    if (!record || record.state !== 'open') { if (record) output.push(record); continue; }
+    const key = `${record.symbol}|${record.profile || 'intraday'}`;
+    if (active.has(key)) continue;
+    active.add(key); output.push(record);
+  }
+  return output;
+}
+
 function validCandle(c) {
   return c && Number.isFinite(c.epoch) && Number.isFinite(c.open) && Number.isFinite(c.high) && Number.isFinite(c.low) && Number.isFinite(c.close)
     && c.high >= Math.max(c.open, c.close) && c.low <= Math.min(c.open, c.close) && c.high >= c.low;

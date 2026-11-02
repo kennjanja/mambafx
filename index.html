@@ -824,7 +824,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
 </div>
 <div id="page-predhistory" class="page">
   <h2 style="margin:0 0 4px">Prediction History</h2>
-  <p class="ts-note">Prediction History keeps resolved records and preserves legacy outcomes. New records use end-of-period scoring with post-entry 1-minute candles or expiry ticks; missing expiry data remains unresolved. Legacy records are tagged legacy-scan-sample and are never re-resolved. The current archive is stored in this browser (mfx_ts_archive_v1) and is not synchronized to a server.</p>
+  <p class="ts-note">Prediction History keeps resolved records and preserves legacy outcomes. New records use end-of-period scoring with post-entry 1-minute candles or expiry ticks; missing expiry data remains unresolved. Legacy records are tagged legacy-scan-sample and are never re-resolved. The current archive is stored in this browser's IndexedDB and is not synchronized to a server.</p>
   <div class="ts-bar"><select id="phMarket"><option value="">All markets</option></select><select id="phResult"><option value="">All results</option><option value="correct">Correct</option><option value="wrong">Wrong</option></select><button id="phCsv">Export CSV</button><button id="phClear">Clear</button><span id="phSummary"></span></div>
   <div id="phList"></div>
 </div>
@@ -835,7 +835,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       <b>Three layers:</b> Directional Bias uses the existing balance and higher-timeframe conflict cap; Location Gate requires context-aligned support/resistance or a nearby zone; Entry Confirmation requires an ordered model sequence. A missing layer is named in the setup status. Premium/discount alone is never an entry trigger.<br>
       <b>Evidence families:</b> Structure (structure and breaks), Liquidity, Momentum (candle and trend), Location (premium/discount and levels), Zones, Wyckoff, and Higher-timeframe context. Each family contributes at most its strongest bullish value minus strongest bearish value once. Provisional heuristic family weights are Structure 1.50, Liquidity 1.25, Momentum 1.25, Location 0.75, Zones 1.00, Wyckoff 0.75, HTF 0.75. They are untuned, not probabilities or win rates; volume/VWAP/profile remain chart proxies.<br>
       <b>Lifecycle and models:</b> setups move through No Setup, Bias Identified, Watching, Approaching Location, Trigger Detected, Signal Active, and Closed; terminal states include Invalidated Before Entry, Expired Without Entry, Opposed, and Insufficient Data. Watching windows are 15m / 2h / 6h by profile. Model compositions reuse the shared detectors: A Liquidity Sweep Reversal (swing by default, also range/dealing-range contexts), B Order Block Continuation, G BOS Pullback Continuation, C FVG Continuation, F Inducement Sweep Continuation, D Breaker Block Reversal, and J Wyckoff SOS/SOW Continuation. When several qualify, priority is confirming event count, nearest invalidation, then model ID; other qualifiers are secondary. No model is calibrated or market-tuned.<br>
-      <b>Outcome and history:</b> only the expiry price decides: BUY correct iff expiry is above entry, SELL correct iff below; a tie loses. Targets/invalidation are informational. Post-entry 1m closes or a nearby expiry tick are used; missing/ambiguous expiry data is left unresolved, never fabricated. Existing archived outcomes remain unchanged and use legacy-scan-sample migration. Prediction History currently uses this browser's mfx_ts_archive_v1 store; this repository has no shared Prediction History server API.<br>
+      <b>Outcome and history:</b> only the expiry price decides: BUY correct iff expiry is above entry, SELL correct iff below; a tie loses. Targets/invalidation are informational. Post-entry 1m closes or a nearby expiry tick are used; missing/ambiguous expiry data is left unresolved, never fabricated. Existing archived outcomes remain unchanged and use legacy-scan-sample migration. Prediction History is stored in this browser's IndexedDB; the legacy mfx_ts_archive_v1 records are copied idempotently and retained as a recovery source.<br>
       <b>Limitations:</b> these are rule-based descriptions with provisional heuristic weights, not a forecast, trading advice, profitability claim, or statistical validation. No backtest or live-Deriv validation was performed; tests use synthetic candles only.</div>
     <div class="ts-bar"><span id="tsStatus">idle</span><button id="tsRescan" type="button">Rescan now</button></div>
     <div id="tsList"></div>
@@ -33838,7 +33838,7 @@ try {
 
 <script type="module" src="src/bazu/page.js?v=32"></script>
 <script type="module" src="src/analysis/tradeSignalPage.js?v=8"></script>
-<script type="module" src="src/analysis/predictionHistoryPage.js?v=4"></script>
+<script type="module" src="src/analysis/predictionHistoryPage.js?v=5"></script>
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/analysis/sosSowPage.js?v=3"></script>
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
