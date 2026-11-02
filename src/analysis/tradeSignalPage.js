@@ -4,7 +4,7 @@
 import { buildTradeSignal, PROFILE_LIST, ALL_GRANULARITIES, fmtPrice } from './tradeSignal.js';
 import { openTracked, updateTracked, progress, summarize } from './tradeSignalTracker.js';
 import { ARCHIVE_KEY, loadArchive, mergeArchiveRecords } from './tradeSignalStorage.js';
-import { transitionLifecycle, WATCHING_EXPIRY_SEC, TERMINAL_STATES } from './tradeSignalArchitecture.js';
+import { createLifecycleRegistry } from './tradeSignalLifecycle.js';
 
 const TFS = [...new Set([60, ...ALL_GRANULARITIES])].sort((a, b) => a - b).map((g) => ({ g }));
 const COUNT = 300, MARKET_TIMEOUT_MS = 12000, RESCAN_MS = 60000;
@@ -12,18 +12,17 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 const results = new Map();     // symbol/profile -> { sig, at }
-const LIFECYCLE_KEY = 'mfx_ts_lifecycle_v1';
-const lifecycleByKey = new Map();
-try { for (const [k, v] of Object.entries(JSON.parse(localStorage.getItem(LIFECYCLE_KEY) || '{}'))) lifecycleByKey.set(k, v); } catch (_) {}
+const lifecycleRegistry = createLifecycleRegistry();
+let lifecycleLoadError = null;
+try { lifecycleRegistry.load(); } catch (error) { lifecycleLoadError = error; }
 let ws = null, running = false, endpointIdx = 0, symMap = {}, scanTimer = null, marketTimer = null;
-let queue = [], cur = null, scanned = 0, total = 0, lastScanAt = null, reqSeq = 7100, status = 'idle';
+let queue = [], cur = null, scanned = 0, total = 0, lastScanAt = null, reqSeq = 7100, status = lifecycleLoadError ? 'lifecycle storage error' : 'idle';
 const pendingExpiryTicks = new Map();
 // Every signal produced is followed until its predicted window lapses, then marked correct (green tick) or wrong (red X).
 const TRACK_KEY = 'mfx_ts_track_v1', TRACK_MAX = 300;
 let tracked = [];
 try { tracked = JSON.parse(localStorage.getItem(TRACK_KEY) || '[]').filter((r) => r && r.id && r.expiresAt); } catch (_) {}
-const saveTracked = () => { try { localStorage.setItem(TRACK_KEY, JSON.stringify(tracked.slice(-TRACK_MAX))); } catch (_) {} };
-const saveLifecycle = () => { try { localStorage.setItem(LIFECYCLE_KEY, JSON.stringify(Object.fromEntries(lifecycleByKey))); } catch (_) {} };
+const saveTracked = () => { try { localStorage.setItem(TRACK_KEY, JSON.stringify(tracked.slice(-TRACK_MAX))); } catch (error) { status = 'storage error: ' + error.message; throw error; } };
 const nowSec = () => Math.floor(Date.now() / 1000);
 // Resolved predictions are archived permanently (separate store, read by the Prediction History page).
 const ARCHIVE_MAX = 5000;
@@ -126,45 +125,14 @@ function finishMarket() {
 }
 
 function updateLifecycle(sig, profile, at) {
-  const key = sig.symbol + '|' + profile.id;
-  let lifecycle = lifecycleByKey.get(key) || { state: 'No Setup', lifecycleHistory: [], watchingSince: null };
-  if (TERMINAL_STATES.includes(lifecycle.state) && sig.status === 'signal') lifecycle = { state: 'No Setup', lifecycleHistory: [], watchingSince: null };
-  const hasBias = sig.dir === 1 || sig.dir === -1;
-  const hasLocation = !!(sig.layers && sig.layers.location.status === 'Approaching Location');
-  const hasModel = !!sig.primaryModel;
-  const move = (next, reason) => { if (lifecycle.state !== next && !TERMINAL_STATES.includes(lifecycle.state)) transitionLifecycle(lifecycle, next, at, reason || sig.reason || sig.headline || ''); };
-  if (lifecycle.state === 'No Setup') {
-    if (sig.status === 'insufficient') move('Insufficient Data', sig.reason);
-    else if (hasBias) move('Bias Identified', 'directional context established');
+  if (lifecycleLoadError) {
+    sig.lifecycleState = 'Insufficient Data';
+    sig.waitingCondition = 'lifecycle storage unavailable; existing setup state was not overwritten';
+    status = 'lifecycle storage error';
+    return;
   }
-  if (lifecycle.state === 'Bias Identified') {
-    if (sig.status === 'wait') move('Opposed', sig.reason);
-    else if (hasBias) move('Watching', 'awaiting context-aligned location and entry model');
-  }
-  if (lifecycle.state === 'Watching') {
-    if (sig.status === 'wait') move('Opposed', sig.reason);
-    else if (hasLocation) move('Approaching Location', 'price is interacting with a qualifying location');
-  }
-  if (lifecycle.state === 'Approaching Location') {
-    if (!hasLocation) move('Watching', 'location condition no longer qualifies');
-    else if (hasModel) move('Trigger Detected', 'ordered entry model confirmed');
-  }
-  if (lifecycle.state === 'Trigger Detected') {
-    if (sig.status === 'signal') move('Signal Active', 'all three analysis layers agree');
-    else if (sig.reversal) move('Invalidated Before Entry', 'opposing reversal appeared before signal activation');
-  }
-  if (lifecycle.state === 'Watching' && lifecycle.watchingSince == null) lifecycle.watchingSince = at;
-  if (['Watching', 'Approaching Location'].includes(lifecycle.state) && lifecycle.watchingSince == null) lifecycle.watchingSince = at;
-  if (['Watching', 'Approaching Location'].includes(lifecycle.state) && at - lifecycle.watchingSince >= WATCHING_EXPIRY_SEC[profile.id]) {
-    transitionLifecycle(lifecycle, 'Expired Without Entry', at, 'profile watching window elapsed without entry confirmation');
-  }
-  lifecycleByKey.set(key, lifecycle);
-  saveLifecycle();
-  sig.lifecycleState = lifecycle.state;
-  sig.lifecycleHistory = lifecycle.lifecycleHistory;
-  sig.waitingCondition = sig.reason || (lifecycle.state === 'Signal Active' ? 'holding until the profile period ends' : '');
-  const loc = sig.layers?.location?.evidence?.[0];
-  sig.nearestLevel = loc?.price ?? loc?.level ?? null;
+  try { lifecycleRegistry.update(sig, profile, at); }
+  catch (error) { status = 'lifecycle storage error: ' + error.message; sig.waitingCondition = 'could not persist lifecycle state'; }
 }
 
 function track(sym, sig, resolutionCandles) {
@@ -175,22 +143,20 @@ function track(sym, sig, resolutionCandles) {
     updateTracked(open, { candles: resolutionCandles, nowSec: t });
     if (open.state !== 'open') {
       const key = sym + '|' + pid;
-      const lifecycle = lifecycleByKey.get(key);
-      if (lifecycle && lifecycle.state === 'Signal Active') {
-        transitionLifecycle(lifecycle, 'Closed', open.resolvedAt || t, 'end-of-period outcome resolved');
-        open.lifecycleState = lifecycle.state;
-        open.lifecycleHistory = lifecycle.lifecycleHistory;
-        saveLifecycle();
-      }
+      try {
+        const lifecycle = lifecycleRegistry.close(key, open.resolvedAt || t);
+        if (lifecycle) { open.lifecycleState = lifecycle.state; open.lifecycleHistory = lifecycle.lifecycleHistory; }
+      } catch (error) { status = 'lifecycle storage error: ' + error.message; }
       archive([open]);
     }
   }
-  if (!tracked.some(mine)) {
+  const lifecycle = lifecycleRegistry.get(sym + '|' + pid);
+  if (!tracked.some(mine) && (!lifecycle || lifecycle.state === 'Signal Active')) {
     const entryAt = Number.isFinite(sig.entryAt) ? sig.entryAt : Number.isFinite(sig.detectedAt) ? sig.detectedAt : t;
     const rec = openTracked(sig, entryAt);
     if (rec) tracked.push(rec);
   }
-  saveTracked();
+  try { saveTracked(); } catch (_) {}
 }
 function requestExpiredTicks() {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
@@ -261,6 +227,7 @@ function row(sig) {
 function render() {
   const el = $('tsList'); if (!el) return;
   const all = [...results.values()].map((r) => r.sig);
+  if (lifecycleLoadError) status = 'lifecycle storage error';
   const live = all.filter((s) => s.status === 'signal').sort((a, b) => Math.abs(b.bias.balance) - Math.abs(a.bias.balance));
   const watch = all.filter((s) => s.status === 'watching').sort((a, b) => Math.abs(b.bias.balance) - Math.abs(a.bias.balance));
   const wait = all.filter((s) => s.status === 'wait');
@@ -274,6 +241,7 @@ function render() {
 }
 
 export function tsStart() {
+  if (lifecycleLoadError) status = 'lifecycle storage error: ' + lifecycleLoadError.message;
   if (running) { render(); return; }
   running = true; status = 'connecting'; render();
   clearInterval(uiTimer); uiTimer = setInterval(tickUi, 1000);
