@@ -253,6 +253,10 @@ footer{text-align:center;color:var(--muted);font-size:11px;margin-top:22px;line-
 #page-tradesignal .ts-buy .ts-badge{color:var(--up)}#page-tradesignal .ts-sell .ts-badge{color:var(--down)}#page-tradesignal .ts-wait .ts-badge{color:#ffc44d}
 #page-tradesignal .ts-main{flex:1;display:flex;flex-direction:column;gap:3px;font-size:13px}
 #page-tradesignal .ts-sub{font-size:11px;color:var(--muted);font-weight:400}
+#page-tradesignal .ts-current-good{color:#b4cf35;font-weight:700}
+#page-tradesignal .ts-current-bad{color:#ff3b9d;font-weight:700}
+#page-tradesignal .ts-trade-btn{margin-top:5px;padding:5px 9px;border:1px solid #41506a;border-radius:6px;background:#172235;color:var(--text);cursor:pointer}
+#page-tradesignal .ts-trade-btn:disabled{opacity:.55;cursor:not-allowed}
 #page-tradesignal .ts-go{font-size:11px;color:#60a5fa;white-space:nowrap}
 #page-tradesignal .ts-h{margin:14px 0 6px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
 #page-tradesignal .ts-empty{padding:18px;color:var(--muted);font-size:13px;border:1px dashed var(--line);border-radius:10px;margin-bottom:8px}
@@ -818,7 +822,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
 </div>
   <div id="page-beastmode" class="page">
   <h2 style="margin:0 0 4px">Beast Mode Signal</h2>
-  <p class="ts-note">A Beast Mode record requires aligned Bazu and Trade Signal direction on the same market. It keeps its existing scoring rule (exit versus entry; a tie loses). Trade Signal is read-only analysis; neither component places an order here. Results are descriptive and not a validated edge or Deriv settlement.</p>
+  <p class="ts-note">A Beast Mode record requires aligned Bazu and Trade Signal direction on the same market. It keeps its existing scoring rule (exit versus entry; a tie loses). Beast Mode remains read-only and does not use the separate Trade Signal execution panel. Results are descriptive and not a validated edge or Deriv settlement.</p>
   <div class="ts-bar"><span id="bmStatus">starting…</span><button id="bmCsv">Export CSV</button><button id="bmClear">Clear history</button></div>
   <div id="bmList"></div>
 </div>
@@ -830,7 +834,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
 </div>
 <div id="page-tradesignal" class="page">
     <div class="ts-note"><b>How Trade Signal works</b><br>
-      <b>Read-only data:</b> the page reads public Deriv candle and tick history; it does not connect to a trading account, place orders, or call Bazu execution. Profiles remain fixed: Scalp 15m bias / 3m entry / 30m+1h context / 3m hold; Intraday 30m / 5m / 1h+4h / 30m; Swing 1h / 15m / 4h / 1h.<br>
+      <b>Signal analysis:</b> the page reads public Deriv candle and tick history. Trade Signal analysis remains read-only; the optional execution panel below can place Rise/Fall contracts through your connected Trading Grid account. Profiles remain fixed: Scalp 15m bias / 3m entry / 30m+1h context / 3m hold; Intraday 30m / 5m / 1h+4h / 30m; Swing 1h / 15m / 4h / 1h.<br>
       <b>No lookahead:</b> closed candles only; swings become available only after their right-side confirmation bars, and events carry occurredAt and confirmedAt. At signal open, price levels, event evidence, family values, model, and lifecycle history are frozen. Candle Charts uses that stored evidence snapshot for Trade Signal focus. The entry-time 1m candle is excluded from outcomes.<br>
       <b>Three layers:</b> Directional Bias uses the existing balance and higher-timeframe conflict cap; Location Gate requires context-aligned support/resistance or a nearby zone; Entry Confirmation requires an ordered model sequence. A missing layer is named in the setup status. Premium/discount alone is never an entry trigger.<br>
       <b>Evidence families:</b> Structure (structure and breaks), Liquidity, Momentum (candle and trend), Location (premium/discount and levels), Zones, Wyckoff, and Higher-timeframe context. Each family contributes at most its strongest bullish value minus strongest bearish value once. Provisional heuristic family weights are Structure 1.50, Liquidity 1.25, Momentum 1.25, Location 0.75, Zones 1.00, Wyckoff 0.75, HTF 0.75. They are untuned, not probabilities or win rates; volume/VWAP/profile remain chart proxies.<br>
@@ -838,6 +842,35 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       <b>Outcome and history:</b> only the expiry price decides: BUY correct iff expiry is above entry, SELL correct iff below; a tie loses. Targets/invalidation are informational. Post-entry 1m closes or a nearby expiry tick are used; missing/ambiguous expiry data is left unresolved, never fabricated. Existing archived outcomes remain unchanged and use legacy-scan-sample migration. Prediction History is stored in this browser's IndexedDB; the legacy mfx_ts_archive_v1 records are copied idempotently and retained as a recovery source.<br>
       <b>Limitations:</b> these are rule-based descriptions with provisional heuristic weights, not a forecast, trading advice, profitability claim, or statistical validation. No backtest or live-Deriv validation was performed; tests use synthetic candles only.</div>
     <div class="ts-bar"><span id="tsStatus">idle</span><button id="tsRescan" type="button">Rescan now</button></div>
+    <section class="tf-card" aria-label="Trade Signal execution bot" style="margin:10px 0;padding:12px">
+      <h3 style="margin:0 0 6px">Trade Signal trading bot</h3>
+      <div class="ts-note" style="margin-bottom:8px"><b>Real-money warning:</b> automatic and manual orders are sent to the selected connected account. Signals are unvalidated and can lose money. Flat uses the base stake; Martingale multiplies after each loss and has no separate step cap. Take-profit and stop-loss pause new entries based on settled bot P/L only; open contracts and concurrent total exposure can exceed the stop-loss before they settle. The bot trades all currently displayed active signals concurrently when enabled, and new active signals as they appear. Volatility indices above 100 are excluded.</div>
+      <div class="ts-bar" style="align-items:flex-end">
+        <label>Account
+          <select id="tsBotAccount"><option value="demo" selected>Demo</option><option value="real">Real</option></select>
+        </label>
+        <button id="tsBotConnect" type="button">Connect selected account</button>
+        <label>Base stake (account currency)
+          <input id="tsBotStake" type="number" min="0.35" step="0.01" value="1.00" style="width:90px">
+        </label>
+        <label>Progression
+          <select id="tsBotProgression"><option value="flat" selected>Flat</option><option value="martingale">Martingale</option></select>
+        </label>
+        <label>Martingale ×
+          <input id="tsBotMultiplier" type="number" min="1" max="10" step="0.1" value="2" style="width:75px">
+        </label>
+        <label>Take profit (account currency)
+          <input id="tsBotTakeProfit" type="number" min="0.01" step="0.01" placeholder="required" style="width:90px">
+        </label>
+        <label>Stop loss (account currency)
+          <input id="tsBotStopLoss" type="number" min="0.01" step="0.01" placeholder="required" style="width:90px">
+        </label>
+        <button id="tsBotStart" type="button">Start automatic</button>
+        <button id="tsBotStop" type="button" disabled>Stop automatic</button>
+        <span id="tsBotStats">Auto off · P/L 0.00 · next stake 1.00</span>
+      </div>
+      <div id="tsBotStatus" class="ts-note" role="status">Automatic execution is off. Connect an account on this page or the Trading Grid before trading.</div>
+    </section>
     <div id="tsList"></div>
   </div>
 
@@ -29385,22 +29418,24 @@ function gridHandleMsg(msg){
 }
 
 // Place a Rise/Fall contract. dir: 1 = CALL (rise), -1 = PUT (fall). source: 'manual'|'auto'
-function gridPlaceTrade(dir, source){
+function gridPlaceTrade(dir, source, options = {}){
   if (!gridWs || gridWs.readyState !== WebSocket.OPEN || !gridAuthed){
     if (source === "manual") alert("Connect and authorize a Deriv token first.");
     return false;
   }
   const openCount = Object.keys(gridOpenContracts).length;
   const maxConc = Math.max(1, parseInt($("gridMaxConc").value || "1", 10));
-  if (openCount >= maxConc){
+  const isTradeSignal = source === "ts-manual" || source === "ts-auto";
+  if (!isTradeSignal && openCount >= maxConc){
     if (source === "manual") alert(`Max open trades (${maxConc}) reached.`);
     return false;
   }
   const strat = gridMultStrat();
-  const stake = Math.max(0.35, gridMult().getNext(strat));
-  gridMult()._strat = strat;
-  const durUnit = $("gridDurUnit").value;
-  const duration = Math.max(1, parseInt($("gridDuration").value || "5", 10));
+  const stake = Math.max(0.35, Number.isFinite(options.stake) ? options.stake : gridMult().getNext(strat));
+  if (!Number.isFinite(options.stake)) gridMult()._strat = strat;
+  const durUnit = options.durationUnit || $("gridDurUnit").value;
+  const duration = Math.max(1, parseInt(options.duration || $("gridDuration").value || "5", 10));
+  const symbol = options.symbol || SYMBOL;
   const contractType = dir === 1 ? "CALL" : "PUT";
   const proposalReqId = ++gridReqId;
 
@@ -29413,12 +29448,12 @@ function gridPlaceTrade(dir, source){
     proposal: 1, req_id: proposalReqId,
     amount: stake, basis: "stake", contract_type: contractType,
     currency: gridCurrency, duration, duration_unit: durUnit,
-    underlying_symbol: SYMBOL,
+    underlying_symbol: symbol,
   };
 
   // pre-insert a pending row so the user sees something immediately
   const row = {
-    id: "pending-" + proposalReqId, dir, source, contractType, isVirtual: !!gridIsVirtual,
+    id: "pending-" + proposalReqId, dir, source, contractType, symbol, profile: options.profile || null, signalKey: options.signalKey || null, isVirtual: !!gridIsVirtual,
     stake, currency: gridCurrency, time: Math.floor(Date.now()/1000),
     entry: null, exit: null, payout: null, pnl: null, status: "pricing…",
   };
@@ -29430,12 +29465,20 @@ function gridPlaceTrade(dir, source){
     if (err){
       const detail = err.details ? ` [${err.details.field || "?"}: ${err.details.message || JSON.stringify(err.details)}]` : "";
       row.status = "rejected: " + (err.message || "error") + detail;
+      if (row.signalKey) window.dispatchEvent(new CustomEvent('mambafx:tradeRejected', { detail:{ source:row.source, signalKey:row.signalKey, error:row.status } }));
       renderGridTrades();
       gridDiag(`<b>Proposal rejected by Deriv.</b> ${err.message || "error"}${detail}<br><br><code>${JSON.stringify(proposalMsg)}</code>`, true);
       return;
     }
     if (!proposal || !proposal.id || proposal.ask_price == null){
       row.status = "rejected: proposal response missing id/ask_price";
+      if (row.signalKey) window.dispatchEvent(new CustomEvent('mambafx:tradeRejected', { detail:{ source:row.source, signalKey:row.signalKey, error:row.status } }));
+      renderGridTrades();
+      return;
+    }
+    if (typeof options.shouldContinue === "function" && !options.shouldContinue()){
+      row.status = "cancelled: automatic trading stopped before purchase";
+      if (row.signalKey) window.dispatchEvent(new CustomEvent('mambafx:tradeRejected', { detail:{ source:row.source, signalKey:row.signalKey, error:row.status } }));
       renderGridTrades();
       return;
     }
@@ -29450,6 +29493,7 @@ function gridPlaceTrade(dir, source){
       if (buyErr){
         const detail = buyErr.details ? ` [${buyErr.details.field || "?"}: ${buyErr.details.message || JSON.stringify(buyErr.details)}]` : "";
         row.status = "rejected: " + (buyErr.message || "error") + detail;
+        if (row.signalKey) window.dispatchEvent(new CustomEvent('mambafx:tradeRejected', { detail:{ source:row.source, signalKey:row.signalKey, error:row.status } }));
         renderGridTrades();
         gridDiag(`<b>Buy rejected by Deriv.</b> ${buyErr.message || "error"}${detail}<br><br><code>${JSON.stringify(buyMsg)}</code>`, true);
         return;
@@ -29464,7 +29508,7 @@ function gridPlaceTrade(dir, source){
       // point — dispatching earlier would use a temporary "pending-N" id
       // that tradeClosed's id would never match.
       window.dispatchEvent(new CustomEvent('mambafx:tradeOpened', {
-        detail: { id: row.id, symbol: SYMBOL, dir: row.dir, contractType: row.contractType, stake: row.stake, time: row.time },
+        detail: { id: row.id, symbol: row.symbol, profile: row.profile, signalKey: row.signalKey, dir: row.dir, contractType: row.contractType, stake: row.stake, time: row.time, source: row.source, isVirtual: row.isVirtual },
       }));
       renderGridTrades();
     };
@@ -29473,6 +29517,61 @@ function gridPlaceTrade(dir, source){
   gridWs.send(JSON.stringify(proposalMsg));
   return true;
 }
+
+function gridVolatilityAbove100(symbol){
+  const text = `${(typeof MARKETS !== "undefined" && MARKETS[symbol]) || ""} ${symbol}`.toUpperCase();
+  if (!text.includes("VOLATILITY") && !/\b(?:1HZ|R_)\d+V?\b/.test(text)) return false;
+  const match = text.match(/VOLATILITY\D*(\d+)|1HZ(\d+)V?\b|R_(\d+)V?\b/);
+  return !!match && Number(match[1] || match[2] || match[3]) > 100;
+}
+
+window.tsBotConnectAccount = async function(type){
+  if (type !== "demo" && type !== "real") return { ok:false, error:"Choose Demo or Real." };
+  if (!gridLoggedIn) return { ok:false, error:"Log in on the Trading Grid page first." };
+  if (!gridAccounts.length){
+    try { await gridLoadAccounts(); }
+    catch(e){ return { ok:false, error:"Could not load accounts: " + (e && e.message || e) }; }
+  }
+  const account = gridAccounts.find(a => (a.is_virtual === 1) === (type === "demo"));
+  if (!account) return { ok:false, error:`No ${type} account is available for this Deriv login.` };
+  if (gridAuthed && gridLoginId === account.account_id && gridIsVirtual === (type === "demo")) return { ok:true, accountId:account.account_id };
+  if (Object.keys(gridOpenContracts).length) return { ok:false, error:"Wait for all connected-account contracts to settle before switching accounts." };
+  if (type === "real" && !confirm("Connect to your REAL Deriv account? Any Trade Signal order will use live money. Continue?")) return { ok:false, error:"Real-account connection cancelled." };
+  const picker = $("gridAcctPick");
+  if (!picker) return { ok:false, error:"Trading Grid account picker is unavailable." };
+  picker.value = account.account_id;
+  if (picker.value !== account.account_id) return { ok:false, error:"Could not select the requested account." };
+  if (gridWs) gridDisconnect();
+  gridConnect();
+  return await new Promise(resolve => {
+    const started = Date.now();
+    const timer = setInterval(() => {
+      if (gridAuthed && gridLoginId === account.account_id && gridIsVirtual === (type === "demo")){
+        clearInterval(timer); resolve({ ok:true, accountId:account.account_id }); return;
+      }
+      if (Date.now() - started > 20000 || !gridLoggedIn){
+        clearInterval(timer); resolve({ ok:false, error:"Timed out connecting to the selected account. Check the Trading Grid connection status." });
+      }
+    }, 250);
+  });
+};
+
+window.tsBotPlaceTrade = function(signal, source, stake, accountType, signalKey){
+  if (!signal || ![-1, 1].includes(signal.dir)) return { ok:false, error:"Signal direction is unavailable." };
+  if (gridVolatilityAbove100(signal.symbol)) return { ok:false, error:"Volatility indices above 100 are disabled for Trade Signal trading." };
+  if (!gridAuthed || !gridWs || gridWs.readyState !== WebSocket.OPEN) return { ok:false, error:"Connect the selected account before trading." };
+  if (gridIsVirtual !== (accountType === "demo")) return { ok:false, error:"The connected account does not match the selected Demo/Real setting." };
+  const holdSec = Number(signal.holdSec);
+  if (!Number.isInteger(holdSec) || holdSec < 1) return { ok:false, error:"The signal hold duration is unavailable." };
+  const durationUnit = holdSec >= 60 && holdSec % 60 === 0 ? "m" : "s";
+  const duration = durationUnit === "m" ? holdSec / 60 : holdSec;
+  const placed = gridPlaceTrade(signal.dir, source, {
+    symbol:signal.symbol, profile:signal.profile, signalKey, stake,
+    duration, durationUnit,
+    shouldContinue:source === "ts-auto" ? () => typeof window.tsBotCanContinueAuto === "function" && window.tsBotCanContinueAuto() : null,
+  });
+  return placed ? { ok:true } : { ok:false, error:"Trade was not submitted; check the Trading Grid connection and open-contract limits." };
+};
 
 // =====================================================================
 // RAW API DIAGNOSTICS — direct, unmodified calls on the connected OTP
@@ -29674,14 +29773,14 @@ function gridUpdateContract(c){
     // listens via window.addEventListener('mambafx:tradeClosed', ...).
     window.dispatchEvent(new CustomEvent('mambafx:tradeClosed', {
       detail: {
-        id, symbol: SYMBOL, contractType: row.contractType, dir: row.dir,
+        id, symbol: row.symbol || SYMBOL, profile: row.profile, signalKey: row.signalKey, contractType: row.contractType, dir: row.dir,
         stake: stk, payout: row.payout, pnl: row.pnl, won,
         entry: row.entry, exit: row.exit, openedAt: row.time, closedAt: Math.floor(Date.now() / 1000),
         source: row.source, isVirtual: row.isVirtual,
       },
     }));
     // Record outcome in the appropriate multiplier
-    if (gridTrades.some(t => t.id === id) && typeof gridMult === 'function')
+    if (gridTrades.some(t => t.id === id) && typeof gridMult === 'function' && !String(row.source || '').startsWith('ts-'))
       gridMult().record(stk, won);
     if (typeof digTrades !== 'undefined' && digTrades.some(t => t.id === id) && typeof digMult === 'function')
       { if (window.UOBOT && window.UOBOT.recordResult && window.UOBOT.recordResult(id, stk, won)) { /* Under 2 / Over 7 bot: own progression */ } else if (window.GAPRES && window.GAPRES.recordResult && window.GAPRES.recordResult(id, stk, won)) { /* digit research order: own progression */ } else if (!(window.LDPE && window.LDPE.stakeCounts) || window.LDPE.stakeCounts(id)) digMult().record(stk, won); }
@@ -33851,7 +33950,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=32"></script>
-<script type="module" src="src/analysis/tradeSignalPage.js?v=15"></script>
+<script type="module" src="src/analysis/tradeSignalPage.js?v=16"></script>
 <script type="module" src="src/analysis/predictionHistoryPage.js?v=5"></script>
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/analysis/sosSowPage.js?v=3"></script>
