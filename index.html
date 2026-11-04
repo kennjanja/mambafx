@@ -818,6 +818,10 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     <label>Max open <input id="ssMax" type="number" min="1" step="1" style="width:55px"></label>
     <label>Duration <input id="ssDur" type="number" min="15" max="86400" step="1" style="width:65px"></label>
     <select id="ssDurUnit"><option value="s">seconds</option><option value="t">ticks</option></select></div>
+  <div class="ts-bar"><label><input type="checkbox" id="ssMg"> <b>Martingale</b></label>
+    <label>Multiplier ×<input id="ssMgMult" type="number" min="1" step="0.1" style="width:60px"></label>
+    <label>Max steps <input id="ssMgSteps" type="number" min="1" max="20" step="1" style="width:55px"></label>
+    <span class="mu">Stake is multiplied after each consecutive loss; resets on a win or after max steps. Stake above is the base stake.</span></div>
   <div class="ts-bar">
     <span id="ssTfs"></span><button id="ssCsv">Export CSV</button><button id="ssClear">Clear log</button></div>
   <div id="ssStatus" class="ts-note"></div>
@@ -33953,7 +33957,7 @@ try {
 <script type="module" src="src/analysis/tradeSignalPage.js?v=18"></script>
 <script type="module" src="src/analysis/predictionHistoryPage.js?v=5"></script>
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
-<script type="module" src="src/analysis/sosSowPage.js?v=8"></script>
+<script type="module" src="src/analysis/sosSowPage.js?v=9"></script>
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>

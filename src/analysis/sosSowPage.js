@@ -20,7 +20,7 @@ let recs = [];
 try { recs = JSON.parse(localStorage.getItem(KEY) || '[]').filter((r) => r && r.id); } catch (_) {}
 for (const r of recs) if (r.state === 'placing') { r.state = 'failed'; r.reason = 'page closed while placing; outcome unknown, check Deriv'; }
 const save = () => { try { localStorage.setItem(KEY, JSON.stringify(recs.slice(-KEEP))); } catch (_) {} };
-let cfg = { stake: 1, maxOpen: 3, tfs: GRANULARITIES.slice(), durValue: 15, durUnit: 's' };
+let cfg = { stake: 1, maxOpen: 3, tfs: GRANULARITIES.slice(), durValue: 15, durUnit: 's', mgOn: false, mgMult: 2, mgSteps: 3 };
 try { cfg = { ...cfg, ...JSON.parse(localStorage.getItem(SET) || '{}') }; } catch (_) {}
 // Deriv Rise/Fall: 1-10 ticks, or at least 15 seconds.
 const DUR_LIMITS = { t: [1, 10], s: [15, 86400] };
@@ -30,6 +30,15 @@ function clampDuration(value, unit) {
 }
 const durText = (n, u) => n + (u === 't' ? (n === 1 ? ' tick' : ' ticks') : 's');
 const curDur = () => clampDuration(cfg.durValue, cfg.durUnit);
+// Martingale: after each consecutive settled loss on this account the stake is multiplied; a win, or more than mgSteps losses in a row, returns it to the base stake.
+function martingaleStake(account) {
+  if (!cfg.mgOn) return { stake: cfg.stake, step: 0 };
+  const settled = recs.filter((x) => x.account === account && (x.state === 'won' || x.state === 'lost')).sort((a, b) => (a.settledAt || 0) - (b.settledAt || 0));
+  let losses = 0;
+  for (let i = settled.length - 1; i >= 0 && settled[i].state === 'lost'; i--) losses++;
+  const step = losses % (Math.max(1, cfg.mgSteps) + 1);
+  return { stake: +(cfg.stake * Math.pow(Math.max(1, cfg.mgMult), step)).toFixed(2), step };
+}
 const saveCfg = () => { try { localStorage.setItem(SET, JSON.stringify(cfg)); } catch (_) {} };
 
 let armed = false, ws = null, endpointIdx = 0, symMap = {}, pollTimer = null, uiTimer = null, running = false, lastSeq = 0;
@@ -144,12 +153,13 @@ async function trade(r) {
   if (!a.connected) { r.state = 'failed'; r.reason = 'no connected Deriv account'; return; }
   if (recs.some((x) => x !== r && x.symbol === r.symbol && (x.state === 'placing' || x.state === 'open'))) { r.state = 'skipped'; r.reason = 'market already has an open trade'; return; }
   if (openN >= cfg.maxOpen) { r.state = 'skipped'; r.reason = 'max open trades reached'; return; }
-  r.state = 'placing'; r.account = a.demo ? 'demo' : 'real'; r.loginId = a.id; r.stake = cfg.stake;
+  r.state = 'placing'; r.account = a.demo ? 'demo' : 'real'; r.loginId = a.id;
+  const mg = martingaleStake(r.account); r.stake = mg.stake; r.mgStep = mg.step;
   const dur = curDur(); r.durValue = dur.value; r.durUnit = dur.unit;
   try {
     watch();
     const sym = symMap[r.symbol] || r.symbol;
-    const prop = await call({ proposal: 1, amount: cfg.stake, basis: 'stake', contract_type: r.contractType, currency: a.ccy, duration: dur.value, duration_unit: dur.unit, underlying_symbol: sym });
+    const prop = await call({ proposal: 1, amount: r.stake, basis: 'stake', contract_type: r.contractType, currency: a.ccy, duration: dur.value, duration_unit: dur.unit, underlying_symbol: sym });
     if (!prop || !prop.id) throw new Error('no proposal id from Deriv');
     const buy = await call({ buy: prop.id, price: prop.ask_price });
     const bought = (buy && buy.buy) || buy;   // the host socket hands back the buy object itself
@@ -184,10 +194,16 @@ function readInputs() {
   cfg.tfs = GRANULARITIES.filter((g) => { const c = $('ssTf' + g); return c ? c.checked : true; });
   const d = clampDuration(($('ssDur') || {}).value, ($('ssDurUnit') || {}).value);
   cfg.durValue = d.value; cfg.durUnit = d.unit;
+  cfg.mgOn = !!(($('ssMg') || {}).checked);
+  const mm = parseFloat(($('ssMgMult') || {}).value), ms = parseInt(($('ssMgSteps') || {}).value, 10);
+  if (Number.isFinite(mm) && mm >= 1) cfg.mgMult = +mm.toFixed(2);
+  if (Number.isFinite(ms) && ms >= 1) cfg.mgSteps = Math.min(ms, 20);
   paintInputs();
   saveCfg();
 }
 function paintInputs() {
+  if ($('ssMg')) $('ssMg').checked = !!cfg.mgOn;
+  if ($('ssMgMult')) $('ssMgMult').value = cfg.mgMult; if ($('ssMgSteps')) $('ssMgSteps').value = cfg.mgSteps;
   if ($('ssStake')) $('ssStake').value = cfg.stake; if ($('ssMax')) $('ssMax').value = cfg.maxOpen;
   const d = curDur(), du = $('ssDur'), dun = $('ssDurUnit');
   if (dun) dun.value = d.unit;
@@ -215,14 +231,14 @@ function arm(on) {
   if (on) {
     readInputs(); const a = acct();
     if (!a.connected) { window.alert('Connect a Deriv account first.'); render(); return; }
-    if (!a.demo && !window.confirm('REAL account ' + (a.id || '') + ': this bot will place REAL-money ' + durText(curDur().value, curDur().unit) + ' trades of ' + cfg.stake + ' ' + a.ccy + ' on every SOS/SOW it sees, with no further prompts. Continue?')) { render(); return; }
+    if (!a.demo && !window.confirm('REAL account ' + (a.id || '') + ': this bot will place REAL-money ' + durText(curDur().value, curDur().unit) + ' trades of ' + cfg.stake + (cfg.mgOn ? ' (Martingale x' + cfg.mgMult + ', up to ' + cfg.mgSteps + ' steps, max stake ' + (cfg.stake * Math.pow(cfg.mgMult, cfg.mgSteps)).toFixed(2) + ')' : '') + ' ' + a.ccy + ' on every SOS/SOW it sees, with no further prompts. Continue?')) { render(); return; }
   }
   armed = on; render();
 }
 
 export function ssStart() { paintInputs(); if (!running) { running = true; clearInterval(pollTimer); pollTimer = setInterval(poll, POLL_MS); } poll(); }
 export function ssLeave() { if (!armed) { running = false; clearInterval(pollTimer); pollTimer = null; } }
-document.addEventListener('change', (e) => { const t = e.target; if (t && t.id === 'ssArm') arm(t.checked); else if (t && /^ss(Stake|Max|Tf|Dur)/.test(t.id || '')) { readInputs(); } });
+document.addEventListener('change', (e) => { const t = e.target; if (t && t.id === 'ssArm') arm(t.checked); else if (t && /^ss(Stake|Max|Tf|Dur|Mg)/.test(t.id || '')) { readInputs(); } });
 document.addEventListener('click', (e) => { const t = e.target; if (t && t.id === 'ssAcctDemo') switchAcct('demo'); if (t && t.id === 'ssAcctReal') switchAcct('real'); if (t && t.id === 'ssCsv') csv(); if (t && t.id === 'ssClear' && window.confirm('Delete the SOS/SOW trade log?')) { recs = recs.filter((r) => r.state === 'open' || r.state === 'placing'); save(); render(); } });
 window.addEventListener('pagehide', () => { armed = false; });
 function csv() {
