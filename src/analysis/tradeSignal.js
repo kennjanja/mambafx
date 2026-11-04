@@ -8,6 +8,7 @@
 // is NOT a forecast, a probability or a profitability claim.
 
 import { analyzeEvidence } from './evidence.js';
+import { computeModelProgress } from './tradeSignalProgress.js';
 import { aggregateEvidenceFamilies, FAMILY_WEIGHTS, evaluateEntryModels, evaluateLayers } from './tradeSignalArchitecture.js';
 
 export const TRADE_SIGNAL_TFS = Object.freeze({
@@ -93,6 +94,7 @@ export function buildTradeSignal({ symbol, label = symbol, candles = {}, profile
   const marketContext = hasWyckoffSequence ? ['trend', 'range'] : ['trend'];
   const evaluatedModels = evaluateEntryModels({ events: modelEvents, biasDirection: dir, entryDirection, marketContext,
     locations: locationEvidence, nearestInvalidationDistance: invalidation ? Math.abs(price - invalidation.price) : Infinity, asOfIndex: entry.candles.length - 1 });
+  base.modelProgress = computeModelProgress({ events: modelEvents, dir, hasLocation: locationEvidence.length > 0, confirmedIds: evaluatedModels.candidates.map((c) => c.model_id) });
   const reversalIndex = reversal ? entry.candles.findIndex((c) => c.epoch === reversal.epoch) : -1;
   const eligible = evaluatedModels.candidates.filter((candidate) => {
     const last = candidate.confirmingEvents[candidate.confirmingEvents.length - 1];

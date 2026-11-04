@@ -122,3 +122,24 @@ test('entry qualification snapshot freezes at Trigger Detected through later sca
   const reloaded = createLifecycleRegistry({ storage }); reloaded.load();
   assert.deepEqual(Object.fromEntries(keys.map((key) => [key, reloaded.get('R_10|scalp')[key]])), frozen);
 });
+
+test('quota failure on persist still leaves the row with its real state, waiting text and nearest level', () => {
+  const storage = { getItem: () => null, setItem: () => { const e = new Error('Setting the value exceeded the quota.'); e.name = 'QuotaExceededError'; throw e; } };
+  const registry = createLifecycleRegistry({ storage }); registry.load();
+  const s = sig({ waitingCondition: 'displacement', nearestLevel: 123.4 });
+  assert.throws(() => registry.update(s, profile, 100), /quota/);
+  assert.equal(s.lifecycleState, 'Watching');
+  assert.equal(s.waitingCondition, 'displacement');
+  assert.equal(s.nearestLevel, 123.4);
+});
+
+test('compact persistence fits a size-limited storage and survives reload', () => {
+  const values = new Map(), limit = 60000;
+  const storage = { getItem: (k) => values.get(k) ?? null, setItem: (k, v) => { if (v.length > limit) throw new Error('quota'); values.set(k, v); } };
+  const registry = createLifecycleRegistry({ storage }); registry.load();
+  const heavy = { evidenceSnapshot: Array.from({ length: 400 }, (_, i) => ({ sequenceNumber: i, label: 'x'.repeat(60) })) };
+  for (let i = 0; i < 12; i++) registry.update(sig({ symbol: 'M' + i, ...heavy }), profile, 100);
+  const reloaded = createLifecycleRegistry({ storage }); reloaded.load();
+  assert.equal(reloaded.list().length, 12);
+  assert.equal(reloaded.get('M3|scalp').state, 'Watching');
+});

@@ -1,8 +1,15 @@
-﻿// Prediction History uses one IndexedDB archive. Browser localStorage is read only as a migration source.
+// Prediction History uses one IndexedDB archive. Browser localStorage is read only as a migration source.
 export const ARCHIVE_KEY = 'mfx_ts_archive_v1';
 export const PREDICTION_HISTORY_DB = 'mfx_prediction_history_v1';
-export const PREDICTION_HISTORY_VERSION = 1;
+// Version 2 adds the lifecycle store; both stores are created together so either module may open the database first.
+export const PREDICTION_HISTORY_VERSION = 2;
 export const PREDICTION_HISTORY_STORE = 'records';
+export const LIFECYCLE_STORE = 'lifecycle';
+
+export function ensureStores(db) {
+  if (!db.objectStoreNames.contains(PREDICTION_HISTORY_STORE)) db.createObjectStore(PREDICTION_HISTORY_STORE, { keyPath: 'storageKey' });
+  if (!db.objectStoreNames.contains(LIFECYCLE_STORE)) db.createObjectStore(LIFECYCLE_STORE, { keyPath: 'key' });
+}
 
 export function migrateLegacyRecord(record) {
   if (!record || typeof record !== 'object') return record;
@@ -78,8 +85,7 @@ export function createPredictionHistoryStore({ indexedDB = globalThis.indexedDB,
     if (!dbPromise) dbPromise = new Promise((resolve, reject) => {
       const request = indexedDB.open(PREDICTION_HISTORY_DB, PREDICTION_HISTORY_VERSION);
       request.onupgradeneeded = () => {
-        const db = request.result;
-        if (!db.objectStoreNames.contains(PREDICTION_HISTORY_STORE)) db.createObjectStore(PREDICTION_HISTORY_STORE, { keyPath: 'storageKey' });
+        ensureStores(request.result);
       };
       request.onsuccess = () => resolve(request.result);
       request.onerror = () => { dbPromise = null; reject(request.error || new Error('Prediction History database open failed')); };

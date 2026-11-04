@@ -4,6 +4,11 @@ import { buildTradeSignal, PROFILE_LIST, ALL_GRANULARITIES, fmtPrice } from './t
 import { openTracked, updateTracked, progress, summarize, deduplicateOpenRecords } from './tradeSignalTracker.js';
 import { predictionHistoryStore } from './tradeSignalStorage.js';
 import { createLifecycleRegistry } from './tradeSignalLifecycle.js';
+import { defaultLifecycleStore } from './tradeSignalLifecycleStore.js';
+import { createFunnel } from './tradeSignalProgress.js';
+const funnel = createFunnel();
+if (typeof window !== 'undefined') window.__tsFunnel = funnel.data;
+if (typeof window !== 'undefined') window.__tsFunnelBySymbol = funnel.bySymbol;
 import { isVolatilityAbove100, nextSignalStake, signalDuration, signalPriceState, signalTradeKey, tradeBotLimitReached, validateTradeBotSettings } from './tradeSignalBot.js';
 
 const TFS = [...new Set([60, ...ALL_GRANULARITIES])].sort((a, b) => a - b).map((g) => ({ g }));
@@ -12,11 +17,15 @@ const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
 const results = new Map();     // symbol/profile -> { sig, at }
-const lifecycleRegistry = createLifecycleRegistry();
-let lifecycleLoadError = null;
-try { lifecycleRegistry.load(); } catch (error) { lifecycleLoadError = error; }
+// Lifecycle state is persisted in IndexedDB. A failure is shown with its cause while the live in-memory state keeps working.
+let lifecycleNotice = '';
+const lifecycleRegistry = createLifecycleRegistry({ store: defaultLifecycleStore(), onPersistChange: (error) => {
+  lifecycleNotice = error ? `lifecycle state not saved - :  (live state kept in memory)` : '';
+  render();
+} });
+let lifecycleLoadError = null;   // tracked-signal storage parse problems only
 let ws = null, running = false, endpointIdx = 0, symMap = {}, scanTimer = null, marketTimer = null;
-let queue = [], cur = null, scanned = 0, total = 0, lastScanAt = null, reqSeq = 7100, status = lifecycleLoadError ? 'lifecycle storage error' : 'idle';
+let queue = [], cur = null, scanned = 0, total = 0, lastScanAt = null, reqSeq = 7100, status = 'idle';
 const pendingExpiryTicks = new Map();
 // Every signal produced is followed until its predicted window lapses, then marked correct (green tick) or wrong (red X).
 const TRACK_KEY = 'mfx_ts_track_v1', TRACK_MAX = 300;
@@ -55,12 +64,22 @@ const isActive = () => ['page-tradesignal', 'page-beastmode'].some((id) => { con
 const markets = () => (typeof MARKETS !== 'undefined' ? Object.keys(MARKETS) : []);
 const labelOf = (s) => (typeof MARKETS !== 'undefined' && MARKETS[s]) || s;
 // restore persisted setups here: labelOf must be initialised first
+function restoreRows() {
 for (const record of lifecycleRegistry.list()) {
   const profile = PROFILE_LIST.find((item) => item.id === record.key?.split('|').slice(-1)[0]);
   const symbol = record.key?.slice(0, record.key.lastIndexOf('|'));
-  if (!profile || !symbol) continue;
+  if (!profile || !symbol || results.has(record.key)) continue;
   results.set(record.key, { sig: { symbol, label: labelOf(symbol), profile: profile.id, profileName: record.profileName || profile.name, holdSec: record.holdSec || profile.holdSec, holdLabel: record.holdLabel || profile.holdLabel, entryG: record.entryG || profile.tfs.entry.g, confirmedAt: record.confirmedAt ?? null, dir: record.direction || 0, status: record.state === 'Signal Active' ? 'signal' : ['Watching', 'Approaching Location', 'Trigger Detected'].includes(record.state) ? 'watching' : 'none', action: record.action, headline: record.headline || `${labelOf(symbol)}: ${record.state}`, reason: record.reason || '', waitingCondition: record.waitingCondition || '', nearestLevel: record.nearestLevel, bias: record.bias || { balance: record.overallBalance || 0 }, entry: record.entry || null, overallBalance: record.overallBalance, familyValues: record.familyValues || [], primaryModel: record.primaryModel, secondaryModels: record.secondaryModels || [], inducementEvents: record.inducementEvents || [], evidenceSnapshot: record.evidenceSnapshot || [], target: record.target, invalidation: record.invalidation, lifecycleState: record.state, lifecycleHistory: record.lifecycleHistory || [] }, at: record.updatedAt || Date.now() });
 }
+}
+// Nothing scans before the stored lifecycle has been read, so a live scan can never be overwritten by older stored state.
+const lifecycleReady = lifecycleRegistry.init()
+  .then(() => { restoreRows(); render(); })
+  .catch((error) => {
+    lifecycleNotice = `lifecycle state could not be loaded from IndexedDB - ${error.name || 'Error'}: ${error.message} (live scans continue, nothing is saved)`;
+    try { lifecycleRegistry.load(); restoreRows(); } catch (_) { /* no readable legacy state either */ }
+    render();
+  });
 
 function send(o) { if (ws && ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(o)); }
 
@@ -96,20 +115,61 @@ function onSymbols(m) {
   scan();
 }
 
-function scan() {
+const scanStats = [];
+if (typeof window !== 'undefined') window.__tsScanStats = scanStats;
+let scanProfiles = null, scanMeta = null, fullPending = false;
+const closePending = new Set();
+function startScan(profiles) {
   if (!running || !ws) return;
+  if (status === 'scanning') { if (profiles) profiles.forEach((id) => closePending.add(id)); else fullPending = true; return; }
   requestExpiredTicks();
+  scanProfiles = profiles || null;
+  scanMeta = { kind: profiles ? 'candle-close' : 'full', profiles: scanProfiles, startedAt: Date.now(), timedOut: [], errors: [] };
   queue = markets().slice(); total = queue.length; scanned = 0; status = 'scanning';
   next();
+}
+function scan() { startScan(null); }
+function runCloseScan() {
+  const ids = new Set(closePending); closePending.clear();
+  if (ids.size) startScan(ids);
+}
+// Rescan a profile as soon as its entry-timeframe candle closes, instead of waiting up to a minute for the cycle.
+const lastBucket = {};
+let closeDueAt = 0;
+function checkCandleClose(t) {
+  if (!running || !ws) return;
+  for (const profile of PROFILE_LIST) {
+    const g = profile.tfs.entry.g, bucket = Math.floor(t / g);
+    if (lastBucket[profile.id] == null) { lastBucket[profile.id] = bucket; continue; }
+    if (bucket !== lastBucket[profile.id] && t - bucket * g >= 2) { lastBucket[profile.id] = bucket; closePending.add(profile.id); }
+  }
+  if (closePending.size && status === 'idle') runCloseScan();
 }
 function next() {
   clearTimeout(marketTimer); pending.clear();
   if (!running) return;
   const sym = queue.shift();
-  if (!sym) { status = 'idle'; lastScanAt = Date.now(); render(); clearTimeout(scanTimer); scanTimer = setTimeout(() => { if (isActive()) scan(); else stop(); }, RESCAN_MS); return; }
+  if (!sym) {
+    status = 'idle'; render();
+    if (scanMeta) {
+      const entry = { kind: scanMeta.kind, profiles: scanMeta.profiles ? [...scanMeta.profiles] : 'all', startedAt: scanMeta.startedAt, durationMs: Date.now() - scanMeta.startedAt, markets: total, timedOut: scanMeta.timedOut, errors: scanMeta.errors };
+      scanStats.push(entry); if (scanStats.length > 200) scanStats.shift(); scanMeta = null;
+    }
+    if (scanProfiles) {
+      scanProfiles = null;
+      if (closePending.size) runCloseScan();
+      else if (fullPending) { fullPending = false; scan(); }
+      return;
+    }
+    lastScanAt = Date.now(); clearTimeout(scanTimer); fullPending = false;
+    scanTimer = setTimeout(() => { if (isActive()) scan(); else stop(); }, RESCAN_MS);
+    if (closePending.size) runCloseScan();
+    return;
+  }
   const monitorOpen = tracked.some((r) => r.symbol === sym && r.state === 'open');
-  const scanTfs = TFS.filter((tf) => tf.g !== 60 || monitorOpen);
-  cur = { sym, candles: {}, tick: null, got: 0, want: scanTfs.length + 1 };
+  const needed = scanProfiles ? new Set([...scanProfiles].flatMap((id) => { const p = PROFILE_LIST.find((x) => x.id === id); return p ? [p.tfs.entry.g, p.tfs.bias.g, ...p.tfs.htf.map((h) => h.g)] : []; })) : null;
+  const scanTfs = TFS.filter((tf) => (tf.g !== 60 || monitorOpen) && (!needed || needed.has(tf.g) || tf.g === 60));
+  cur = { sym, candles: {}, tick: null, got: 0, want: scanTfs.length + 1, startedAt: Date.now() };
   for (const tf of scanTfs) {
     const id = ++reqSeq; pending.set(id, { type: 'candles', g: tf.g });
     send({ ticks_history: symMap[sym] || sym, end: 'latest', count: tf.g === 60 ? 360 : COUNT, style: 'candles', granularity: tf.g, req_id: id });
@@ -131,14 +191,18 @@ function onCandles(id, candles) {
 function finishMarket() {
   clearTimeout(marketTimer);
   if (!cur) return;
-  const { sym, candles, tick } = cur; cur = null;
+  const { sym, candles, tick } = cur;
+  if (scanMeta && cur.got < cur.want) scanMeta.timedOut.push({ symbol: sym, got: cur.got, want: cur.want, afterMs: Date.now() - cur.startedAt });
+  cur = null;
   const scanTime = nowSec();
   for (const profile of PROFILE_LIST) {
+    if (scanProfiles && !scanProfiles.has(profile.id)) continue;
     let sig;
     try { sig = buildTradeSignal({ symbol: sym, label: labelOf(sym), candles, profile, nowSec: scanTime }); }
-    catch (e) { sig = { symbol: sym, label: labelOf(sym), profile: profile.id, profileName: profile.name, status: 'insufficient', dir: 0, reason: 'analysis error: ' + e.message, headline: labelOf(sym) + ': analysis error' }; }
+    catch (e) { if (scanMeta) scanMeta.errors.push({ symbol: sym, profile: profile.id, message: e.message }); sig = { symbol: sym, label: labelOf(sym), profile: profile.id, profileName: profile.name, status: 'insufficient', dir: 0, reason: 'analysis error: ' + e.message, headline: labelOf(sym) + ': analysis error' }; }
     if (tick && Number.isFinite(tick.quote) && tick.quote > 0) { sig.price = tick.quote; sig.entryAt = tick.epoch; sig.detectedAt = scanTime; }
     updateLifecycle(sig, profile, scanTime);
+    funnel.record(profile.id, sig.modelProgress, sym);
     results.set(sym + '|' + profile.id, { sig, at: Date.now() });
     if (tsBotAuto && sig.status === 'signal') tsBotSubmit(sig, 'ts-auto');
     track(sym, sig, candles[60] || []);
@@ -147,14 +211,11 @@ function finishMarket() {
 }
 
 function updateLifecycle(sig, profile, at) {
-  if (lifecycleLoadError) {
-    sig.lifecycleState = 'Insufficient Data';
-    sig.waitingCondition = 'lifecycle storage unavailable; existing setup state was not overwritten';
-    status = 'lifecycle storage error';
-    return;
-  }
   try { lifecycleRegistry.update(sig, profile, at); }
-  catch (error) { status = 'lifecycle storage error: ' + error.message; sig.waitingCondition = 'could not persist lifecycle state'; }
+  catch (error) {
+    lifecycleNotice = `lifecycle state not saved - ${error.name || 'Error'}: ${error.message} (live state kept in memory)`;
+    if (!sig.lifecycleState) sig.lifecycleState = sig.status === 'signal' ? 'Signal Active' : sig.dir ? 'Watching' : 'No Setup';
+  }
 }
 
 function track(sym, sig, resolutionCandles) {
@@ -247,14 +308,20 @@ function tickUi() {
   document.querySelectorAll('#tsList .ts-res.run').forEach((el) => { const row = el.closest('.ts-trk'); const r = tracked.find((x) => x.id === (row.querySelector('i') || {}).dataset?.id); if (r) { const s = Math.max(0, r.expiresAt - t); el.textContent = Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); } });
   // a lapsed record is resolved by the next scan (needs the candles); trigger one promptly
   if (expired && status === 'idle' && ws) scan();
+  checkCandleClose(t);
 }
 
 function row(sig) {
   const buy = sig.dir === 1, cls = sig.status === 'signal' ? (buy ? 'ts-buy' : 'ts-sell') : 'ts-wait';
   const trg = sig.trigger ? ` | trigger ${esc(sig.trigger.kind)}: ${esc(sig.trigger.label)}` : '';
   const inv = sig.invalidation ? ` | invalidation ${fmtPrice(sig.invalidation.price)}` : '';
-  const model = sig.primaryModel ? sig.primaryModel.name : '?';
-  const nearest = sig.nearestLevel != null ? fmtPrice(sig.nearestLevel) : '?';
+  const model = sig.primaryModel ? sig.primaryModel.name : sig.modelProgress?.best ? sig.modelProgress.best.text
+    : sig.status === 'insufficient' ? 'not evaluated (insufficient candle history)'
+    : sig.status === 'wait' ? 'not evaluated (entry timeframe opposes the bias)'
+    : !sig.dir ? 'not evaluated (no bias lean)' : 'not re-evaluated since reload (waiting for next scan)';
+  const waiting = String(sig.waitingCondition || '').replace(/^waiting for\s+/i, '') || 'a model sequence';
+  const nearest = sig.nearestLevel != null ? fmtPrice(sig.nearestLevel) : !sig.dir ? 'n/a (no bias lean)' : 'no qualifying level yet';
+  const targetText = sig.target ? fmtPrice(sig.target.price) : sig.status === 'signal' ? 'no target area identified' : 'set when an entry confirms';
   const familyText = (sig.familyValues || []).map((f) => `${f.family} ${f.value >= 0 ? '+' : ''}${f.value.toFixed(2)}`).join(' | ');
   const tradeKey = signalTradeKey(sig);
   const blocked = isVolatilityAbove100(sig.symbol, sig.label);
@@ -264,7 +331,7 @@ function row(sig) {
   return `<div class="ts-row ${cls}" data-sym="${esc(sig.symbol)}" data-key="${esc(sig.symbol + '|' + sig.profile)}" role="button" tabindex="0" title="Open ${esc(sig.label)} in Candle Charts with the stored evidence highlighted">
     <span class="ts-badge">${sig.status === 'watching' ? 'WAIT' : esc(sig.action || '')}</span>
     <span class="ts-main"><b><em class="ts-prof">${esc(sig.profileName || '')} | ${esc(sig.lifecycleState || 'No Setup')}</em> ${esc(sig.headline)}</b>
-      <span class="ts-sub">direction ${sig.dir === 1 ? 'Bullish' : sig.dir === -1 ? 'Bearish' : '?'} | evidence balance ${sig.overallBalance == null ? '?' : sig.overallBalance.toFixed(2)} | model ${esc(model)} | waiting for ${esc(sig.waitingCondition || '?')} | nearest ${nearest} | target ${sig.target ? fmtPrice(sig.target.price) : '?'}${inv} | hold ${esc(sig.holdLabel || '?')}${trg}</span>
+      <span class="ts-sub">direction ${sig.dir === 1 ? 'Bullish' : sig.dir === -1 ? 'Bearish' : '?'} | evidence balance ${sig.overallBalance == null ? '?' : sig.overallBalance.toFixed(2)} | model ${esc(model)} | waiting for ${esc(waiting)} | nearest ${esc(nearest)} | target ${esc(targetText)}${inv} | hold ${esc(sig.holdLabel || '?')}${trg}</span>
       ${familyText ? `<span class="ts-sub">families: ${esc(familyText)} (heuristic, provisional)</span>` : ''}${tradeButton}</span>
     <span class="ts-go">Open charts</span></div>`;
 }
@@ -388,27 +455,27 @@ async function tsBotConnect() {
 function render() {
   const el = $('tsList'); if (!el) return;
   const all = [...results.values()].map((r) => r.sig);
-  if (lifecycleLoadError) status = 'lifecycle storage error';
+  if (lifecycleLoadError) status = 'tracked-signal storage error';
   if (archiveError) status = 'Prediction History storage error';
   const live = all.filter((s) => s.status === 'signal').sort((a, b) => Math.abs(b.bias.balance) - Math.abs(a.bias.balance));
   const watch = all.filter((s) => s.status === 'watching').sort((a, b) => Math.abs(b.bias.balance) - Math.abs(a.bias.balance));
   const wait = all.filter((s) => s.status === 'wait');
   const rest = all.filter((s) => !['signal', 'watching', 'wait'].includes(s.status));
   const bar = $('tsStatus');
-  if (bar) bar.textContent = `${status === 'scanning' ? `scanning ${scanned}/${total}…` : status}${lastScanAt ? ' · last full scan ' + new Date(lastScanAt).toLocaleTimeString() : ''} · ${live.length} entry signal(s) · ${watch.length} watching for a trigger · ${wait.length} opposed`;
-  el.innerHTML = trackedHtml() + (live.length ? live.map(row).join('') : `<div class="ts-empty">${status === 'scanning' && !all.length ? 'Scanning markets…' : 'No market has an entry trigger right now (pullback or liquidity sweep).'}</div>`)
-    + (watch.length ? `<div class="ts-h">Watching - lean found, waiting for a pullback / swing / liquidity sweep</div>` + watch.map(row).join('') : '')
+  if (bar) bar.textContent = `${status === 'scanning' ? `scanning ${scanned}/${total}…` : status}${lastScanAt ? ' · last full scan ' + new Date(lastScanAt).toLocaleTimeString() : ''} · ${live.length} entry signal(s) · ${watch.length} watching for a trigger · ${wait.length} opposed${lifecycleNotice ? ' · ⚠ ' + lifecycleNotice : ''}`;
+  el.innerHTML = trackedHtml() + (live.length ? live.map(row).join('') : `<div class="ts-empty">${status === 'scanning' && !all.length ? 'Scanning markets…' : 'No market has an entry trigger right now.'}</div>`)
+    + (watch.length ? `<div class="ts-h">Watching - lean found, waiting for a model sequence to complete</div>` + watch.map(row).join('') : '')
     + (wait.length ? `<div class="ts-h">Opposed (bias lean, entry timeframe against it)</div>` + wait.map(row).join('') : '')
     + (rest.length ? `<details class="ts-rest"><summary>No setup (${rest.length})</summary>${rest.map((s) => `<div class="ts-none"><b>${esc(s.label)} · ${esc(s.profileName || '')}</b> — ${esc(s.reason || s.headline)}</div>`).join('')}</details>` : '');
   tsBotUpdateUi();
 }
 
 export function tsStart() {
-  if (lifecycleLoadError) status = 'lifecycle storage error: ' + lifecycleLoadError.message;
+  if (lifecycleLoadError) status = 'tracked-signal storage error: ' + lifecycleLoadError.message;
   if (running) { render(); return; }
   running = true; status = 'connecting'; render();
   clearInterval(uiTimer); uiTimer = setInterval(tickUi, 1000);
-  if (!ws) connect(); else scan();
+  lifecycleReady.then(() => { if (!running) return; if (!ws) connect(); else scan(); });
 }
 export function tsStop() {
   running = false; clearTimeout(scanTimer); clearTimeout(marketTimer); clearInterval(uiTimer);
@@ -500,3 +567,5 @@ Object.assign(window, {
   },
   __tsResults: results, __tsIsVolatilityAbove100: isVolatilityAbove100,
 });
+
+if (typeof window !== 'undefined') window.__tsLifecycle = () => { const byState = {}; const list = lifecycleRegistry.list(); for (const r of list) byState[r.state] = (byState[r.state] || 0) + 1; return { records: list.length, byState, persistenceError: lifecycleRegistry.persistenceError ? String(lifecycleRegistry.persistenceError.message || lifecycleRegistry.persistenceError) : null }; };

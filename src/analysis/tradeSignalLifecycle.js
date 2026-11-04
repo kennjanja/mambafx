@@ -1,10 +1,100 @@
-﻿import { transitionLifecycle, WATCHING_EXPIRY_SEC, TERMINAL_STATES } from './tradeSignalArchitecture.js';
+import { transitionLifecycle, WATCHING_EXPIRY_SEC, TERMINAL_STATES } from './tradeSignalArchitecture.js';
+import { LIFECYCLE_STORAGE_KEY } from './tradeSignalLifecycleStore.js';
 
-export const LIFECYCLE_STORAGE_KEY = 'mfx_ts_lifecycle_v1';
+export { LIFECYCLE_STORAGE_KEY };
 
-export function createLifecycleRegistry({ storage = globalThis.localStorage, key = LIFECYCLE_STORAGE_KEY } = {}) {
-  const records = new Map();
-  let persistenceError = null;
+// Bulky evidence that is recomputed by the next scan for pre-entry records, and only worth keeping for frozen entries.
+export const BULKY_FIELDS = Object.freeze(['evidenceSnapshot', 'inducementEvents', 'familyValues', 'entry', 'bias', 'secondaryModels']);
+// Retention: terminal/closed records keep their frozen snapshots for a day, then only the small summary is kept.
+// History is capped, and the registry is capped, so persisted state cannot grow without limit.
+export const TERMINAL_SNAPSHOT_TTL_SEC = 24 * 3600;
+export const HISTORY_MAX = 200;
+export const RECORDS_MAX = 500;
+const isFinal = (record) => TERMINAL_STATES.includes(record.state) || record.state === 'Closed';
+
+// Pure: returns true when the record was changed.
+export function applyRetention(record, atSec) {
+  let changed = false;
+  if (Array.isArray(record.lifecycleHistory) && record.lifecycleHistory.length > HISTORY_MAX) {
+    record.lifecycleHistory = record.lifecycleHistory.slice(-HISTORY_MAX); changed = true;
+  }
+  if (isFinal(record) && !record.snapshotsPrunedAt && Number.isFinite(atSec) && atSec - (record.updatedAt || 0) >= TERMINAL_SNAPSHOT_TTL_SEC) {
+    for (const field of BULKY_FIELDS) delete record[field];
+    record.snapshotsPrunedAt = atSec; changed = true;
+  }
+  return changed;
+}
+
+// level 0 keeps everything; 1 slims records that are not frozen yet; 2 slims everything except the active signal.
+export function compactRecord(record, level) {
+  if (level === 0) return record;
+  const keep = level === 1 ? record.entryFrozenAt != null : record.state === 'Signal Active';
+  if (keep) return record;
+  const slim = { ...record };
+  for (const field of BULKY_FIELDS) delete slim[field];
+  return slim;
+}
+
+/**
+ * Lifecycle registry. The in-memory map is the live truth: update() always applies the real state to the signal first.
+ * - { store }: asynchronous IndexedDB persistence (write-behind, failures reported through onPersistChange, never thrown).
+ * - { storage }: legacy synchronous localStorage persistence; failures are thrown after the state has been applied.
+ */
+export function createLifecycleRegistry({ storage = globalThis.localStorage, key = LIFECYCLE_STORAGE_KEY, store = null, onPersistChange = null, nowSec = () => Math.floor(Date.now() / 1000) } = {}) {
+  const records = new Map(), dirty = new Set();
+  let persistenceError = null, flushing = null, again = false;
+
+  async function init() {
+    if (!store) return load();
+    const result = await store.migrateLegacy();
+    for (const row of await store.loadAll()) {
+      // A record already updated in memory is newer than anything read from disk.
+      if (row && typeof row.state === 'string' && !records.has(row.key)) records.set(row.key, { ...row, lifecycleHistory: Array.isArray(row.lifecycleHistory) ? row.lifecycleHistory : [] });
+    }
+    return { records: list(), migration: result };
+  }
+
+  function setError(error) {
+    const changed = (persistenceError == null) !== (error == null) || (error && persistenceError && error.message !== persistenceError.message);
+    persistenceError = error;
+    if (changed && onPersistChange) { try { onPersistChange(error); } catch { /* UI callback must not break scanning */ } }
+  }
+
+  function prune() {
+    const at = nowSec(), put = [], remove = [];
+    for (const [id, record] of records) if (applyRetention(record, at)) dirty.add(id);
+    if (records.size > RECORDS_MAX) {
+      const oldest = [...records].filter(([, record]) => isFinal(record)).sort((a, b) => (a[1].updatedAt || 0) - (b[1].updatedAt || 0));
+      for (const [id] of oldest.slice(0, records.size - RECORDS_MAX)) { records.delete(id); dirty.delete(id); remove.push(id); }
+    }
+    for (const id of dirty) if (records.has(id)) put.push(records.get(id));
+    return { put, remove };
+  }
+
+  function scheduleFlush() {
+    if (flushing) { again = true; return flushing; }
+    flushing = (async () => {
+      try {
+        do {
+          again = false;
+          const ids = [...dirty], { put, remove } = prune();
+          dirty.clear();
+          let lastError = null, ok = false;
+          for (const level of [0, 1, 2]) {
+            // Compacting must also rewrite rows stored earlier in full form, or they would keep occupying the quota.
+            const rows = level === 0 ? put : [...records.values()];
+            try { await store.write({ put: rows.map((record) => compactRecord(record, level)), remove }); ok = true; break; }
+            catch (error) { lastError = error; }
+          }
+          if (ok) setError(null);
+          else { for (const id of ids) dirty.add(id); setError(lastError); break; }
+        } while (again);
+      } finally { flushing = null; }
+    })();
+    return flushing;
+  }
+
+  async function flush() { while (flushing) await flushing; if (dirty.size && store) { scheduleFlush(); while (flushing) await flushing; } }
 
   function load() {
     records.clear();
@@ -17,15 +107,22 @@ export function createLifecycleRegistry({ storage = globalThis.localStorage, key
     return list();
   }
 
+  const serialize = (level) => JSON.stringify(Object.fromEntries([...records].map(([id, record]) => [id, compactRecord(record, level)])));
+
   function persist() {
-    try {
-      storage?.setItem(key, JSON.stringify(Object.fromEntries(records)));
-      persistenceError = null;
-      return true;
-    } catch (error) {
-      persistenceError = error;
-      throw error;
+    if (store) { scheduleFlush(); return true; }
+    let lastError = null;
+    for (const level of [1, 2]) {
+      try {
+        storage?.setItem(key, serialize(level));
+        persistenceError = null;
+        return true;
+      } catch (error) {
+        lastError = error;
+      }
     }
+    persistenceError = lastError;
+    throw lastError;
   }
 
   function update(sig, profile, at) {
@@ -90,12 +187,13 @@ export function createLifecycleRegistry({ storage = globalThis.localStorage, key
     if (sig.status === 'signal' && record.state === 'Signal Active' && previousState !== 'Signal Active') {
       record.signalId = `${id}@${sig.entryAt ?? sig.detectedAt ?? at}`;
     }
-    records.set(id, record);
-    persist();
+    records.set(id, record); dirty.add(id);
+    // The row must show the real state even when storage is full, so apply it before persisting.
     sig.lifecycleState = record.state;
     sig.lifecycleHistory = record.lifecycleHistory;
     sig.waitingCondition = record.waitingCondition || (record.state === 'Signal Active' ? 'holding until the profile period ends' : '');
     sig.nearestLevel = record.nearestLevel;
+    persist();
     return record;
   }
 
@@ -104,11 +202,11 @@ export function createLifecycleRegistry({ storage = globalThis.localStorage, key
     if (!record || record.state !== 'Signal Active') return record || null;
     transitionLifecycle(record, 'Closed', at, reason);
     record.updatedAt = at;
-    records.set(id, record);
+    records.set(id, record); dirty.add(id);
     persist();
     return record;
   }
 
   function list() { return [...records.values()].map((record) => ({ ...record, lifecycleHistory: [...record.lifecycleHistory] })); }
-  return { load, update, close, get: (id) => records.get(id) || null, list, persist, get persistenceError() { return persistenceError; } };
+  return { init, flush, load, update, close, get: (id) => records.get(id) || null, list, persist, get persistenceError() { return persistenceError; } };
 }
