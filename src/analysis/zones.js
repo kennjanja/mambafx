@@ -1,5 +1,7 @@
 import { DEFAULTS, atrSeries, anatomy } from './core.js';
 import { analyzeStructure } from './structure.js';
+import { analyzeLiquidity } from './liquidity.js';
+import { assessFvgFormation, fvgCorrection, fvgContext, fvgSwingPosition } from './fvgQualification.js';
 
 // Lifecycle-aware zones: order blocks (+breakers), fair value gaps (+IFVG), balanced price ranges
 // and rejection blocks. Everything is produced by a single forward pass; a zone's state at bar j
@@ -58,6 +60,7 @@ export function analyzeZones(candles, opts = {}) {
   const st = opts.structure || analyzeStructure(candles, { ...o, atr });
   const structEvents = (st[o.structureScale] || st.internal).events;
   const pivots = (st[o.structureScale] || st.internal).pivots.confirmed;
+  const liquidity = st.liquidity || analyzeLiquidity(candles, { ...o, atr, pivots: st.internal.pivots });
 
   const dispAt = new Map(); for (const d of st.displacement) { (dispAt.get(d.index) || dispAt.set(d.index, []).get(d.index)).push(d); }
   const evAt = new Map(); for (const e of structEvents) { (evAt.get(e.index) || evAt.set(e.index, []).get(e.index)).push(e); }
@@ -69,6 +72,7 @@ export function analyzeZones(candles, opts = {}) {
   const pending = []; // OB candidates awaiting a structure break
   const usedOBCandles = new Set();
   const fvgs = [];
+  const fvgCorrections = [], correctedFvgs = new Set();
 
   for (let j = 0; j < candles.length; j++) {
     const c = candles[j];
@@ -88,6 +92,15 @@ export function analyzeZones(candles, opts = {}) {
       z.outside = !entered;
       if (depth > z.fill) z.fill = depth;
       const age = j - z.confirmedIndex;
+
+      if (z.kind === 'FVG' && z.fvgQuality && !correctedFvgs.has(z.id) && age <= 3) {
+        const correction = fvgCorrection(candles, z.confirmedIndex, z.dir, z.bottom, z.top, j);
+        if (correction) {
+          correctedFvgs.add(z.id);
+          fvgCorrections.push({ zoneId: z.id, confirmedIndex: correction.index,
+            depth: correction.depth, deep: correction.depth > 0.5 });
+        }
+      }
 
       if (beyond) {
         if (z.kind === 'FVG' && o.invert) {
@@ -130,7 +143,11 @@ export function analyzeZones(candles, opts = {}) {
       const bullGap = candles[j].low - candles[j - 2].high, bearGap = candles[j - 2].low - candles[j].high;
       const dir = bullGap >= minSize && bullGap > 0 ? 1 : bearGap >= minSize && bearGap > 0 ? -1 : 0;
       if (dir) {
-        const z = add(makeZone(nid++, 'FVG', dir, dir === 1 ? candles[j - 2].high : candles[j].high, dir === 1 ? candles[j].low : candles[j - 2].low, j - 1, j, candles, { sizeAtr: (dir === 1 ? bullGap : bearGap) / a, startIndex: j - 2 }));
+        const formation = assessFvgFormation(candles[j - 2], candles[j], dir);
+        const z = add(makeZone(nid++, 'FVG', dir, dir === 1 ? candles[j - 2].high : candles[j].high, dir === 1 ? candles[j].low : candles[j - 2].low, j - 1, j, candles, {
+          sizeAtr: (dir === 1 ? bullGap : bearGap) / a, startIndex: j - 2,
+          fvgQuality: formation ? { ...formation, ...fvgContext(dir, j, pivots, structEvents, liquidity.events) } : null,
+        }));
         for (const f of fvgs) {
           if (f.dir === -dir && j - f.confirmedIndex <= o.bprWindow && !TERMINAL.has(f.status)) {
             const lo = Math.max(f.bottom, z.bottom), hi = Math.min(f.top, z.top);
@@ -180,7 +197,11 @@ export function analyzeZones(candles, opts = {}) {
       }
     }
   }
-  return { zones, atr, structure: st };
+  const fvgPositions = fvgs.flatMap((z) => {
+    const position = fvgSwingPosition(z.dir, z.confirmedIndex, z.mid, pivots, candles.length - 1);
+    return position ? [{ zoneId: z.id, ...position }] : [];
+  });
+  return { zones, fvgCorrections, fvgPositions, atr, structure: st };
 }
 
 // Zones containing a price, newest first; optionally restricted to live (non-terminal) zones.

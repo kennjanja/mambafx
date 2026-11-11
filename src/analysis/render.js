@@ -11,7 +11,7 @@ const COLORS = {
   BPR: { 1: ['230,230,120', 'BPR'], '-1': ['230,230,120', 'BPR'] },
   REJECTION: { 1: ['90,200,200', 'RB+'], '-1': ['220,110,200', 'RB−'] },
 };
-const LIVE = (z) => z.confirmedIndex != null && !['invalidated', 'expired', 'inverted', 'candidate'].includes(z.status) && !(z.kind === 'FVG' && z.status === 'filled');
+const LIVE = (z) => z.confirmedIndex != null && !['invalidated', 'expired', 'inverted', 'candidate'].includes(z.status);
 
 export function visibleZones(zones, g, { states = 'live', kinds = null, max = 14 } = {}) {
   const last = g.start + g.count - 1;
@@ -19,7 +19,7 @@ export function visibleZones(zones, g, { states = 'live', kinds = null, max = 14
     if (z.confirmedIndex == null || z.status === 'candidate') return false;
     if (kinds && !kinds.includes(z.kind)) return false;
     if (states === 'live' && !LIVE(z)) return false;
-    const endI = z.endIndex ?? Infinity;
+    const endI = z.kind === 'FVG' && z.status === 'filled' ? Infinity : z.endIndex ?? Infinity;
     if (z.createdIndex > last || endI < g.start) return false;
     return Math.max(z.top, z.bottom) >= g.lo && Math.min(z.top, z.bottom) <= g.hi;
   });
@@ -32,7 +32,7 @@ export function renderZones(zones, g, opts = {}) {
   for (const z of visibleZones(zones, g, opts)) {
     const [rgb, label] = COLORS[z.kind][z.dir];
     const x0 = Math.max(g.padL, g.xAt(z.createdIndex));
-    const x1 = z.endIndex != null ? Math.min(g.chartRight, g.xAt(z.endIndex)) : g.chartRight;
+    const x1 = z.endIndex != null && !(z.kind === 'FVG' && z.status === 'filled') ? Math.min(g.chartRight, g.xAt(z.endIndex)) : g.chartRight;
     if (x1 <= x0) continue;
     const yt = g.clampY(z.top), yb = g.clampY(z.bottom);
     const dead = !LIVE(z);
@@ -43,7 +43,15 @@ export function renderZones(zones, g, opts = {}) {
       const ym = g.clampY(z.mid);
       s += `<line x1="${x0.toFixed(1)}" y1="${ym.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${ym.toFixed(1)}" stroke="rgba(${rgb},0.35)" stroke-width="0.5" stroke-dasharray="1,2"/>`;
     }
-    const tag = `${label}${z.testCount ? ' ×' + z.testCount : ''}${dead ? ' ' + z.status : ''}`;
+    const quality = z.fvgQuality;
+    const asOf = Number.isInteger(opts.asOfIndex) ? opts.asOfIndex : Infinity;
+    const correction = (opts.fvgCorrections || []).find((item) => item.zoneId === z.id && item.confirmedIndex <= asOf);
+    const position = (opts.fvgPositions || []).find((item) => item.zoneId === z.id && item.confirmedIndex <= asOf);
+    const touchText = correction ? (correction.deep ? ' deep' : ' touched')
+      : Number.isInteger(opts.asOfIndex) && opts.asOfIndex >= z.confirmedIndex + 3 ? ' no timely touch' : ' awaiting touch';
+    const detail = quality ? z.confirmedIndex > asOf ? ' forming'
+      : ` ${quality.tier} ${quality.qualified ? 'formation pass' : 'formation fail'}${touchText}${position ? ` ${position.zone}` : ''}` : '';
+    const tag = `${label}${detail}${z.testCount ? ' ×' + z.testCount : ''}${dead ? ' ' + z.status : ''}`;
     s += `<text x="${(x0 + 2).toFixed(1)}" y="${(yt + 7).toFixed(1)}" fill="rgba(${rgb},0.95)" font-size="6.5" font-family="monospace">${tag}</text></g>`;
   }
   return s;

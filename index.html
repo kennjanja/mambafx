@@ -918,6 +918,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       </div>
       <div class="pa-note">
         <b style="color:var(--accent)">ICT / Smart-Money structure:</b> support/resistance · demand &amp; supply zones · order blocks (OB+/OB−) · unmitigated fair-value gaps · liquidity at equal highs/lows · <b>BOS / CHoCH</b> · <b>premium/discount</b> equilibrium · <b>OTE</b> (0.62–0.79 entry) · <b>trendlines</b> (auto, from swing pivots) · <b>AMD</b> (accumulation → manipulation → distribution, ICT Power of 3).<br>
+        FVG quality labels in the Zones overlay are experimental chart observations and do not yet filter trade entries.<br>
         <b style="color:#56b6ff">🖐 Pan &amp; zoom:</b> drag any chart to move, scroll to zoom (Ctrl/Shift+scroll = vertical zoom), or use the ◀▶▲▼ ＋－⟳ buttons. Each chart shows the latest 50 candles and moves independently.<br>
         <b style="color:#ffc44d">⚠ Order-flow note:</b> synthetic indices have <b>no real volume or order book</b>. Delta, CVD, absorption, imbalance and the volume profile here are <b>proxies derived from price action</b> (the Live Tracker uses genuine tick-rule data instead). Treat them as estimates, not real institutional footprint.
       </div>
@@ -28946,7 +28947,12 @@ function drawTfCandles(g){
     if (an && an.dropped === 0){
       const geom = { start, count, lo, hi, xAt, y, clampY, chartRight, padL, dec };
       const states = ($("pe-states") || {}).value || "live";
-      if (want("pe-zones")) out += window.MFXEngine.renderZones(an.zones, geom, { states });
+      if (want("pe-zones")) {
+        let lastClosedIndex = an.candles.length - 1;
+        const now = Date.now() / 1000;
+        while (lastClosedIndex >= 0 && an.candles[lastClosedIndex].epoch + g > now) lastClosedIndex--;
+        out += window.MFXEngine.renderZones(an.zones, geom, { states, asOfIndex: lastClosedIndex, fvgCorrections: an.fvgCorrections, fvgPositions: an.fvgPositions });
+      }
       if (want("pe-struct")) out += window.MFXEngine.renderStructure(an, geom, { scale: "swing" });
       if (want("pe-liq")) out += window.MFXEngine.renderLiquidity(an.liquidity, geom);
     }

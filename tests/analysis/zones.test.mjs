@@ -34,6 +34,30 @@ test('bearish FVG', () => {
   assert.equal(f.dir, -1); assert.equal(f.top, 99.5); assert.equal(f.bottom, 98.5);
 });
 
+test('FVG quality records correction only in the first three bars and identifies deep penetration', () => {
+  const base = fvgBase();
+  const wait = mk(23, 103, 103.5, 102, 103);
+  const touch = mk(24, 103, 103.1, 100.9, 101.6);
+  const result = analyzeZones([...base, wait, touch]);
+  const zone = byKind(result, 'FVG')[0];
+  const correction = result.fvgCorrections.find((event) => event.zoneId === zone.id);
+  assert.equal(correction.confirmedIndex, 24);
+  assert.equal(correction.deep, true);
+  const late = analyzeZones([...base, wait, { ...wait, epoch: wait.epoch + 60 },
+    { ...wait, epoch: wait.epoch + 120 }, { ...touch, epoch: touch.epoch + 120 }]);
+  assert.equal(late.fvgCorrections.some((event) => event.zoneId === byKind(late, 'FVG')[0].id), false);
+});
+
+test('FVG correction and confirmed swing-position observations do not use future candles', () => {
+  const candles = walk(250, 12, 1);
+  const full = analyzeZones(candles);
+  for (const cut of [60, 100, 160, 220]) {
+    const prefix = analyzeZones(candles.slice(0, cut));
+    assert.deepEqual(prefix.fvgCorrections, full.fvgCorrections.filter((event) => event.confirmedIndex < cut));
+    assert.deepEqual(prefix.fvgPositions, full.fvgPositions.filter((event) => event.confirmedIndex < cut));
+  }
+});
+
 test('FVG lifecycle: untouched -> partial -> filled -> inverted (IFVG), with history and fill %', () => {
   const c = fvgBase();
   const at = (extra) => analyzeZones([...c, ...extra]);
