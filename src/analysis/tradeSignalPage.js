@@ -1,11 +1,15 @@
 // Trade Signal page scans public market history and lists profile-based setups.
 // Its analysis socket stays read-only; optional orders use the separate Trading Grid host bridge.
-import { buildTradeSignal, PROFILE_LIST, ALL_GRANULARITIES, fmtPrice } from './tradeSignal.js';
+import { buildTradeSignal, PROFILE_LIST, ALL_GRANULARITIES, fmtPrice } from './tradeSignal.js?v=fvg2';
 import { openTracked, updateTracked, progress, summarize, deduplicateOpenRecords } from './tradeSignalTracker.js';
 import { predictionHistoryStore } from './tradeSignalStorage.js';
-import { createLifecycleRegistry } from './tradeSignalLifecycle.js';
+import { createLifecycleRegistry } from './tradeSignalLifecycle.js?v=fvg2';
 import { defaultLifecycleStore } from './tradeSignalLifecycleStore.js';
-import { createFunnel } from './tradeSignalProgress.js';
+import { createFunnel } from './tradeSignalProgress.js?v=fvg2';
+import { fvgQuoteError } from './fvgQualification.js?v=fvg2';
+import { claimInverseFvg } from './ifvgClaims.js';
+if (typeof window !== 'undefined') window.tsBotFvgQuoteError = fvgQuoteError;
+if (typeof window !== 'undefined') window.tsBotClaimInverseFvg = claimInverseFvg;
 const funnel = createFunnel();
 if (typeof window !== 'undefined') window.__tsFunnel = funnel.data;
 if (typeof window !== 'undefined') window.__tsFunnelBySymbol = funnel.bySymbol;

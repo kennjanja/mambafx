@@ -7,9 +7,9 @@
 // This is a rule-based reading of evidence. The evidence weights are provisional and unvalidated, so the output
 // is NOT a forecast, a probability or a profitability claim.
 
-import { analyzeEvidence } from './evidence.js';
-import { computeModelProgress } from './tradeSignalProgress.js';
-import { aggregateEvidenceFamilies, FAMILY_WEIGHTS, evaluateEntryModels, evaluateLayers } from './tradeSignalArchitecture.js';
+import { analyzeEvidence } from './evidence.js?v=fvg2';
+import { computeModelProgress } from './tradeSignalProgress.js?v=fvg2';
+import { aggregateEvidenceFamilies, FAMILY_WEIGHTS, evaluateEntryModels, evaluateLayers } from './tradeSignalArchitecture.js?v=fvg2';
 
 export const TRADE_SIGNAL_TFS = Object.freeze({
   entry: { g: 300, label: '5 min' },
@@ -93,7 +93,7 @@ export function buildTradeSignal({ symbol, label = symbol, candles = {}, profile
   const hasWyckoffSequence = modelEvents.some((event) => event.type === 'range-established') && modelEvents.some((event) => event.type === 'sos-or-sow') && modelEvents.some((event) => event.type === 'lps-or-lpsy');
   const marketContext = hasWyckoffSequence ? ['trend', 'range'] : ['trend'];
   const evaluatedModels = evaluateEntryModels({ events: modelEvents, biasDirection: dir, entryDirection, marketContext,
-    locations: locationEvidence, nearestInvalidationDistance: invalidation ? Math.abs(price - invalidation.price) : Infinity, asOfIndex: entry.candles.length - 1 });
+    locations: locationEvidence, fvgs: entry.facts.qualifiedFvgs || [], nearestInvalidationDistance: invalidation ? Math.abs(price - invalidation.price) : Infinity, asOfIndex: entry.candles.length - 1 });
   base.modelProgress = computeModelProgress({ events: modelEvents, dir, hasLocation: locationEvidence.length > 0, confirmedIds: evaluatedModels.candidates.map((c) => c.model_id) });
   const reversalIndex = reversal ? entry.candles.findIndex((c) => c.epoch === reversal.epoch) : -1;
   const eligible = evaluatedModels.candidates.filter((candidate) => {
@@ -116,6 +116,11 @@ export function buildTradeSignal({ symbol, label = symbol, candles = {}, profile
       reason: `${missing}: ${reason}`, headline };
   }
   const model = modelSelection.primary;
+  if (model.fvg) {
+    model.fvg.formationEpoch = get(tfs.entry)[model.fvg.confirmedIndex]?.epoch ?? null;
+    model.fvg.scanUntil = (get(tfs.entry).at(-1)?.epoch ?? 0) + 2 * tfs.entry.g;
+    if (model.fvg.kind === 'IFVG') model.fvg.retestUntil = (get(tfs.entry)[model.fvg.retestIndex]?.epoch ?? 0) + 2 * tfs.entry.g;
+  }
   const triggerEvent = model.confirmingEvents[model.confirmingEvents.length - 1];
   const trigger = { kind: 'model', label: triggerEvent.label || triggerEvent.type, index: triggerEvent.index, confirmedIndex: triggerEvent.confirmedIndex };
   const target = pickTarget(dir, price, [{ ev: entry, tf: tfs.entry.label }, { ev: bias, tf: tfs.bias.label }]);

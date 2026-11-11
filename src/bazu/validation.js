@@ -14,7 +14,7 @@
 import { computeCircularShiftPermutationTest } from '../../research/src/statistics/permutationTest.js';
 import { PHASE11_LIFECYCLE_STAGES as ST, transitionPhase11Stage } from '../../research/src/governance/phase11LifecycleStates.js';
 import { buildBazuRegistry, BAZU_FEATURE_FLAGS } from './indicators.js?v=15';
-import { computeStructureFeatures } from './structure.js?v=15';
+import { computeStructureFeatures } from './structure.js?v=16';
 import {
   wilson, binomialTailGE, benjaminiHochberg, betaPosterior, brierScore, reliability,
   trailingQuantile, shuffleReturnsPath,

@@ -1,7 +1,7 @@
 import { DEFAULTS, atrSeries, anatomy } from './core.js';
 import { analyzeStructure } from './structure.js';
 import { analyzeLiquidity } from './liquidity.js';
-import { assessFvgFormation, fvgCorrection, fvgContext, fvgSwingPosition } from './fvgQualification.js';
+import { assessFvgFormation, fvgCorrection, fvgContext, fvgSwingPosition } from './fvgQualification.js?v=fvg2';
 
 // Lifecycle-aware zones: order blocks (+breakers), fair value gaps (+IFVG), balanced price ranges
 // and rejection blocks. Everything is produced by a single forward pass; a zone's state at bar j
@@ -83,7 +83,8 @@ export function analyzeZones(candles, opts = {}) {
       const bull = z.dir === 1;
       const h = z.top - z.bottom;
       const beyond = bull ? c.close < z.bottom : c.close > z.top;
-      const entered = bull ? c.low <= z.top : c.high >= z.bottom;
+      const entered = z.kind === 'IFVG' || z.kind === 'FVG' ? c.low <= z.top && c.high >= z.bottom
+        : bull ? c.low <= z.top : c.high >= z.bottom;
       const depth = Math.max(0, Math.min(1, bull ? (z.top - c.low) / h : (c.high - z.bottom) / h));
       if (entered && z.outside) {
         z.testCount++;

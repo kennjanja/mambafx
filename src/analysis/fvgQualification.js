@@ -73,3 +73,55 @@ export function fvgSwingPosition(direction, formationIndex, midpoint, pivots, as
     confirmedIndex: Math.max(start.confirmedIndex, end.confirmedIndex),
   };
 }
+
+// Observations are reconstructed at the requested candle close; later fills,
+// inversions and swing confirmations must not leak into historical scans.
+export function eligibleFvgs(zones, corrections, positions, asOfIndex) {
+  const result = [];
+  for (const zone of zones) {
+    if (zone.kind !== 'FVG' || !zone.fvgQuality?.qualified || zone.confirmedIndex > asOfIndex) continue;
+    const correction = corrections.find((item) => item.zoneId === zone.id && item.confirmedIndex <= asOfIndex);
+    if (!correction) continue;
+    const inversion = zone.history.find((item) => item.status === 'inverted' && item.index <= asOfIndex);
+    const invalidation = zone.history.find((item) => ['invalidated', 'expired'].includes(item.status) && item.index <= asOfIndex);
+    if (invalidation && (!inversion || invalidation.index < inversion.index)) continue;
+    const position = positions.find((item) => item.zoneId === zone.id && item.confirmedIndex <= asOfIndex) || null;
+    const base = { zoneId: zone.id, bottom: zone.bottom, top: zone.top, mid: zone.mid,
+      sizeAtr: zone.sizeAtr, createdIndex: zone.createdIndex, confirmedIndex: zone.confirmedIndex,
+      correctionIndex: correction.confirmedIndex, quality: zone.fvgQuality, correction, position };
+    if (!inversion) {
+      result.push({ ...base, dir: zone.dir, kind: 'FVG' });
+      continue;
+    }
+    const inverse = zones.find((item) => item.kind === 'IFVG' && item.parentId === zone.id);
+    if (!inverse || inverse.firstMitigationIndex == null || inverse.firstMitigationIndex !== asOfIndex) continue;
+    if (inverse.history.some((item) => ['invalidated', 'expired'].includes(item.status) && item.index <= asOfIndex)) continue;
+    result.push({ ...base, dir: inverse.dir, kind: 'IFVG', inverseZoneId: inverse.id, inversionIndex: inversion.index,
+      retestIndex: inverse.firstMitigationIndex });
+  }
+  return result;
+}
+
+export function compareFvgs(a, b) {
+  const tier = { premium: 3, good: 2, basic: 1, unknown: 0 };
+  return b.sizeAtr - a.sizeAtr ||
+    Number(!!b.position?.preferred) - Number(!!a.position?.preferred) ||
+    (tier[b.quality.tier] || 0) - (tier[a.quality.tier] || 0) ||
+    Number(a.correction.deep) - Number(b.correction.deep) ||
+    b.confirmedIndex - a.confirmedIndex || a.zoneId - b.zoneId;
+}
+
+export function fvgQuoteError(fvg, quote, nowSec) {
+  if (!fvg || !Number.isFinite(fvg.bottom) || !Number.isFinite(fvg.top) || fvg.bottom >= fvg.top)
+    return 'FVG boundaries are unavailable; trade blocked.';
+  if (!quote || !Number.isFinite(quote.price) || !Number.isFinite(quote.epoch) ||
+      nowSec - quote.epoch > 15 || quote.epoch > nowSec + 5)
+    return 'No current market quote is available; FVG trade blocked.';
+  if (!Number.isFinite(fvg.scanUntil) || nowSec >= fvg.scanUntil)
+    return 'FVG analysis is stale; a new closed-candle scan is required.';
+  if (fvg.kind === 'IFVG' && (!Number.isFinite(fvg.retestUntil) || nowSec >= fvg.retestUntil))
+    return 'The first inverse FVG retest window has ended; trade blocked.';
+  if (quote.price < fvg.bottom || quote.price > fvg.top)
+    return 'Price has left the FVG; trade blocked.';
+  return null;
+}

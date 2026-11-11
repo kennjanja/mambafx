@@ -845,7 +845,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       <b>No lookahead:</b> closed candles only; swings become available only after their right-side confirmation bars, and events carry occurredAt and confirmedAt. At signal open, price levels, event evidence, family values, model, and lifecycle history are frozen. Candle Charts uses that stored evidence snapshot for Trade Signal focus. The entry-time 1m candle is excluded from outcomes.<br>
       <b>Three layers:</b> Directional Bias uses the existing balance and higher-timeframe conflict cap; Location Gate requires context-aligned support/resistance or a nearby zone; Entry Confirmation requires an ordered model sequence. A missing layer is named in the setup status. Premium/discount alone is never an entry trigger.<br>
       <b>Evidence families:</b> Structure (structure and breaks), Liquidity, Momentum (candle and trend), Location (premium/discount and levels), Zones, Wyckoff, and Higher-timeframe context. Each family contributes at most its strongest bullish value minus strongest bearish value once. Provisional heuristic family weights are Structure 1.50, Liquidity 1.25, Momentum 1.25, Location 0.75, Zones 1.00, Wyckoff 0.75, HTF 0.75. They are untuned, not probabilities or win rates; volume/VWAP/profile remain chart proxies.<br>
-      <b>Lifecycle and models:</b> setups move through No Setup, Bias Identified, Watching, Approaching Location, Trigger Detected, Signal Active, and Closed; terminal states include Invalidated Before Entry, Expired Without Entry, Opposed, and Insufficient Data. Watching windows are 15m / 2h / 6h by profile. Model compositions reuse the shared detectors: A Liquidity Sweep Reversal (swing by default, also range/dealing-range contexts), B Order Block Continuation, G BOS Pullback Continuation, C FVG Continuation, F Inducement Sweep Continuation, D Breaker Block Reversal, and J Wyckoff SOS/SOW Continuation. Each requires higher-timeframe bias, a direction-aligned location containing its model level (A swept swing, B OB retest, C FVG retest, D breaker retest, F inducement level, G broken level, J LPS/LPSY), and its confirmed ordered trigger sequence. When several qualify, priority is confirming event count, nearest invalidation, then model ID; other qualifiers are secondary. No model is calibrated or market-tuned.<br>
+      <b>Lifecycle and models:</b> setups move through No Setup, Bias Identified, Watching, Approaching Location, Trigger Detected, Signal Active, and Closed; terminal states include Invalidated Before Entry, Expired Without Entry, Opposed, and Insufficient Data. Watching windows are 15m / 2h / 6h by profile. Model compositions reuse the shared detectors: A Liquidity Sweep Reversal (swing by default, also range/dealing-range contexts), B Order Block Continuation, G BOS Pullback Continuation, C FVG Continuation, I Inverse FVG Reversal, F Inducement Sweep Continuation, D Breaker Block Reversal, and J Wyckoff SOS/SOW Continuation. Each requires higher-timeframe bias, a direction-aligned location containing its model level (A swept swing, B OB retest, C FVG midpoint, I inverse FVG midpoint, D breaker retest, F inducement level, G broken level, J LPS/LPSY), and its confirmed ordered trigger sequence. When several qualify, priority is confirming event count, nearest invalidation, then model ID; other qualifiers are secondary. No model is calibrated or market-tuned.<br>
       <b>Outcome and history:</b> only the expiry price decides: BUY correct iff expiry is above entry, SELL correct iff below; a tie loses. Targets/invalidation are informational. Post-entry 1m closes or a nearby expiry tick are used; missing/ambiguous expiry data is left unresolved, never fabricated. Existing archived outcomes remain unchanged and use legacy-scan-sample migration. Prediction History is stored in this browser's IndexedDB; the legacy mfx_ts_archive_v1 records are copied idempotently and retained as a recovery source.<br>
       <b>Limitations:</b> these are rule-based descriptions with provisional heuristic weights, not a forecast, trading advice, profitability claim, or statistical validation. No backtest or live-Deriv validation was performed; tests use synthetic candles only.</div>
     <div class="ts-bar"><span id="tsStatus">idle</span><button id="tsRescan" type="button">Rescan now</button></div>
@@ -918,7 +918,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       </div>
       <div class="pa-note">
         <b style="color:var(--accent)">ICT / Smart-Money structure:</b> support/resistance · demand &amp; supply zones · order blocks (OB+/OB−) · unmitigated fair-value gaps · liquidity at equal highs/lows · <b>BOS / CHoCH</b> · <b>premium/discount</b> equilibrium · <b>OTE</b> (0.62–0.79 entry) · <b>trendlines</b> (auto, from swing pivots) · <b>AMD</b> (accumulation → manipulation → distribution, ICT Power of 3).<br>
-        FVG quality labels in the Zones overlay are experimental chart observations and do not yet filter trade entries.<br>
+        FVG quality labels are experimental price-action observations, not proof of institutional activity or profitability. The Trade Signal FVG models apply the formation and timely-retest filters and verify the current quote before purchase.<br>
         <b style="color:#56b6ff">🖐 Pan &amp; zoom:</b> drag any chart to move, scroll to zoom (Ctrl/Shift+scroll = vertical zoom), or use the ◀▶▲▼ ＋－⟳ buttons. Each chart shows the latest 50 candles and moves independently.<br>
         <b style="color:#ffc44d">⚠ Order-flow note:</b> synthetic indices have <b>no real volume or order book</b>. Delta, CVD, absorption, imbalance and the volume profile here are <b>proxies derived from price action</b> (the Live Tracker uses genuine tick-rule data instead). Treat them as estimates, not real institutional footprint.
       </div>
@@ -29424,6 +29424,11 @@ function gridHandleMsg(msg){
       if (cb){ cb(msg.contracts_for, null); delete gridPending[msg.req_id]; }
       break;
     }
+    case "history": {
+      const cb = msg.req_id && gridPending[msg.req_id];
+      if (cb){ cb(msg.history, null); delete gridPending[msg.req_id]; }
+      break;
+    }
   }
 }
 
@@ -29448,6 +29453,7 @@ function gridPlaceTrade(dir, source, options = {}){
   const symbol = options.symbol || SYMBOL;
   const contractType = dir === 1 ? "CALL" : "PUT";
   const proposalReqId = ++gridReqId;
+  const proposalSocket = gridWs, proposalAccount = gridLoginId;
 
   // Step 1: request a proposal. Buying requires the proposal's id + ask_price
   // — Deriv does not accept an inline-parameters instant buy on this API
@@ -29492,6 +29498,7 @@ function gridPlaceTrade(dir, source, options = {}){
       renderGridTrades();
       return;
     }
+    const buyQuotedContract = () => {
     // Step 2: buy using the EXACT proposal id and ask_price — do not alter
     // symbol/duration/etc between proposal and buy, and do it immediately
     // since proposal ids are short-lived.
@@ -29522,7 +29529,42 @@ function gridPlaceTrade(dir, source, options = {}){
       }));
       renderGridTrades();
     };
-    gridWs.send(JSON.stringify(buyMsg));
+    try { gridWs.send(JSON.stringify(buyMsg)); }
+    catch (error) {
+      delete gridPending[buyReqId];
+      if (!options.fvg) throw error;
+      rejectFvg("purchase request could not be sent: " + error.message);
+    }
+    };
+    if (!options.fvg) { buyQuotedContract(); return; }
+    const rejectFvg = (reason) => {
+      row.status = "rejected: " + reason;
+      if (row.signalKey) window.dispatchEvent(new CustomEvent('mambafx:tradeRejected', { detail:{ source:row.source, signalKey:row.signalKey, error:row.status } }));
+      renderGridTrades();
+    };
+    const checkAndBuy = () => {
+      if (!gridWs || gridWs !== proposalSocket || gridWs.readyState !== WebSocket.OPEN || !gridAuthed || gridLoginId !== proposalAccount) { rejectFvg("trading connection or account changed"); return; }
+      const quoteReqId = ++gridReqId;
+      const timeout = setTimeout(() => { delete gridPending[quoteReqId]; rejectFvg("current FVG quote timed out"); }, 5000);
+      gridPending[quoteReqId] = (history, quoteError) => {
+        clearTimeout(timeout);
+        const prices = history?.prices, times = history?.times;
+        const quote = Array.isArray(prices) && Array.isArray(times) && prices.length && prices.length === times.length
+          ? { price: Number(prices[prices.length - 1]), epoch: Number(times[times.length - 1]) } : null;
+        const reason = quoteError?.message || (typeof window.tsBotFvgQuoteError === "function"
+          ? window.tsBotFvgQuoteError(options.fvg, quote, Date.now() / 1000) : "FVG quote validation unavailable");
+        if (reason) { rejectFvg(reason); return; }
+        if (gridWs !== proposalSocket || gridWs.readyState !== WebSocket.OPEN || !gridAuthed || gridLoginId !== proposalAccount) { rejectFvg("trading connection or account changed"); return; }
+        if (typeof options.shouldContinue === "function" && !options.shouldContinue()) { rejectFvg("automatic trading stopped before purchase"); return; }
+        buyQuotedContract();
+      };
+      try { gridWs.send(JSON.stringify({ ticks_history: symbol, end: "latest", count: 1, style: "ticks", req_id: quoteReqId })); }
+      catch (error) { clearTimeout(timeout); delete gridPending[quoteReqId]; rejectFvg("quote request could not be sent: " + error.message); }
+    };
+    if (options.fvg.kind !== 'IFVG') { checkAndBuy(); return; }
+    if (typeof window.tsBotClaimInverseFvg !== "function") { rejectFvg("inverse FVG claim unavailable"); return; }
+    window.tsBotClaimInverseFvg({ symbol, granularity: options.entryG, formationEpoch: options.fvg.formationEpoch, retestUntil: options.fvg.retestUntil })
+      .then(checkAndBuy, (error) => rejectFvg("inverse FVG claim failed: " + (error.message || error.name)));
   };
   gridWs.send(JSON.stringify(proposalMsg));
   return true;
@@ -29577,6 +29619,7 @@ window.tsBotPlaceTrade = function(signal, source, stake, accountType, signalKey)
   const duration = durationUnit === "m" ? holdSec / 60 : holdSec;
   const placed = gridPlaceTrade(signal.dir, source, {
     symbol:signal.symbol, profile:signal.profile, signalKey, stake,
+    fvg: ["C", "I"].includes(signal.primaryModel?.model_id) ? signal.primaryModel.fvg || {} : null, entryG: signal.entryG,
     duration, durationUnit,
     shouldContinue:source === "ts-auto" ? () => typeof window.tsBotCanContinueAuto === "function" && window.tsBotCanContinueAuto() : null,
   });
@@ -33959,8 +34002,8 @@ try {
   </div>
 </div>
 
-<script type="module" src="src/bazu/page.js?v=33"></script>
-<script type="module" src="src/analysis/tradeSignalPage.js?v=18"></script>
+<script type="module" src="src/bazu/page.js?v=34"></script>
+<script type="module" src="src/analysis/tradeSignalPage.js?v=19"></script>
 <script type="module" src="src/analysis/predictionHistoryPage.js?v=5"></script>
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/analysis/sosSowPage.js?v=9"></script>
@@ -33990,7 +34033,7 @@ try {
   setInterval(() => { if (body.offsetParent !== null) run(); }, 5000);
 })();
 </script>
-<script type="module">import * as E from "./src/analysis/all.js?v=6"; import * as TSM from "./src/analysis/tradeSignalMarkers.js?v=1"; window.MFXEngine = E; window.MFXTradeSignalMarkers = TSM; if (typeof TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
+<script type="module">import * as E from "./src/analysis/all.js?v=7"; import * as TSM from "./src/analysis/tradeSignalMarkers.js?v=1"; window.MFXEngine = E; window.MFXTradeSignalMarkers = TSM; if (typeof TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
 <script type="module" src="src/ldpe/under-over-bot.js?v=2"></script>
 <script type="module" src="src/consec/consecAlert.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>

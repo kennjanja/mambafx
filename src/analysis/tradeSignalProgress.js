@@ -1,4 +1,4 @@
-import { MODEL_REGISTRY } from './tradeSignalArchitecture.js';
+import { MODEL_REGISTRY } from './tradeSignalArchitecture.js?v=fvg2';
 
 // Read-only diagnostics: how far each model's ordered sequence has progressed. Never feeds scoring or signal selection.
 const STEP_TEXT = Object.freeze({
@@ -6,6 +6,7 @@ const STEP_TEXT = Object.freeze({
   reaction: 'reaction', 'fvg-created': 'FVG', 'fvg-retest': 'FVG retest', 'ob-confirmed-for-breaker': 'order block', 'ob-break': 'order-block break',
   'opposite-structure': 'opposite structure', 'breaker-retest': 'breaker retest', 'inducement-confirmed': 'inducement sweep + displacement',
   'broken-level-retest': 'broken-level retest', 'range-established': 'range', 'sos-or-sow': 'SOS/SOW', 'lps-or-lpsy': 'LPS/LPSY',
+  'ifvg-inverted': 'FVG inversion', 'ifvg-retest': 'first inverse FVG retest',
 });
 const stepText = (step) => STEP_TEXT[step] || step;
 
@@ -28,6 +29,7 @@ export function computeModelProgress({ events = [], dir = 0, hasLocation = false
     const confirmed = confirmedIds.includes(model.model_id);
     const text = confirmed ? `Model ${model.model_id}: confirmed`
       : matched === 0 ? `Model ${model.model_id}: waiting for ${stepText(model.sequence[0])}`
+        : matched === total ? `Model ${model.model_id}: sequence complete, waiting for qualification`
         : `Model ${model.model_id}: ${stepText(model.sequence[matched - 1])} confirmed, waiting for ${stepText(model.sequence[matched])}`;
     return { id: model.model_id, name: model.name, matched, total, confirmed, text };
   });

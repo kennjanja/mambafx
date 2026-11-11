@@ -14,11 +14,12 @@
 
 import { sanitize, atrSeries, DEFAULTS } from './core.js';
 import { analyze } from './engine.js';
-import { analyzeZones } from './zones.js';
+import { analyzeZones } from './zones.js?v=fvg2';
 import { analyzePatterns } from './patterns.js';
 import { analyzeLevels, premiumDiscount } from './levels.js';
-import { aggregateEvidenceFamilies, FAMILY_WEIGHTS, detectTradingRanges } from './tradeSignalArchitecture.js';
+import { aggregateEvidenceFamilies, FAMILY_WEIGHTS, detectTradingRanges } from './tradeSignalArchitecture.js?v=fvg2';
 import { classifySweep, detectInducements, INDUCEMENT_LIQUIDITY_FAMILY_VALUE } from './inducement.js';
+import { eligibleFvgs } from './fvgQualification.js?v=fvg2';
 
 export const EVIDENCE_DEFAULTS = Object.freeze({
   minCandles: 60,
@@ -200,10 +201,14 @@ export function analyzeEvidence(input, opts = {}) {
       modelEvents.push({ type: 'breaker-retest', dir: z.dir, index: z.firstMitigationIndex, confirmedIndex: z.firstMitigationIndex, level: z.bottom, label: 'breaker retest' });
     }
     if (z.kind === 'FVG' && z.confirmedIndex != null) {
-      modelEvents.push({ type: 'fvg-created', dir: z.dir, index: z.createdIndex, confirmedIndex: z.confirmedIndex, level: z.bottom, label: 'FVG created' });
-      if (z.firstMitigationIndex != null) modelEvents.push({ type: 'fvg-retest', dir: z.dir, index: z.firstMitigationIndex, confirmedIndex: z.firstMitigationIndex, level: z.bottom, label: 'FVG retest' });
+      modelEvents.push({ type: 'fvg-created', dir: z.dir, index: z.createdIndex, confirmedIndex: z.confirmedIndex, zoneId: z.id, level: z.bottom, label: 'FVG created' });
+      if (z.firstMitigationIndex != null) modelEvents.push({ type: 'fvg-retest', dir: z.dir, index: z.firstMitigationIndex, confirmedIndex: z.firstMitigationIndex, zoneId: z.id, level: z.bottom, label: 'FVG retest' });
       const invalidation = z.history.find((state) => ['invalidated', 'inverted'].includes(state.status));
       if (invalidation) modelEvents.push({ type: 'fvg-invalidated', dir: -z.dir, index: invalidation.index, confirmedIndex: invalidation.index, level: z.bottom, label: 'FVG invalidated' });
+    }
+    if (z.kind === 'IFVG' && z.confirmedIndex != null) {
+      modelEvents.push({ type: 'ifvg-inverted', dir: z.dir, index: z.confirmedIndex, confirmedIndex: z.confirmedIndex, zoneId: z.id, level: z.mid, label: 'FVG inverted' });
+      if (z.firstMitigationIndex != null) modelEvents.push({ type: 'ifvg-retest', dir: z.dir, index: z.firstMitigationIndex, confirmedIndex: z.firstMitigationIndex, zoneId: z.id, level: z.mid, label: 'first inverse FVG retest' });
     }
   }
   for (const e of pat.wyckoff) {
@@ -278,6 +283,7 @@ export function analyzeEvidence(input, opts = {}) {
       nearZones: near.slice(0, 5).map((x) => ({ kind: x.z.kind, dir: x.z.dir, status: x.z.status, top: x.z.top, bottom: x.z.bottom, distance: x.dist })),
       recentEvents: [...sw, ...inn].filter((e) => recent(e.index)).map((e) => ({ type: e.type, dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, scale: sw.includes(e) ? 'swing' : 'internal' })),
       modelEvents: timedModelEvents, inducements, ranges, htf: htfBias,
+      qualifiedFvgs: eligibleFvgs(zonesRes.zones, zonesRes.fvgCorrections, zonesRes.fvgPositions, last),
     },
     disclaimer: DISCLAIMER,
   };

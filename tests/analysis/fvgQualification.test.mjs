@@ -22,6 +22,22 @@ test('a long gap-facing wick or dissimilar outer bodies fails quality, not gap e
   assert.equal(assessFvgFormation(candle(9, 10, 8, 9.5), candle(9, 10, 8, 9.5), 1), null);
 });
 
+test('formation percentage thresholds include their exact boundaries', () => {
+  const first = candle(0, 100, 0, 65);
+  const third = candle(150, 230, 150, 230);
+  const boundary = assessFvgFormation(first, third, 1);
+  assert.equal(boundary.firstWickRange, 0.35);
+  assert.equal(boundary.bodyDifference, 0.1875);
+  assert.equal(boundary.gapThirdRange, 0.625);
+  assert.equal(boundary.qualified, true);
+  assert.equal(assessFvgFormation(candle(0, 100, 0, 64.999), third, 1).qualified, false);
+  const bodyBoundary = assessFvgFormation(candle(0, 100, 0, 80), candle(150, 250, 150, 250), 1);
+  assert.equal(bodyBoundary.gapThirdRange, 0.5);
+  assert.equal(bodyBoundary.bodyDifference, 0.2);
+  assert.equal(bodyBoundary.qualified, true);
+  assert.equal(assessFvgFormation(candle(0, 100, 0, 79.999), candle(150, 250, 150, 250), 1).qualified, false);
+});
+
 test('correction checks only the first three completed candles and records wick depth', () => {
   const bars = [candle(0, 1, 0, 1), candle(12, 13, 11, 12), candle(12, 13, 11, 12),
     candle(12, 13, 10.5, 12), candle(12, 13, 10, 12)];

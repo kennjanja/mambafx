@@ -2,6 +2,9 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeEvidence } from '../../src/analysis/evidence.js';
 import { evaluateEntryModels } from '../../src/analysis/tradeSignalArchitecture.js';
+import { eligibleFvgs } from '../../src/analysis/fvgQualification.js';
+import { analyzeZones } from '../../src/analysis/zones.js';
+import { analyze } from '../../src/analysis/engine.js';
 
 const BASE_EPOCH = 1_700_000_000;
 function seededWalk(seed, length = 180, granularity = 60) {
@@ -20,9 +23,9 @@ function fvgContinuationSequence() {
   candles[30] = { ...candles[30], high: 101.5, close: 100.7 };
   candles[52] = { ...candles[52], open: 100, close: 104, high: 104.2, low: 99.8 };
   candles[53] = { ...candles[53], open: 104, close: 104.6, high: 104.9, low: 103.9 };
-  candles[54] = { ...candles[54], open: 104.6, close: 105.8, high: 106, low: 104.4 };
-  candles[55] = { ...candles[55], open: 105.8, close: 106.4, high: 106.6, low: 105.6 };
-  candles[56] = { ...candles[56], open: 106.5, close: 107.2, high: 107.5, low: 106.4 };
+  candles[54] = { ...candles[54], open: 104.6, close: 105.8, high: 105.8, low: 104.4 };
+  candles[55] = { ...candles[55], open: 105.8, close: 107.2, high: 107.3, low: 105.8 };
+  candles[56] = { ...candles[56], open: 106.7, close: 107.9, high: 108.1, low: 106.7 };
   candles[57] = { ...candles[57], open: 106.7, close: 106.5, high: 106.8, low: 106.2 };
   candles[58] = { ...candles[58], open: 106.5, close: 106.55, high: 107.5, low: 106.2 };
   for (let i = 59; i < 64; i++) candles[i] = { ...candles[i], open: 107.3, close: 107.3 + (i % 2 ? 0.02 : -0.02), high: 107.55, low: 107.05 };
@@ -60,8 +63,11 @@ function evaluateEvidence(evidence, candles, asOf = candles.length - 1, override
   const bars = candles.slice(0, asOf + 1);
   const direction = evidence.verdict === 'bullish-lean' ? 1 : evidence.verdict === 'bearish-lean' ? -1 : 0;
   const locations = [{ dir: direction, top: Math.max(...bars.map((bar) => bar.high)), bottom: Math.min(...bars.map((bar) => bar.low)) }];
+  const base = analyze(evidence.candles);
+  const state = analyzeZones(base.candles, { atr: base.atr, structure: base });
   const result = evaluateEntryModels({ events: evidence.facts.modelEvents, biasDirection: direction,
-    entryDirection: evidence.facts.swingBias, locations, marketContext: ['trend', 'range'], asOfIndex: asOf, ...overrides });
+    entryDirection: evidence.facts.swingBias, locations, marketContext: ['trend', 'range'], asOfIndex: asOf,
+    fvgs: eligibleFvgs(state.zones, state.fvgCorrections, state.fvgPositions, asOf), ...overrides });
   return { evidence, direction, locations, result };
 }
 function derive(candles, asOf = candles.length - 1, overrides = {}) {

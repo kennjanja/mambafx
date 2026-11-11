@@ -1,4 +1,4 @@
-import { transitionLifecycle, WATCHING_EXPIRY_SEC, TERMINAL_STATES } from './tradeSignalArchitecture.js';
+import { transitionLifecycle, WATCHING_EXPIRY_SEC, TERMINAL_STATES } from './tradeSignalArchitecture.js?v=fvg2';
 import { LIFECYCLE_STORAGE_KEY } from './tradeSignalLifecycleStore.js';
 
 export { LIFECYCLE_STORAGE_KEY };

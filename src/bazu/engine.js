@@ -8,7 +8,7 @@
  */
 
 import { parseActiveSymbols, parseContractsFor, pickDurations, durationAllowed } from './universe.js?v=16';
-import { durationKey } from './validation.js?v=15';
+import { durationKey } from './validation.js?v=16';
 import { buildTradeSignal, modeMayAct, GATE } from './decision.js?v=16';
 import { predict3m } from './predict3m.js?v=17';
 import { configFor } from './config3m.js?v=17';
@@ -215,7 +215,7 @@ let sWorker = null;
 const jobs = new Map();
 let jobSeq = 0;
 function mkWorker() {
-  const w = new Worker(new URL('./worker.js?v=15', import.meta.url), { type: 'module' });
+  const w = new Worker(new URL('./worker.js?v=16', import.meta.url), { type: 'module' });
   w.onmessage = (ev) => { const j = jobs.get(ev.data.id); if (!j) return; jobs.delete(ev.data.id); ev.data.type === 'error' ? j.reject(new Error(ev.data.error)) : j.resolve(ev.data); };
   w.onerror = (e) => { log(`worker error: ${e.message}`, 'bad'); for (const j of jobs.values()) j.reject(new Error('worker failed')); jobs.clear(); };
   return w;

@@ -1,4 +1,5 @@
 // Trade Signal's orchestration primitives. All detectors remain in the shared analysis engine.
+import { compareFvgs } from './fvgQualification.js?v=fvg2';
 
 export const FAMILY_WEIGHTS = Object.freeze({
   structure: 1.5, liquidity: 1.25, momentum: 1.25, location: 0.75, zones: 1,
@@ -56,6 +57,7 @@ export function transitionLifecycle(record, next, at, reason = '') {
 // G: entry-timeframe BOS -> displacement -> retest of that broken level -> hold/reaction.
 // J: fixed trading range -> SOS/LPS or SOW/LPSY continuation.
 const MODEL_DEFINITIONS = [
+  { model_id: 'I', name: 'Inverse FVG Reversal', classification: 'reversal', context: 'trend', sequence: ['ifvg-inverted', 'ifvg-retest'], requiredEvidence: ['qualified FVG', 'close beyond far edge', 'first inverse retest'], invalidation: 'close beyond the inverse FVG', layer1: 'higher-timeframe bias supports the reversal direction', layer2: 'direction-aligned location contains the inverse FVG', layer3: 'confirmed inversion -> first retest' },
   { model_id: 'A', name: 'Liquidity Sweep Reversal', classification: 'reversal', context: 'swing', sequence: ['significant-sweep', 'displacement', 'structure-shift'], requiredEvidence: ['significant liquidity', 'displacement', 'CHoCH/MSS'], invalidation: 'beyond the swept swing', layer1: 'higher-timeframe bias supports the reversal direction', layer2: 'direction-aligned location contains the significant swept swing level', layer3: 'significant sweep -> directional displacement -> confirmed CHoCH/MSS', priority: 'confirming events, then nearest invalidation, then ID' },
   { model_id: 'B', name: 'Order Block Continuation', classification: 'continuation', context: 'trend', sequence: ['displacement', 'bos', 'ob-retest', 'reaction'], requiredEvidence: ['displacement', 'BOS', 'valid OB', 'reaction'], invalidation: 'beyond the OB', layer1: 'higher-timeframe bias and entry structure support the continuation direction', layer2: 'direction-aligned location contains the confirmed OB retest level', layer3: 'displacement -> BOS -> confirmed OB pullback -> reaction' },
   { model_id: 'C', name: 'FVG Continuation', classification: 'continuation', context: 'trend', sequence: ['displacement', 'fvg-created', 'fvg-retest', 'reaction'], requiredEvidence: ['displacement', 'FVG', 'reaction'], invalidation: 'beyond the FVG', layer1: 'higher-timeframe bias and entry structure support the continuation direction', layer2: 'direction-aligned location contains the confirmed FVG retest level', layer3: 'displacement -> FVG created -> FVG retest -> reaction' },
@@ -78,7 +80,7 @@ function orderedSequence(events, sequence, dir) {
   return matches;
 }
 
-export function evaluateEntryModels({ events = [], biasDirection = 0, entryDirection = 0, locations = [], nearestInvalidationDistance = Infinity, asOfIndex = Infinity, marketContext = 'trend', preEntryInvalidated = false, expired = false } = {}) {
+export function evaluateEntryModels({ events = [], biasDirection = 0, entryDirection = 0, locations = [], fvgs = [], nearestInvalidationDistance = Infinity, asOfIndex = Infinity, marketContext = 'trend', preEntryInvalidated = false, expired = false } = {}) {
   if (preEntryInvalidated || expired) return { primary: null, secondary: [], candidates: [] };
   const activeEvents = events.filter((event) => Number.isFinite(event.confirmedIndex) && event.confirmedIndex <= asOfIndex);
   const candidates = [];
@@ -91,6 +93,45 @@ export function evaluateEntryModels({ events = [], biasDirection = 0, entryDirec
       if (model.classification === 'continuation' && isOpposed(entryDirection, direction)) continue;
       const alignedLocations = locations.filter((location) => location && (location.dir == null || location.dir === direction));
       if (!alignedLocations.length) continue;
+      if (model.model_id === 'C' || model.model_id === 'I') {
+        const applicable = fvgs.filter((fvg) => fvg.dir === direction && fvg.kind === (model.model_id === 'C' ? 'FVG' : 'IFVG')
+          && fvg.quality?.qualified === true && Number.isFinite(fvg.sizeAtr)
+          && fvg.confirmedIndex <= asOfIndex && fvg.correctionIndex > fvg.confirmedIndex
+          && fvg.correctionIndex <= fvg.confirmedIndex + 3 && fvg.correctionIndex <= asOfIndex
+          && (model.model_id !== 'I' || (fvg.inversionIndex >= fvg.correctionIndex && fvg.retestIndex === asOfIndex)))
+          .sort(compareFvgs);
+        for (const fvg of applicable) {
+          const location = alignedLocations.find((item) => Number.isFinite(item.top) && Number.isFinite(item.bottom)
+            && fvg.mid <= item.top && fvg.mid >= item.bottom);
+          if (!location) continue;
+          let matched;
+          if (model.model_id === 'C') {
+            const created = activeEvents.find((event) => event.type === 'fvg-created' && event.dir === direction &&
+              event.zoneId === fvg.zoneId && event.confirmedIndex === fvg.confirmedIndex);
+            const retest = activeEvents.find((event) => event.type === 'fvg-retest' && event.dir === direction &&
+              event.zoneId === fvg.zoneId && event.confirmedIndex === fvg.correctionIndex);
+            const displacement = activeEvents.find((event) => event.type === 'displacement' && event.dir === direction
+              && event.index === fvg.createdIndex && event.confirmedIndex <= fvg.confirmedIndex);
+            const reaction = activeEvents.find((event) => event.type === 'reaction' && event.dir === direction
+              && event.confirmedIndex >= fvg.correctionIndex && (!Number.isFinite(asOfIndex) || event.confirmedIndex >= asOfIndex - 2));
+            if (!created || !retest || !displacement || !reaction || displacement.confirmedIndex > created.confirmedIndex) continue;
+            matched = [displacement, created, retest, reaction];
+          } else {
+            const inversion = activeEvents.find((event) => event.type === 'ifvg-inverted' && event.dir === direction &&
+              event.zoneId === fvg.inverseZoneId && event.confirmedIndex === fvg.inversionIndex);
+            const retest = activeEvents.find((event) => event.type === 'ifvg-retest' && event.dir === direction &&
+              event.zoneId === fvg.inverseZoneId && event.confirmedIndex === fvg.retestIndex);
+            if (!inversion || !retest || retest.confirmedIndex <= inversion.confirmedIndex) continue;
+            matched = [inversion, retest];
+          }
+          candidates.push({ model_id: model.model_id, name: model.name, context: model.context, direction,
+            classification: model.classification, confirmingEvents: matched, confirmingEventCount: matched.length,
+            invalidationDistance: Number.isFinite(nearestInvalidationDistance) ? nearestInvalidationDistance : Infinity,
+            reason: `${model.name}: ${matched.map((event) => event.label || event.type).join(' then ')}`, location, fvg });
+          break;
+        }
+        continue;
+      }
       const contexts = model.model_id === 'A' ? ['swing', 'range', 'dealing-range'] : [model.context];
       for (const context of contexts) {
         const scopedEvents = model.model_id === 'A'

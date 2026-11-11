@@ -1,11 +1,23 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { aggregateEvidenceFamilies, detectTradingRanges, evaluateEntryModels, evaluateLayers, transitionLifecycle, WATCHING_EXPIRY_SEC, MODEL_REGISTRY } from '../../src/analysis/tradeSignalArchitecture.js';
+import { aggregateEvidenceFamilies, detectTradingRanges, evaluateEntryModels as evaluateModels, evaluateLayers, transitionLifecycle, WATCHING_EXPIRY_SEC, MODEL_REGISTRY } from '../../src/analysis/tradeSignalArchitecture.js';
+
+function evaluateEntryModels(options) {
+  const fvgs = options.events?.filter((event) => event.fvg).map((event) => event.fvg) || [];
+  return evaluateModels({ ...options, fvgs });
+}
 
 const seq = (types, dir = 1, context = null) => types.map((type, i) => ({ type, dir, index: i, confirmedIndex: i, level: 100, label: type, ...(context ? { context } : {}) }));
 const locations = [{ dir: 1, top: 110, bottom: 90 }];
 function fixtureEvents(id, types, dir = 1, context = null) {
   const events = seq(types, dir, context);
+  if (id === 'C') {
+    events[1].zoneId = 1;
+    events[2].zoneId = 1;
+    events[2].fvg = { zoneId: 1, dir, kind: 'FVG', bottom: 99, top: 101, mid: 100,
+      sizeAtr: 1, createdIndex: 0, confirmedIndex: 1, correctionIndex: 2,
+      quality: { qualified: true, tier: 'basic' }, correction: { deep: false } };
+  }
   if (id === 'A') events[0].classification = 'significant-liquidity';
   if (id === 'F') events[0] = { ...events[0], confirmedIndex: 2, state: 'confirmed', classification: 'minor-inducement-liquidity', level: 99,
     sequenceEvents: [{ type: 'minor-pivot-confirmed', dir, index: 0, confirmedIndex: 0 }, { type: 'minor-inducement-sweep', dir, index: 1, confirmedIndex: 1, classification: 'minor-inducement-liquidity' }, { type: 'inducement-displacement', dir, index: 2, confirmedIndex: 2 }] };
@@ -22,7 +34,7 @@ const modelCases = [
 ];
 
 test('every registered model documents its exact bias, location and entry sequence gates', () => {
-  assert.deepEqual(MODEL_REGISTRY.map((model) => model.model_id).sort(), ['A', 'B', 'C', 'D', 'F', 'G', 'J']);
+  assert.deepEqual(MODEL_REGISTRY.map((model) => model.model_id).sort(), ['A', 'B', 'C', 'D', 'F', 'G', 'I', 'J']);
   for (const model of MODEL_REGISTRY) {
     assert.match(model.layer1, /bias|structure/i, `${model.model_id} layer 1`);
     assert.match(model.layer2, /location|zone/i, `${model.model_id} layer 2`);

@@ -14,7 +14,9 @@
 
 import { findSwingPoints } from './sharedEngineAdapter.js';
 import { detectStructureBreaks, detectLiquiditySweep } from '../../mtf/src/analysis/structurePatterns.js';
-import { detectFVG, detectOrderBlock } from '../../mtf/src/analysis/zonePatterns.js';
+import { detectOrderBlock } from '../../mtf/src/analysis/zonePatterns.js';
+import { analyzeZones } from '../analysis/zones.js?v=fvg2';
+import { eligibleFvgs, compareFvgs } from '../analysis/fvgQualification.js?v=fvg2';
 
 const LB = 2;
 
@@ -80,11 +82,11 @@ export function computeStructureFeatures(prices, epochs, ticksPerCandle = 10) {
   const swings = findSwingPoints(candles, LB);
   const { bos, choch } = detectStructureBreaks(candles, LB);
   const sweeps = detectLiquiditySweep(candles, LB);
-  const fvgs = detectFVG(candles);
+  const fvgAnalysis = analyzeZones(candles);
   const obs = detectOrderBlock(candles);
 
   const avail = (ev, shift) => ev.map((e) => ({ ...e, at: e.index + shift }));
-  const bosA = avail(bos, LB), chochA = avail(choch, LB), swpA = avail(sweeps, LB), fvgA = avail(fvgs, 1), obA = avail(obs, 6);
+  const bosA = avail(bos, LB), chochA = avail(choch, LB), swpA = avail(sweeps, LB), obA = avail(obs, 6);
   const dirOf = (list, i, win) => {
     for (let k = list.length - 1; k >= 0; k--) if (list[k].at <= i) return i - list[k].at <= win ? (list[k].direction === 'bullish' ? 1 : -1) : 0;
     return 0;
@@ -115,7 +117,11 @@ export function computeStructureFeatures(prices, epochs, ticksPerCandle = 10) {
     series.bosDir[t] = dirOf(bosA, i, 3);
     series.chochDir[t] = dirOf(chochA, i, 3);
     series.sweepDir[t] = dirOf(swpA, i, 2);
-    series.fvgDir[t] = inZone(fvgA, i, px);
+    const availableFvgs = eligibleFvgs(fvgAnalysis.zones, fvgAnalysis.fvgCorrections, fvgAnalysis.fvgPositions, i)
+      .filter((zone) => i - zone.confirmedIndex <= 40 && px >= zone.bottom && px <= zone.top);
+    const bull = availableFvgs.filter((zone) => zone.dir === 1).sort(compareFvgs)[0];
+    const bear = availableFvgs.filter((zone) => zone.dir === -1).sort(compareFvgs)[0];
+    series.fvgDir[t] = bull && !bear ? 1 : bear && !bull ? -1 : 0;
     series.obDir[t] = inZone(obA, i, px);
     const hs = conf.filter((s) => s.type === 'high').slice(-2), ls = conf.filter((s) => s.type === 'low').slice(-2);
     series.trendHHHL[t] = hs.length === 2 && ls.length === 2
