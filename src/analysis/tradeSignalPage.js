@@ -8,6 +8,7 @@ import { defaultLifecycleStore } from './tradeSignalLifecycleStore.js';
 import { createFunnel } from './tradeSignalProgress.js?v=fvg2';
 import { fvgQuoteError } from './fvgQualification.js?v=fvg2';
 import { claimInverseFvg } from './ifvgClaims.js';
+import { tradeSignalDisplay } from './tradeSignalDisplay.js?v=1';
 if (typeof window !== 'undefined') window.tsBotFvgQuoteError = fvgQuoteError;
 if (typeof window !== 'undefined') window.tsBotClaimInverseFvg = claimInverseFvg;
 const funnel = createFunnel();
@@ -316,28 +317,39 @@ function tickUi() {
 }
 
 function row(sig) {
-  const buy = sig.dir === 1, cls = sig.status === 'signal' ? (buy ? 'ts-buy' : 'ts-sell') : 'ts-wait';
-  const trg = sig.trigger ? ` | trigger ${esc(sig.trigger.kind)}: ${esc(sig.trigger.label)}` : '';
-  const inv = sig.invalidation ? ` | invalidation ${fmtPrice(sig.invalidation.price)}` : '';
-  const model = sig.primaryModel ? sig.primaryModel.name : sig.modelProgress?.best ? sig.modelProgress.best.text
-    : sig.status === 'insufficient' ? 'not evaluated (insufficient candle history)'
-    : sig.status === 'wait' ? 'not evaluated (entry timeframe opposes the bias)'
-    : !sig.dir ? 'not evaluated (no bias lean)' : 'not re-evaluated since reload (waiting for next scan)';
-  const waiting = String(sig.waitingCondition || '').replace(/^waiting for\s+/i, '') || 'a model sequence';
-  const nearest = sig.nearestLevel != null ? fmtPrice(sig.nearestLevel) : !sig.dir ? 'n/a (no bias lean)' : 'no qualifying level yet';
-  const targetText = sig.target ? fmtPrice(sig.target.price) : sig.status === 'signal' ? 'no target area identified' : 'set when an entry confirms';
-  const familyText = (sig.familyValues || []).map((f) => `${f.family} ${f.value >= 0 ? '+' : ''}${f.value.toFixed(2)}`).join(' | ');
+  const display = tradeSignalDisplay(sig);
+  const indicator = (label, state, detail) => `<div class="ts-layer"><div><b>${esc(label)}</b><span class="ts-state ${state === 'PASSED' ? 'good' : state === 'PENDING' ? 'pending' : 'neutral'}">${esc(state)}</span></div><span>${esc(detail)}</span></div>`;
+  const modelSteps = [
+    display.confirmed.length ? `${sig.primaryModel ? 'Model confirmation events' : 'Diagnostic sequence events'}: ${display.confirmed.join(' → ')}` : 'No confirmed sequence events reported',
+    display.remaining.length ? `Remaining diagnostic steps: ${display.remaining.join(' → ')}` : '',
+  ].filter(Boolean).join(' · ');
+  const extra = [
+    `Nearest level: ${Number.isFinite(sig.nearestLevel) ? fmtPrice(sig.nearestLevel) : 'not reported'}`,
+    `Target: ${Number.isFinite(sig.target?.price) ? fmtPrice(sig.target.price) : 'not reported'}`,
+    `Invalidation: ${Number.isFinite(sig.invalidation?.price) ? fmtPrice(sig.invalidation.price) : 'not reported'}`,
+    `Hold: ${sig.holdLabel || 'not reported'}`,
+    sig.trigger ? `Trigger: ${sig.trigger.kind}: ${sig.trigger.label}` : '',
+  ].filter(Boolean).join(' · ');
+  const familyText = (sig.familyValues || []).filter((f) => Number.isFinite(f.value)).map((f) => `${f.family} ${f.value >= 0 ? '+' : ''}${f.value.toFixed(2)}`).join(' | ');
   const tradeKey = signalTradeKey(sig);
   const blocked = isVolatilityAbove100(sig.symbol, sig.label);
   const tradeButton = sig.status === 'signal' && tradeKey
     ? `<button type="button" class="ts-trade-btn" data-ts-trade-key="${esc(tradeKey)}" ${blocked || (tsBotSubmitted.has(tradeKey) && !tsBotRejected.has(tradeKey)) ? 'disabled' : ''}>${blocked ? 'Disabled: >100' : tsBotRejected.has(tradeKey) ? 'Retry manually' : tsBotSubmitted.has(tradeKey) ? 'Order submitted' : 'Trade this signal'}</button>`
     : '';
-  return `<div class="ts-row ${cls}" data-sym="${esc(sig.symbol)}" data-key="${esc(sig.symbol + '|' + sig.profile)}" role="button" tabindex="0" title="Open ${esc(sig.label)} in Candle Charts with the stored evidence highlighted">
-    <span class="ts-badge">${sig.status === 'watching' ? 'WAIT' : esc(sig.action || '')}</span>
-    <span class="ts-main"><b><em class="ts-prof">${esc(sig.profileName || '')} | ${esc(sig.lifecycleState || 'No Setup')}</em> ${esc(sig.headline)}</b>
-      <span class="ts-sub">direction ${sig.dir === 1 ? 'Bullish' : sig.dir === -1 ? 'Bearish' : '?'} | evidence balance ${sig.overallBalance == null ? '?' : sig.overallBalance.toFixed(2)} | model ${esc(model)} | waiting for ${esc(waiting)} | nearest ${esc(nearest)} | target ${esc(targetText)}${inv} | hold ${esc(sig.holdLabel || '?')}${trg}</span>
-      ${familyText ? `<span class="ts-sub">families: ${esc(familyText)} (heuristic, provisional)</span>` : ''}${tradeButton}</span>
-    <span class="ts-go">Open charts</span></div>`;
+  return `<div class="ts-row ts-card ${display.tone}" data-sym="${esc(sig.symbol)}" data-key="${esc(sig.symbol + '|' + sig.profile)}" role="button" tabindex="0" title="Open ${esc(sig.label)} in Candle Charts with the stored evidence highlighted">
+    <div class="ts-card-head"><div><b>${esc(sig.label)}</b> <em class="ts-prof">${esc(sig.profileName || sig.profile || '')}</em>
+      <div class="ts-card-bias">${esc(display.biasText)} · evidence balance ${display.balance == null ? 'unavailable' : display.balance.toFixed(2)} <span>(not a probability)</span></div></div>
+      <span class="ts-overall ${display.tone}">${esc(display.overall)}</span></div>
+    <div class="ts-layer-grid">
+      ${indicator('1 · Directional Bias', display.biasStatus, display.biasText)}
+      ${indicator('2 · Location Gate', display.locationStatus, `${display.locationText} — ${display.locationDetail}`)}
+      ${indicator('3 · Entry Confirmation', display.entryStatus, display.entryStatus === 'PASSED' ? 'Ordered entry model confirmed' : display.entryStatus === 'PENDING' ? 'Waiting for ordered entry confirmation' : 'Not evaluated or not retained')}
+    </div>
+    <div class="ts-card-model"><b>${esc(display.modelName)}</b> · ${esc(display.sequenceStatus)}<br><span>${esc(modelSteps)}</span></div>
+    <div class="ts-card-reason"><b>Reason:</b> ${esc(display.reason)}</div>
+    <details class="ts-card-details"><summary>Additional evidence</summary><span>${esc(extra)}</span>${familyText ? `<br><span>Families: ${esc(familyText)} (heuristic, provisional)</span>` : ''}</details>
+    <div class="ts-card-footer"><span>Lifecycle: ${esc(display.lifecycle)} · Setup: ${display.overall === 'QUALIFIED - ENTRY CONFIRMED' ? 'qualified' : 'not confirmed'} · Entry authorization: ${esc(display.authorization)}</span><span class="ts-go">Open charts</span></div>
+    ${tradeButton}</div>`;
 }
 
 function tsBotSettings() {
@@ -468,9 +480,9 @@ function render() {
   const bar = $('tsStatus');
   if (bar) bar.textContent = `${status === 'scanning' ? `scanning ${scanned}/${total}…` : status}${lastScanAt ? ' · last full scan ' + new Date(lastScanAt).toLocaleTimeString() : ''} · ${live.length} entry signal(s) · ${watch.length} watching for a trigger · ${wait.length} opposed${lifecycleNotice ? ' · ⚠ ' + lifecycleNotice : ''}`;
   el.innerHTML = trackedHtml() + (live.length ? live.map(row).join('') : `<div class="ts-empty">${status === 'scanning' && !all.length ? 'Scanning markets…' : 'No market has an entry trigger right now.'}</div>`)
-    + (watch.length ? `<div class="ts-h">Watching - lean found, waiting for a model sequence to complete</div>` + watch.map(row).join('') : '')
+    + (watch.length ? `<div class="ts-h">Watching markets</div>` + watch.map(row).join('') : '')
     + (wait.length ? `<div class="ts-h">Opposed (bias lean, entry timeframe against it)</div>` + wait.map(row).join('') : '')
-    + (rest.length ? `<details class="ts-rest"><summary>No setup (${rest.length})</summary>${rest.map((s) => `<div class="ts-none"><b>${esc(s.label)} · ${esc(s.profileName || '')}</b> — ${esc(s.reason || s.headline)}</div>`).join('')}</details>` : '');
+    + (rest.length ? `<div class="ts-h">Other market statuses (${rest.length})</div>${rest.map(row).join('')}` : '');
   tsBotUpdateUi();
 }
 
@@ -513,6 +525,7 @@ document.addEventListener('click', (e) => {
     if (!result.ok) tsBotSetStatus(result.error);
     return;
   }
+  if (e.target.closest && e.target.closest('#tsList .ts-card-details')) return;
   const r = e.target.closest && e.target.closest('#tsList .ts-row, #tsList .ts-trk'); if (r) tsOpen(r.dataset.sym, r.dataset.key, r.dataset.track);
   if (e.target && e.target.id === 'tsRescan') tsRescan();
   if (e.target && e.target.id === 'tsBotStart') tsBotStart();

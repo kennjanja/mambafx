@@ -261,6 +261,23 @@ footer{text-align:center;color:var(--muted);font-size:11px;margin-top:22px;line-
 #page-tradesignal .ts-h{margin:14px 0 6px;font-size:11px;letter-spacing:.1em;text-transform:uppercase;color:var(--muted)}
 #page-tradesignal .ts-empty{padding:18px;color:var(--muted);font-size:13px;border:1px dashed var(--line);border-radius:10px;margin-bottom:8px}
 #page-tradesignal .ts-rest{margin-top:12px;font-size:12px;color:var(--muted)}#page-tradesignal .ts-none{padding:3px 0}
+#page-tradesignal .ts-card{display:block;opacity:1;border-left-color:#667085}
+#page-tradesignal .ts-card.good{border-left-color:#22c55e}#page-tradesignal .ts-card.pending{border-left-color:#f59e0b}#page-tradesignal .ts-card.bad{border-left-color:#ef4444}
+#page-tradesignal .ts-card-head,#page-tradesignal .ts-card-footer{display:flex;justify-content:space-between;align-items:flex-start;gap:8px;flex-wrap:wrap}
+#page-tradesignal .ts-card-head{font-size:14px}#page-tradesignal .ts-card-bias{font-size:12px;font-weight:600;margin-top:5px}
+#page-tradesignal .ts-card-bias span,#page-tradesignal .ts-card-model span,#page-tradesignal .ts-card-footer{color:var(--muted);font-size:11px;font-weight:400}
+#page-tradesignal .ts-overall,#page-tradesignal .ts-state{font-size:10px;font-weight:800;letter-spacing:.03em;border-radius:5px;padding:3px 6px;background:#202733;color:#adb6c5}
+#page-tradesignal .ts-overall.good,#page-tradesignal .ts-state.good{color:#86efac;background:#143222}
+#page-tradesignal .ts-overall.pending,#page-tradesignal .ts-state.pending{color:#fcd34d;background:#3c2c12}
+#page-tradesignal .ts-overall.bad{color:#fca5a5;background:#3f1c21}
+#page-tradesignal .ts-layer-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:7px;margin:10px 0}
+#page-tradesignal .ts-layer{min-width:0;background:#141c2b;border-radius:7px;padding:8px;font-size:11px;color:#b9c5d6;overflow-wrap:anywhere}
+#page-tradesignal .ts-layer>div{display:flex;justify-content:space-between;gap:5px;align-items:center;margin-bottom:5px;color:var(--text)}
+#page-tradesignal .ts-card-model,#page-tradesignal .ts-card-reason{font-size:12px;line-height:1.45;margin:6px 0;overflow-wrap:anywhere}
+#page-tradesignal .ts-card-details{color:var(--muted);font-size:11px;line-height:1.5;overflow-wrap:anywhere}
+#page-tradesignal .ts-card-details summary{cursor:pointer;color:#93bdf3}
+#page-tradesignal .ts-card-footer{border-top:1px solid var(--line);padding-top:7px;margin-top:8px}
+@media(max-width:700px){#page-tradesignal .ts-layer-grid{grid-template-columns:1fr}#page-tradesignal .ts-card-head{gap:7px}}
 
 /* per-timeframe timer + order-flow readout */
 .tf-timer{font-variant-numeric:tabular-nums;font-weight:700;color:var(--accent);font-size:11px;background:#0a0e17;border:1px solid var(--line);border-radius:7px;padding:3px 8px}
@@ -34003,7 +34020,7 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=34"></script>
-<script type="module" src="src/analysis/tradeSignalPage.js?v=19"></script>
+<script type="module" src="src/analysis/tradeSignalPage.js?v=20"></script>
 <script type="module" src="src/analysis/predictionHistoryPage.js?v=5"></script>
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/analysis/sosSowPage.js?v=9"></script>
