@@ -1,4 +1,4 @@
-import { PREDICTION_HISTORY_DB, PREDICTION_HISTORY_VERSION, LIFECYCLE_STORE, ensureStores } from './tradeSignalStorage.js';
+import { PREDICTION_HISTORY_DB, PREDICTION_HISTORY_VERSION, LIFECYCLE_STORE, ensureStores } from './tradeSignalStorage.js?v=4';
 
 // A durable atomic claim prevents two tabs or a reload buying the same first retest.
 // A failed or uncertain order remains claimed rather than risking a duplicate order.
@@ -17,7 +17,7 @@ export function claimInverseFvg({ symbol, granularity, formationEpoch, retestUnt
     catch (error) { fail(error); return; }
     request.onupgradeneeded = () => {
       if (settled) { request.transaction.abort(); return; }
-      try { ensureStores(request.result); }
+      try { ensureStores(request.result, request.transaction); }
       catch (error) { request.transaction.abort(); fail(error); }
     };
     request.onerror = () => fail(request.error || new Error('Could not open inverse FVG claim store.'));

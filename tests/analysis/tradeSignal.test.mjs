@@ -15,13 +15,13 @@ const flat = (n, step) => Array.from({ length: n }, (_, i) => K(100, 100.5, 99.5
 const set = (f) => ({ 300: f(300), 1800: f(1800), 3600: f(3600), 14400: f(14400) });
 
 test('missing or short candle history is reported, never guessed', () => {
-  const s = buildTradeSignal({ symbol: 'R_75', label: 'Volatility 75', candles: {} });
+  const s = buildTradeSignal({ symbol: 'R_75', label: 'Volatility 75', candles: {}, nowSec: Number.MAX_SAFE_INTEGER });
   assert.equal(s.status, 'insufficient');
   assert.equal(s.dir, 0);
   assert.match(s.headline, /waiting for candle history/);
 });
 test('a flat market yields no signal', () => {
-  const s = buildTradeSignal({ symbol: 'R_10', candles: set((st) => flat(150, st)) });
+  const s = buildTradeSignal({ symbol: 'R_10', candles: set((st) => flat(150, st)), nowSec: Number.MAX_SAFE_INTEGER });
   assert.equal(s.status, 'none');
   assert.match(s.reason, /30 min evidence is inconclusive/);
 });
@@ -30,7 +30,7 @@ test('every outcome is internally consistent across many synthetic series', () =
   for (let seed = 1; seed <= 60; seed++) {
     const drift = ((seed % 5) - 2) * 0.15;
     const candles = { 300: walk(seed, 300, 300, drift), 1800: walk(seed + 100, 300, 1800, drift), 3600: walk(seed + 200, 300, 3600, drift), 14400: walk(seed + 300, 300, 14400, drift) };
-    const s = buildTradeSignal({ symbol: 'X', candles });
+    const s = buildTradeSignal({ symbol: 'X', candles, nowSec: Number.MAX_SAFE_INTEGER });
     seen.add(s.status);
     const bias = analyzeEvidence(candles[1800], { htf: [{ tf: '1 hour', candles: candles[3600] }, { tf: '4 hour', candles: candles[14400] }] });
     assert.equal(s.dir === 1, bias.verdict === 'bullish-lean');
@@ -58,7 +58,7 @@ test('profiles: every profile yields a consistent status; signals carry a trigge
     for (let seed = 1; seed <= 40; seed++) {
       const drift = ((seed % 5) - 2) * 0.15, candles = {};
       ALL_GRANULARITIES.forEach((g, i) => { candles[g] = walk(seed * 7 + i, 300, g, drift); });
-      const s = buildTradeSignal({ symbol: 'X', candles, profile: prof });
+      const s = buildTradeSignal({ symbol: 'X', candles, profile: prof, nowSec: Number.MAX_SAFE_INTEGER });
       assert.equal(s.profile, prof.id); assert.equal(s.holdSec, prof.holdSec);
       if (s.status === 'signal') {
         counts.signal++;
@@ -133,10 +133,20 @@ test('each profile excludes and ignores mutable forming bias and HTF context can
 test('signal snapshots carry event and confirmation timestamps', () => {
   const candles = {};
   for (const [i, g] of ALL_GRANULARITIES.entries()) candles[g] = walk(i + 100, 240, g, 0.1).map((c) => ({ ...c, epoch: 1_700_000_000 + i * 10_000_000 + c.epoch - 1.7e9 }));
-  const s = buildTradeSignal({ symbol: 'X', candles });
+  const s = buildTradeSignal({ symbol: 'X', candles, nowSec: Number.MAX_SAFE_INTEGER });
   if (s.status === 'signal') {
     assert.ok(Number.isFinite(s.confirmedAt));
     assert.ok(s.evidenceSnapshot.every((item) => 'occurredAt' in item && 'confirmedAt' in item));
+  }
+});
+
+test('a finite decision time and positive granularity are required to use candle data', () => {
+  for (const nowSec of [undefined, null, NaN, Infinity, -Infinity]) {
+    assert.throws(() => selectClosedCandles([], 60, nowSec), /finite as-of timestamp/);
+    assert.throws(() => buildTradeSignal({ symbol: 'X', candles: {}, nowSec }), /finite as-of timestamp/);
+  }
+  for (const granularity of [0, -1, NaN, Infinity]) {
+    assert.throws(() => selectClosedCandles([], granularity, 100), /positive granularity/);
   }
 });
 

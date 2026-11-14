@@ -18,7 +18,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { EventFeatureRegistry } from '../../research/src/eventProcess/EventFeatureRegistry.js';
 import { registerCoreEventFeatures } from '../../research/src/eventProcess/coreEventFeatures.js';
@@ -31,7 +31,7 @@ import { registerEventProcessProcedures } from '../../research/src/eventProcess/
 import { ResearchConfiguration } from '../../research/src/config/ResearchConfiguration.js';
 import { ResearchFreeze } from '../../research/src/config/ResearchFreeze.js';
 
-const INDEX_HTML_PATH = path.resolve(new URL('../../index.html', import.meta.url).pathname);
+const INDEX_HTML_PATH = fileURLToPath(new URL('../../index.html', import.meta.url));
 
 function seededRng(seed) {
   let state = seed >>> 0;
@@ -90,7 +90,7 @@ test('index.html: the new handler imports the real Phase 12 modules (not a reimp
 
 test('index.html: the new handler does not spend alpha directly and does not call evaluateDiscoveryCandidate -- it reports the hierarchy\'s real conclusion without claiming a governed Confirmed verdict', () => {
   const html = fs.readFileSync(INDEX_HTML_PATH, 'utf8');
-  const handlerMatch = html.match(/ph11ConfirmEventProcessBtn"\)\.addEventListener\("click",[\s\S]*?\n {2}\}\);/);
+  const handlerMatch = html.match(/ph11On\("ph11ConfirmEventProcessBtn",[\s\S]*?\r?\n {2}\}\);/);
   assert.ok(handlerMatch, 'could not locate the new handler');
   const handler = handlerMatch[0];
   assert.ok(!/evaluateDiscoveryCandidate/.test(handler));
@@ -164,7 +164,8 @@ test('real functional simulation: correctly reports insufficient data when fewer
 
 test('never IMPORTS from onlineFdr.js/discoveryDecision.js/hypothesisRegistry.js/lockbox.js/randomnessAudit.js/knowledgeGraph.js in the new handler (a comment explaining what the handler deliberately does NOT yet do, mentioning discoveryDecision.js by name, is not an import and is expected)', () => {
   const html = fs.readFileSync(INDEX_HTML_PATH, 'utf8');
-  const handlerMatch = html.match(/ph11ConfirmEventProcessBtn"\)\.addEventListener\("click",[\s\S]*?\n {2}\}\);/);
+  const handlerMatch = html.match(/ph11On\("ph11ConfirmEventProcessBtn",[\s\S]*?\r?\n {2}\}\);/);
+  assert.ok(handlerMatch, 'could not locate the event process handler');
   const handler = handlerMatch[0];
   assert.ok(!/from\s+['"][^'"]*(onlineFdr|discoveryDecision|hypothesisRegistry|lockbox|randomnessAudit|knowledgeGraph)\.js['"]/.test(handler));
 });

@@ -50,7 +50,7 @@ function inducementSequence() {
   for (let i = 64 + offset; i < candles.length; i++) candles[i] = { ...candles[i], open: 106.2, close: 106.2, high: 106.5, low: 106.0 };
   return candles;
 }
-const MODEL_SEEDS = Object.freeze({ A: 67, B: 136, C: null, D: 67, F: null, G: 11, J: 224 });
+const MODEL_SEEDS = Object.freeze({ A: 90, B: 136, C: null, D: 67, F: null, G: 11, J: 224 });
 const MODEL_IDS = Object.keys(MODEL_SEEDS);
 
 function translate(candles, seed) {
@@ -77,7 +77,7 @@ function derive(candles, asOf = candles.length - 1, overrides = {}) {
 function eventProjection(evidence, cut) {
   return evidence.facts.modelEvents.filter((event) => event.type !== 'trend-established' && event.confirmedIndex < cut).map((event) => ({
     type: event.type, dir: event.dir, index: event.index, confirmedIndex: event.confirmedIndex, level: event.level,
-    classification: event.classification, context: event.context, state: event.state,
+    classification: event.classification, context: event.context, rangeId: event.rangeId, state: event.state,
     sequenceEvents: event.sequenceEvents?.map((part) => ({ type: part.type, dir: part.dir, index: part.index,
       confirmedIndex: part.confirmedIndex, classification: part.classification, level: part.level })),
   }));
@@ -122,7 +122,12 @@ test('candle-rebuilt truncation is causal for every registered model', { timeout
 
     const source = fullRuns[id], dir = source.direction;
     const negativeCases = [
-      ['missing-event-before-sequence-completes', () => derive(candles.slice(0, Math.max(60, Math.min(...source.result.candidates.find((c) => c.model_id === id).confirmingEvents.map((e) => e.confirmedIndex)))))],
+      ['missing-event-before-sequence-completes', () => {
+        const firstQualified = Array.from({ length: candles.length - 59 }, (_, i) => i + 60)
+          .find((length) => derive(candles.slice(0, length)).result.candidates.some((candidate) => candidate.model_id === id));
+        assert.ok(firstQualified > 60, `${id} fixture must include an unqualified prefix`);
+        return derive(candles.slice(0, firstQualified - 1));
+      }],
       ['wrong-direction', () => derive(candles, candles.length - 1, { biasDirection: -dir })],
       ['invalid-context', () => id === 'A'
         ? (() => { const evidence = analyzeEvidence(candles, { granularity: 60 }); const changed = evidence.facts.modelEvents.map((event) => event.type === 'significant-sweep' ? { ...event, context: 'unsupported-context' } : event); const run = derive(candles); const result = evaluateEntryModels({ events: changed, biasDirection: run.direction, entryDirection: evidence.facts.swingBias, locations: run.locations, marketContext: 'unsupported-context', asOfIndex: candles.length - 1 }); return { result }; })()

@@ -12,6 +12,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { createFakeDocument } from '../support/fakeDom.js';
 import { injectPhase11Styles, PHASE11_CSS } from '../../research/src/ui/Phase11Styles.js';
@@ -27,7 +28,7 @@ import { ResearchFreeze } from '../../research/src/config/ResearchFreeze.js';
 import { StatisticalAnalysisPlan } from '../../research/src/config/StatisticalAnalysisPlan.js';
 import { CANDIDATE_TYPES } from '../../research/src/candidate/Candidate.js';
 
-const UI_DIR = path.resolve(new URL('.', import.meta.url).pathname, '../../research/src/ui');
+const UI_DIR = fileURLToPath(new URL('../../research/src/ui/', import.meta.url));
 
 async function makeRc() {
   return ResearchConfiguration.create({

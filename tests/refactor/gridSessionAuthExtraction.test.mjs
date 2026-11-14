@@ -35,7 +35,7 @@ function readModule() {
 
 test('index.html references src/trading/gridSessionAuth.js as an ES module, positioned before the untouched aggressionBot.js tag', () => {
   const html = readIndexHtml();
-  const sessionIdx = html.indexOf('<script type="module" src="src/trading/gridSessionAuth.js"></script>');
+  const sessionIdx = html.search(/<script type="module" src="src\/trading\/gridSessionAuth\.js(?:\?v=\d+)?"><\/script>/);
   const aggIdx = html.indexOf('<script type="module" src="src/trading/aggressionBot.js"></script>');
   assert.ok(sessionIdx >= 0, 'gridSessionAuth.js module reference must exist');
   assert.ok(aggIdx >= 0, 'the pre-existing aggressionBot.js module reference must still exist, untouched');
@@ -53,7 +53,7 @@ test('the remaining Deriv-flow state and connect/trade functions were deliberate
   const html = readIndexHtml();
   assert.match(html, /let gridWs = null, gridAuthed = false, gridPing = null;/);
   assert.match(html, /async function gridConnect\(\)\{/, 'gridConnect must remain inline -- not part of this slice');
-  assert.match(html, /function gridPlaceTrade\(dir, source\)/);
+  assert.match(html, /function gridPlaceTrade\(dir,\s*source,\s*options\s*=\s*\{\}\)/);
 });
 
 test('index.html has the six bridge changes this slice made: gridLoggedIn upgraded to read-write, plus five new entries', () => {

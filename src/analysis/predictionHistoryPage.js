@@ -1,6 +1,6 @@
 // Prediction History page: archive of every Trade Signal prediction that has lapsed, with its correct/wrong result.
 // Read-only view of the archive written by tradeSignalPage.js. Counts are descriptive, not a validated edge.
-import { predictionHistoryStore } from './tradeSignalStorage.js';
+import { predictionHistoryStore } from './tradeSignalStorage.js?v=4';
 const $ = (id) => document.getElementById(id);
 const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 const fp = (p) => { if (p == null) return '—'; const a = Math.abs(p); return p.toFixed(a >= 1000 ? 2 : a >= 100 ? 3 : a >= 1 ? 4 : 5); };

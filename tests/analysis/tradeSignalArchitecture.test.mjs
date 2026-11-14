@@ -18,7 +18,11 @@ function fixtureEvents(id, types, dir = 1, context = null) {
       sizeAtr: 1, createdIndex: 0, confirmedIndex: 1, correctionIndex: 2,
       quality: { qualified: true, tier: 'basic' }, correction: { deep: false } };
   }
-  if (id === 'A') events[0].classification = 'significant-liquidity';
+  if (id === 'A') Object.assign(events[0], { classification: 'significant-liquidity',
+    modelAGroupId: 'sell|0|1|97', groupId: 'sell|0|1|97', side: 'sell', extreme: 97 });
+  if (id === 'A') Object.assign(events[1], { startIndex: events[1].index, id: 'D1' });
+  if (id === 'A') Object.assign(events[2], { displacementIndex: events[1].index, id: 'CH1' });
+  if (id === 'J') events.forEach((event) => { event.rangeId = '0:0'; });
   if (id === 'F') events[0] = { ...events[0], confirmedIndex: 2, state: 'confirmed', classification: 'minor-inducement-liquidity', level: 99,
     sequenceEvents: [{ type: 'minor-pivot-confirmed', dir, index: 0, confirmedIndex: 0 }, { type: 'minor-inducement-sweep', dir, index: 1, confirmedIndex: 1, classification: 'minor-inducement-liquidity' }, { type: 'inducement-displacement', dir, index: 2, confirmedIndex: 2 }] };
   return events;
@@ -146,12 +150,31 @@ test('range boundaries freeze and detect SOS followed by LPS at their confirmati
 
 test('Wyckoff J sequence accepts nondirectional range context then bullish SOS/LPS', () => {
   const events = [
-    { type: 'range-established', dir: 0, index: 0, confirmedIndex: 0, level: 105 },
-    { type: 'sos-or-sow', dir: 1, index: 1, confirmedIndex: 1, level: 105 },
-    { type: 'lps-or-lpsy', dir: 1, index: 2, confirmedIndex: 2, level: 100 },
+    { type: 'range-established', dir: 0, index: 0, confirmedIndex: 0, rangeId: '0:0', level: 105 },
+    { type: 'sos-or-sow', dir: 1, index: 1, confirmedIndex: 1, rangeId: '0:0', level: 105 },
+    { type: 'lps-or-lpsy', dir: 1, index: 2, confirmedIndex: 2, rangeId: '0:0', level: 100 },
   ];
   const result = evaluateEntryModels({ events, locations, marketContext: 'range', biasDirection: 1, entryDirection: 1 });
   assert.equal(result.primary.model_id, 'J');
+});
+
+test('model J requires a complete ordered sequence belonging to the same range', () => {
+  const events = fixtureEvents('J', ['range-established', 'sos-or-sow', 'lps-or-lpsy']);
+  const options = { locations, marketContext: 'range', biasDirection: 1, entryDirection: 1 };
+  for (const index of [0, 1, 2]) {
+    const mixed = structuredClone(events); mixed[index].rangeId = 'other';
+    assert.equal(evaluateEntryModels({ ...options, events: mixed }).candidates.some((c) => c.model_id === 'J'), false);
+    delete mixed[index].rangeId;
+    assert.equal(evaluateEntryModels({ ...options, events: mixed }).candidates.some((c) => c.model_id === 'J'), false);
+  }
+  const competing = [{ ...events[0], rangeId: 'other' }, ...events];
+  assert.equal(evaluateEntryModels({ ...options, events: competing }).primary.model_id, 'J');
+  assert.equal(evaluateEntryModels({ ...options, events, asOfIndex: 1 }).primary, null);
+  const outside = events.map((event) => ({ ...event, rangeId: 'outside', level: 200 }));
+  assert.equal(evaluateEntryModels({ ...options, events: [...outside, ...events] }).primary.confirmingEvents[0].rangeId, '0:0');
+  const bearish = fixtureEvents('J', ['range-established', 'sos-or-sow', 'lps-or-lpsy'], -1);
+  const down = evaluateEntryModels({ events: bearish, locations: [{ dir: -1, bottom: 90, top: 110 }], marketContext: 'range', biasDirection: -1, entryDirection: -1 });
+  assert.equal(down.primary.model_id, 'J');
 });
 
 
@@ -225,6 +248,43 @@ test('Model A accepts significant liquidity only; F requires confirmed minor ind
   const fEvents = fixtureEvents('F', ['inducement-confirmed']);
   assert.equal(evaluateEntryModels({ events: fEvents, locations: [{ dir: 1, top: 100, bottom: 98 }], biasDirection: 1, entryDirection: 1 }).primary.model_id, 'F');
   assert.equal(evaluateEntryModels({ events: aEvents, locations, biasDirection: 1, entryDirection: 1 }).candidates.some((candidate) => candidate.model_id === 'F'), false);
-  const protectedSweep = [{ type: 'significant-sweep', classification: 'significant-liquidity', dir: 1, index: 0, confirmedIndex: 0, level: 100 }, ...seq(['displacement', 'structure-shift']).map((event) => ({ ...event, index: event.index + 1, confirmedIndex: event.confirmedIndex + 1 }))];
+  const protectedSweep = fixtureEvents('A', ['significant-sweep', 'displacement', 'structure-shift']);
   assert.equal(evaluateEntryModels({ events: protectedSweep, locations, biasDirection: 1 }).primary.model_id, 'A');
+});
+
+test('Model A binds one explicit group to its related displacement and structure identity', () => {
+  const group = { type: 'significant-sweep', modelAGroupId: 'G2', groupId: 'G2', groupMemberKind: 'spring',
+    classification: 'significant-liquidity', context: 'range', dir: 1, side: 'sell', index: 3,
+    confirmedIndex: 4, level: 100, extreme: 98, poolAttributed: false, matchCount: 0 };
+  const events = [group,
+    { type: 'significant-sweep', modelAGroupId: 'G1', groupId: 'G1', classification: 'significant-liquidity',
+      context: 'range', dir: 1, side: 'sell', index: 1, confirmedIndex: 2, level: 100, extreme: 97 },
+    { type: 'displacement', id: 'D1', dir: 1, startIndex: 4, index: 5, confirmedIndex: 5 },
+    { type: 'structure-shift', id: 'CH1', dir: 1, index: 6, confirmedIndex: 6, displacementIndex: 5 }];
+  const result = evaluateModels({ events, biasDirection: 1, entryDirection: 1, marketContext: ['range'],
+    locations: [{ dir: 1, top: 101, bottom: 99 }], asOfIndex: 6 });
+  const model = result.candidates.find((candidate) => candidate.model_id === 'A');
+  assert.ok(model);
+  assert.equal(model.groupId, 'G2', 'latest-confirming eligible group wins');
+  assert.equal(model.displacementId, 'D1');
+  assert.equal(model.structureShiftId, 'CH1');
+  assert.deepEqual(model.confirmingEvents.map((event) => event.id || event.groupId), ['G2', 'D1', 'CH1']);
+  assert.equal(model.poolAttributed, false);
+  assert.equal(model.matchCount, 0);
+});
+
+test('Model A rejects unrelated displacement starts and wick invalidation through the decision', () => {
+  const group = { type: 'significant-sweep', modelAGroupId: 'G', groupId: 'G',
+    classification: 'significant-liquidity', context: 'range', dir: 1, side: 'sell',
+    index: 2, confirmedIndex: 3, level: 100, extreme: 98 };
+  const displacement = { type: 'displacement', id: 'D', dir: 1, startIndex: 1, index: 4, confirmedIndex: 4 };
+  const shift = { type: 'structure-shift', id: 'CH', dir: 1, index: 5, confirmedIndex: 5, displacementIndex: 4 };
+  const common = { events: [group, displacement, shift], biasDirection: 1, entryDirection: 1,
+    marketContext: ['range'], locations: [{ dir: 1, top: 101, bottom: 99 }], asOfIndex: 5 };
+  assert.equal(evaluateModels(common).candidates.some((candidate) => candidate.model_id === 'A'), false);
+  const candles = Array.from({ length: 6 }, () => ({ high: 101, low: 99 }));
+  candles[4] = { high: 101, low: 97 };
+  const eligibleDisplacement = { ...displacement, startIndex: 3 };
+  assert.equal(evaluateModels({ ...common, events: [group, eligibleDisplacement, shift], candles })
+    .candidates.some((candidate) => candidate.model_id === 'A'), false);
 });

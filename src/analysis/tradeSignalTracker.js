@@ -5,8 +5,13 @@ export const HORIZON_SEC = 1800;
 export const RESOLUTION_GRANULARITY = 60;
 export const ENTRY_GRANULARITY = 300;
 
-function copySnapshot(value) {
+export function copySnapshot(value) {
   return value == null ? value : JSON.parse(JSON.stringify(value));
+}
+
+export function lifecycleMatchesPrediction(lifecycle, prediction) {
+  return typeof lifecycle?.signalId === 'string' && lifecycle.signalId.length > 0 &&
+    typeof prediction?.id === 'string' && lifecycle.signalId === prediction.id;
 }
 
 export function openTracked(sig, nowSec) {

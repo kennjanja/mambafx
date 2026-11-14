@@ -123,6 +123,29 @@ test('entry qualification snapshot freezes at Trigger Detected through later sca
   assert.deepEqual(Object.fromEntries(keys.map((key) => [key, reloaded.get('R_10|scalp')[key]])), frozen);
 });
 
+test('frozen nested snapshots are independent of input and retrieved records across reloads', () => {
+  const storage = memoryStorage(), registry = createLifecycleRegistry({ storage }); registry.load();
+  const signal = sig({ status: 'signal', primaryModel: { model_id: 'A', events: [{ tags: ['original'] }] },
+    entry: { details: { values: [null, 1] } }, evidenceSnapshot: [{ nested: { value: 'original' } }],
+    secondaryModels: [], target: null, layers: { location: { status: 'Approaching Location', evidence: [] } } });
+  registry.update(signal, profile, 100);
+  signal.primaryModel.events[0].tags[0] = 'changed';
+  signal.entry.details.values[1] = 9;
+  signal.evidenceSnapshot[0].nested.value = 'changed';
+  const copy = registry.get('R_10|scalp');
+  copy.primaryModel.events[0].tags.push('changed');
+  registry.list()[0].evidenceSnapshot[0].nested.value = 'changed';
+  registry.close('R_10|scalp', 280);
+  const reloaded = createLifecycleRegistry({ storage }); reloaded.load();
+  for (const item of [registry.get('R_10|scalp'), reloaded.get('R_10|scalp')]) {
+    assert.deepEqual(item.primaryModel.events[0].tags, ['original']);
+    assert.deepEqual(item.entry.details.values, [null, 1]);
+    assert.equal(item.evidenceSnapshot[0].nested.value, 'original');
+    assert.equal(item.target, null);
+    assert.equal(item.state, 'Closed');
+  }
+});
+
 test('quota failure on persist still leaves the row with its real state, waiting text and nearest level', () => {
   const storage = { getItem: () => null, setItem: () => { const e = new Error('Setting the value exceeded the quota.'); e.name = 'QuotaExceededError'; throw e; } };
   const registry = createLifecycleRegistry({ storage }); registry.load();

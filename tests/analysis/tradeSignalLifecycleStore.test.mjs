@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createLifecycleStore, LIFECYCLE_STORAGE_KEY } from '../../src/analysis/tradeSignalLifecycleStore.js';
+import { createLifecycleStore, reconcileLifecycle, LIFECYCLE_STORAGE_KEY } from '../../src/analysis/tradeSignalLifecycleStore.js';
 import { createLifecycleRegistry, applyRetention, TERMINAL_SNAPSHOT_TTL_SEC, HISTORY_MAX, RECORDS_MAX } from '../../src/analysis/tradeSignalLifecycle.js';
 import { createPredictionHistoryStore } from '../../src/analysis/tradeSignalStorage.js';
 
@@ -32,10 +32,11 @@ class FakeIDB {
   tx(db, name, mode) {
     const store = db.stores.get(name);
     if (!store) throw new Error('NotFoundError: ' + name);
-    const working = new Map(store.rows), t = { error: null }; let aborted = false;
+    const working = new Map(store.rows), t = { error: null }; let aborted = false, pending = 0;
     const abort = (error) => { if (aborted) return; aborted = true; t.error = error; t.onabort?.(); };
-    setTimeout(() => {
+    const finish = () => {
       if (aborted) return;
+      if (pending) { setTimeout(finish, 5); return; }
       if (mode === 'readwrite') {
         this.writes++;
         if (this.failNextWrite) { const e = this.failNextWrite; this.failNextWrite = null; abort(e); return; }
@@ -43,17 +44,18 @@ class FakeIDB {
         store.rows = working;
       }
       t.oncomplete?.();
-    }, 5);
+    };
+    setTimeout(finish, 5);
     t.abort = () => abort(new Error('aborted'));
     t.objectStore = () => ({
-      getAll: () => { const r = {}; setTimeout(() => { r.result = [...working.values()].map((x) => JSON.parse(JSON.stringify(x))); r.onsuccess?.(); }, 0); return r; },
+      getAll: () => { const r = {}; pending++; setTimeout(() => { if (!aborted) { r.result = [...working.values()].map((x) => JSON.parse(JSON.stringify(x))); r.onsuccess?.(); } pending--; }, 0); return r; },
       put: (row) => { working.set(row[store.keyPath], JSON.parse(JSON.stringify(row))); },
       delete: (key) => { working.delete(key); },
       clear: () => { working.clear(); },
     });
     return t;
   }
-  rows(name = 'lifecycle') { return [...this.dbs.get('mfx_prediction_history_v1').stores.get(name).rows.values()]; }
+  rows(name = 'lifecycle_v3') { return [...this.dbs.get('mfx_prediction_history_v1').stores.get(name).rows.values()]; }
 }
 
 const memoryStorage = (initial = {}, { failRemove = false } = {}) => {
@@ -64,6 +66,73 @@ const legacyRecord = (symbol, updatedAt, extra = {}) => ({ key: `${symbol}|scalp
 const legacyPayload = (...records) => ({ [LIFECYCLE_STORAGE_KEY]: JSON.stringify(Object.fromEntries(records.map((r) => [r.key, r]))) });
 const profile = { id: 'scalp' };
 const sig = (patch = {}) => ({ symbol: 'R_10', dir: 1, status: 'watching', bias: { verdict: 'bullish-lean' }, reason: 'waiting for location', waitingCondition: 'displacement', nearestLevel: 101.5, ...patch });
+
+test('blocked lifecycle and history opens abort a later upgrade without disrupting a retry', async () => {
+  for (const createStore of [createLifecycleStore, createPredictionHistoryStore]) {
+    const requests = [];
+    const store = createStore({ indexedDB: { open() { const request = {}; requests.push(request); return request; } }, legacyStorage: memoryStorage() });
+    const first = store.open();
+    requests[0].onblocked();
+    await assert.rejects(first, /blocked/);
+    const retry = store.open();
+    let aborted = false, closed = false;
+    requests[0].transaction = { abort() { aborted = true; } };
+    requests[0].onupgradeneeded();
+    requests[0].onerror();
+    requests[0].result = { close() { closed = true; } };
+    requests[0].onsuccess();
+    assert.equal(aborted, true);
+    assert.equal(closed, true);
+    const db = { close() {} };
+    requests[1].result = db;
+    requests[1].onsuccess();
+    assert.equal(await retry, db);
+    assert.equal(await store.open(), db);
+    assert.equal(requests.length, 2);
+  }
+});
+
+test('transactional lifecycle writes retain a terminal row against stale active updates', async () => {
+  const store = createLifecycleStore({ indexedDB: new FakeIDB(), legacyStorage: memoryStorage() });
+  const closed = { key: 'X|scalp', state: 'Closed', updatedAt: 20, primaryModel: { model_id: 'A', events: [{ nested: ['original'] }] } };
+  await store.write({ put: [closed] });
+  await store.write({ put: [{ ...closed, state: 'Signal Active', updatedAt: 10, primaryModel: { model_id: 'B' } }] });
+  const [stored] = await store.loadAll();
+  assert.deepEqual(stored, closed);
+  stored.primaryModel.events[0].nested.push('mutated');
+  assert.deepEqual(await store.loadAll(), [closed]);
+  await assert.rejects(store.write({ put: [{ ...closed, state: 'Opposed', updatedAt: 21 }] }), /Conflicting terminal/);
+  assert.deepEqual(await store.loadAll(), [closed]);
+});
+
+test('lifecycle reconciliation keeps frozen snapshots and rejects ambiguous identity and same-time transitions', () => {
+  const active = { key: 'X|scalp', state: 'Signal Active', updatedAt: 10, entryFrozenAt: 10, signalId: 'x@10',
+    primaryModel: { model_id: 'A', nested: [1] }, evidenceSnapshot: [{ nested: ['original'] }], lifecycleHistory: [] };
+  const next = { ...active, state: 'Closed', updatedAt: 20, primaryModel: { model_id: 'B' }, evidenceSnapshot: [{ nested: ['changed'] }] };
+  assert.throws(() => reconcileLifecycle(active, next), /Conflicting frozen lifecycle field/);
+  const merged = reconcileLifecycle(active, { ...active, state: 'Closed', updatedAt: 20 });
+  assert.equal(merged.state, 'Closed');
+  assert.deepEqual(merged.primaryModel, active.primaryModel);
+  assert.deepEqual(merged.evidenceSnapshot, active.evidenceSnapshot);
+  const trigger = { ...active, state: 'Trigger Detected' };
+  delete trigger.signalId;
+  assert.equal(reconcileLifecycle(trigger, { ...active, updatedAt: 20 }).signalId, active.signalId);
+  assert.throws(() => reconcileLifecycle(active, { ...next, signalId: 'other' }), /identities/);
+  assert.throws(() => reconcileLifecycle(active, { ...next, updatedAt: 10 }), /Ambiguous/);
+  assert.deepEqual(reconcileLifecycle(active, { ...next, updatedAt: 9 }), active);
+});
+
+test('conflicting prediction identities are rejected even for stale and terminal rows', async () => {
+  const store = createLifecycleStore({ indexedDB: new FakeIDB(), legacyStorage: memoryStorage() });
+  const active = { key: 'X|scalp', state: 'Signal Active', updatedAt: 20, signalId: 'original' };
+  await store.write({ put: [active] });
+  await assert.rejects(store.write({ put: [{ ...active, signalId: 'other', updatedAt: 10 }] }), /identities/);
+  const closed = { ...active, state: 'Closed', updatedAt: 30 };
+  await store.write({ put: [closed] });
+  await assert.rejects(store.write({ put: [{ ...active, signalId: 'other', updatedAt: 10 }] }), /identities/);
+  await assert.rejects(store.write({ put: [{ ...closed, signalId: 'other', updatedAt: 30 }] }), /identities/);
+  assert.deepEqual(await store.loadAll(), [closed]);
+});
 
 test('migration: legacy localStorage lifecycle moves to IndexedDB, is verified, then the source is freed', async () => {
   const idb = new FakeIDB(), legacy = memoryStorage(legacyPayload(legacyRecord('R_10', 10), legacyRecord('R_25', 11), legacyRecord('R_50', 12)));

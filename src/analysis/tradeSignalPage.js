@@ -1,13 +1,13 @@
 // Trade Signal page scans public market history and lists profile-based setups.
 // Its analysis socket stays read-only; optional orders use the separate Trading Grid host bridge.
-import { buildTradeSignal, PROFILE_LIST, ALL_GRANULARITIES, fmtPrice } from './tradeSignal.js?v=fvg2';
-import { openTracked, updateTracked, progress, summarize, deduplicateOpenRecords } from './tradeSignalTracker.js';
-import { predictionHistoryStore } from './tradeSignalStorage.js';
-import { createLifecycleRegistry } from './tradeSignalLifecycle.js?v=fvg2';
-import { defaultLifecycleStore } from './tradeSignalLifecycleStore.js';
+import { buildTradeSignal, PROFILE_LIST, ALL_GRANULARITIES, fmtPrice } from './tradeSignal.js?v=integrity1';
+import { openTracked, updateTracked, progress, summarize, deduplicateOpenRecords, lifecycleMatchesPrediction } from './tradeSignalTracker.js?v=integrity2';
+import { predictionHistoryStore } from './tradeSignalStorage.js?v=4';
+import { createLifecycleRegistry } from './tradeSignalLifecycle.js?v=integrity4';
+import { defaultLifecycleStore } from './tradeSignalLifecycleStore.js?v=integrity4';
 import { createFunnel } from './tradeSignalProgress.js?v=fvg2';
 import { fvgQuoteError } from './fvgQualification.js?v=fvg2';
-import { claimInverseFvg } from './ifvgClaims.js';
+import { claimInverseFvg } from './ifvgClaims.js?v=2';
 import { tradeSignalDisplay } from './tradeSignalDisplay.js?v=1';
 if (typeof window !== 'undefined') window.tsBotFvgQuoteError = fvgQuoteError;
 if (typeof window !== 'undefined') window.tsBotClaimInverseFvg = claimInverseFvg;
@@ -25,7 +25,7 @@ const results = new Map();     // symbol/profile -> { sig, at }
 // Lifecycle state is persisted in IndexedDB. A failure is shown with its cause while the live in-memory state keeps working.
 let lifecycleNotice = '';
 const lifecycleRegistry = createLifecycleRegistry({ store: defaultLifecycleStore(), onPersistChange: (error) => {
-  lifecycleNotice = error ? `lifecycle state not saved - :  (live state kept in memory)` : '';
+  lifecycleNotice = error ? `lifecycle state not saved - ${error.name || 'Error'}: ${error.message} (live state kept in memory)` : '';
   render();
 } });
 let lifecycleLoadError = null;   // tracked-signal storage parse problems only
@@ -223,20 +223,27 @@ function updateLifecycle(sig, profile, at) {
   }
 }
 
+function archiveResolved(record, at) {
+  try {
+    const key = `${record.symbol}|${record.profile || 'intraday'}`;
+    const current = lifecycleRegistry.get(key);
+    if (!lifecycleMatchesPrediction(current, record)) {
+      lifecycleNotice = `resolved prediction ${record.id} could not be matched to the lifecycle identity; reconciliation is required`;
+    } else {
+      const lifecycle = lifecycleRegistry.close(key, record.resolvedAt || at);
+      if (lifecycle) { record.lifecycleState = lifecycle.state; record.lifecycleHistory = lifecycle.lifecycleHistory; }
+    }
+  } catch (error) { status = 'lifecycle storage error: ' + error.message; }
+  return archive([record]);
+}
+
 function track(sym, sig, resolutionCandles) {
   const t = nowSec();
   const pid = sig.profile || 'intraday', mine = (r) => r.symbol === sym && (r.profile || 'intraday') === pid && r.state === 'open';
   let open = tracked.find(mine);
   if (open) {
     updateTracked(open, { candles: resolutionCandles, nowSec: t });
-    if (open.state !== 'open') {
-      const key = sym + '|' + pid;
-      try {
-        const lifecycle = lifecycleRegistry.close(key, open.resolvedAt || t);
-        if (lifecycle) { open.lifecycleState = lifecycle.state; open.lifecycleHistory = lifecycle.lifecycleHistory; }
-      } catch (error) { status = 'lifecycle storage error: ' + error.message; }
-      archive([open]);
-    }
+    if (open.state !== 'open') archiveResolved(open, t);
   }
   const lifecycle = lifecycleRegistry.get(sym + '|' + pid);
   if (!tracked.some(mine) && (!lifecycle || lifecycle.state === 'Signal Active')) {
@@ -261,7 +268,7 @@ function onExpiryTicks(id, history) {
   const times = history && history.times, prices = history && history.prices;
   const ticks = Array.isArray(times) && Array.isArray(prices) ? times.map((epoch, i) => ({ epoch: +epoch, quote: +prices[i] })).filter((tick) => Number.isFinite(tick.epoch) && Number.isFinite(tick.quote)) : [];
   updateTracked(rec, { ticks, nowSec: nowSec() });
-  if (rec.state !== 'open') archive([rec]);
+  if (rec.state !== 'open') archiveResolved(rec, nowSec());
   saveTracked(); render();
 }
 
@@ -389,6 +396,9 @@ function tsBotSetStatus(message) {
   tsBotUpdateUi();
 }
 function tsBotSubmit(signal, source) {
+  const executionBlock = typeof window.tsBotExecutionBlockReason === 'function'
+    ? window.tsBotExecutionBlockReason() : 'Trade Signal execution eligibility is unavailable.';
+  if (executionBlock) return { ok:false, error:executionBlock };
   const key = signalTradeKey(signal);
   if (!key) return { ok:false, error:'Signal confirmation identity is unavailable.' };
   if (tsBotSubmitted.has(key)) {
@@ -436,6 +446,9 @@ function tsBotSubmit(signal, source) {
   return { ok:true };
 }
 function tsBotStart() {
+  const executionBlock = typeof window.tsBotExecutionBlockReason === 'function'
+    ? window.tsBotExecutionBlockReason() : 'Trade Signal execution eligibility is unavailable.';
+  if (executionBlock) { tsBotSetStatus(executionBlock); return; }
   const settings = tsBotSettings();
   const error = validateTradeBotSettings(settings, true);
   if (error) { tsBotSetStatus(error); return; }

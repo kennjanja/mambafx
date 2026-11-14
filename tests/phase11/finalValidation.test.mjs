@@ -20,8 +20,9 @@ import assert from 'node:assert/strict';
 import { execSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const REPO_ROOT = path.resolve(new URL('../..', import.meta.url).pathname);
+const REPO_ROOT = fileURLToPath(new URL('../..', import.meta.url));
 
 const PROTECTED_MODULES = [
   'research/src/governance/hypothesisRegistry.js',

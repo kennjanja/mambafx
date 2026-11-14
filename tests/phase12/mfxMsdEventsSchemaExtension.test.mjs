@@ -22,9 +22,11 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
+import os from 'node:os';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import { installFakeIndexedDB } from '../support/fakeIndexedDB.js';
 
-const INDEX_HTML_PATH = path.resolve(new URL('../../index.html', import.meta.url).pathname);
+const INDEX_HTML_PATH = fileURLToPath(new URL('../../index.html', import.meta.url));
 
 function extractIndexHtmlSource() {
   const html = fs.readFileSync(INDEX_HTML_PATH, 'utf8');
@@ -71,10 +73,10 @@ async function loadRealMsdEventModule(sessionId) {
 
     export { msdWriteEvent, msdGetEvent, msdGetEventCount, msdGetLastEventInSession, msdOpenEventDatabase, MSD_EVENT_DB_VERSION, MSD_PROTOCOL_VERSION, MSD_EVENT_SCHEMA_VERSION };
   `;
-  const tmpPath = path.join('/tmp', `msd-event-module-${Date.now()}-${Math.random().toString(36).slice(2)}.mjs`);
+  const tmpPath = path.join(os.tmpdir(), `msd-event-module-${Date.now()}-${Math.random().toString(36).slice(2)}.mjs`);
   fs.writeFileSync(tmpPath, moduleSource);
   try {
-    return await import(tmpPath);
+    return await import(pathToFileURL(tmpPath).href);
   } finally {
     fs.unlinkSync(tmpPath);
   }
