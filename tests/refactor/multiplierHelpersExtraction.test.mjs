@@ -43,7 +43,7 @@ test('index.html no longer contains the old inline multiplier-helper functions',
 test('the Deriv state and functions this slice deliberately left untouched are still declared/defined inline', () => {
   const html = readIndexHtml();
   assert.match(html, /let gridWs = null, gridAuthed = false, gridPing = null;/, 'gridWs/gridAuthed must remain in the classic script');
-  assert.match(html, /function gridPlaceTrade\(dir, source\)/, 'gridPlaceTrade must remain inline -- it is the caller of gridMult/gridMultStrat, not moved this round');
+  assert.match(html, /function gridPlaceTrade\(dir,\s*source,\s*options\s*=\s*\{\}\)/, 'gridPlaceTrade must remain inline -- it is the caller of gridMult/gridMultStrat, not moved this round');
   assert.match(html, /let gridArmed = false;/, 'the auto-fire state declarations immediately after the old multiplier block must be untouched');
 });
 

@@ -16,10 +16,11 @@ import { sanitize, atrSeries, DEFAULTS } from './core.js';
 import { analyze } from './engine.js';
 import { analyzeZones } from './zones.js?v=fvg2';
 import { analyzePatterns } from './patterns.js';
-import { analyzeLevels, premiumDiscount } from './levels.js';
-import { aggregateEvidenceFamilies, FAMILY_WEIGHTS, detectTradingRanges } from './tradeSignalArchitecture.js?v=fvg2';
+import { analyzeLevels } from './levels.js';
+import { aggregateEvidenceFamilies, FAMILY_WEIGHTS, detectTradingRanges } from './tradeSignalArchitecture.js?v=integrity1';
 import { classifySweep, detectInducements, INDUCEMENT_LIQUIDITY_FAMILY_VALUE } from './inducement.js';
 import { eligibleFvgs } from './fvgQualification.js?v=fvg2';
+import { modelASpringEvent } from './tradeSignalModelA.js';
 
 export const EVIDENCE_DEFAULTS = Object.freeze({
   minCandles: 60,
@@ -47,13 +48,17 @@ export function analyzeEvidence(input, opts = {}) {
   }
   const atr = atrSeries(candles, DEFAULTS.atrPeriod), a = atr[last];
   const price = candles[last].close;
-  const base = analyze(candles);
+  const base = analyze(candles, { captureSnapshots: true });
+  for (const diagnostic of base.liquidity.diagnostics) {
+    limitations.push(`Liquidity pivot ${diagnostic.index}: ${diagnostic.code}`);
+  }
   const zonesRes = analyzeZones(base.candles, { atr: base.atr, structure: base });
   const pat = analyzePatterns(candles);
   const lv = analyzeLevels(candles);
   if (a == null) missing.push('atr');
 
   const items = [];
+  const confirmedPoolModelEvents = [];
   const add = (group, dir, weight, label, extra = {}) => items.push({ group, dir, weight, label, kind: extra.kind || 'interpretation', ...extra });
   const recent = (i) => last - i <= O.recentBars;
 
@@ -75,10 +80,18 @@ export function analyzeEvidence(input, opts = {}) {
 
   // --- liquidity: confirmed sweeps, springs/upthrusts (same group: both describe a stop run + reversal)
   for (const e of base.liquidity.events) {
-    if (e.kind === 'sweep-confirmed' && recent(e.index)) {
+    if (e.kind === 'sweep-confirmed') {
       const dir = e.side === 'buy' ? -1 : 1;
       const classification = classifySweep(candles[e.index], { level: e.level, direction: dir, minorPivotConfirmed: e.source === 'pivot' && !e.majorLiquidity, majorLiquidity: !!e.majorLiquidity });
-      add('liquidity', dir, O.weights.liquidity, `${e.side}-side liquidity swept then rejected`, { index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, classification: classification.classification, kind: 'fact' });
+      if (recent(e.index)) add('liquidity', dir, O.weights.liquidity, `${e.side}-side liquidity swept then rejected`, { index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, classification: classification.classification, kind: 'fact' });
+      if (classification.classification === 'significant-liquidity' && e.groupId) {
+        confirmedPoolModelEvents.push({ type: 'significant-sweep', modelAGroupId: e.groupId, groupId: e.groupId,
+          groupMemberKind: 'pool-sweep', groupMemberKinds: ['pool-sweep'], dir, index: e.index,
+          confirmedIndex: e.confirmedIndex, side: e.side, level: e.level, extreme: e.extreme,
+          poolIds: [e.poolId], poolSweepEventIds: [e.id], coSweptPools: [{
+            poolId: e.poolId, source: e.source, level: e.level, sweepEventId: e.id, eligible: e.eligible === true,
+          }], classification: classification.classification, context: 'swing', label: `significant ${e.side}-side sweep` });
+      }
     }
     if (e.kind === 'sweep-failed' && recent(e.index)) add('liquidity', e.side === 'buy' ? 1 : -1, O.weights.liquidity * 0.6, `${e.side}-side sweep accepted (continuation)`, { index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, kind: 'fact' });
   }
@@ -150,6 +163,7 @@ export function analyzeEvidence(input, opts = {}) {
   for (const g of glist) if (g.conflicted) conflicts.push(`${g.group}: "${g.bullItem}" vs "${g.bearItem}"`);
   if (bullGroups && bearGroups) conflicts.push(`${bullGroups} bullish group(s) vs ${bearGroups} bearish group(s)`);
   const modelEvents = [];
+  modelEvents.push(...confirmedPoolModelEvents);
   if (lastSw) modelEvents.push({ type: 'trend-established', dir: lastSw.dir, index: lastSw.index, confirmedIndex: lastSw.confirmedIndex ?? lastSw.index, label: 'confirmed swing trend' });
   for (const e of [...sw, ...inn]) {
     const confirmedIndex = e.confirmedIndex ?? e.index;
@@ -161,20 +175,10 @@ export function analyzeEvidence(input, opts = {}) {
         if (e.dir === -1 && c.high >= e.level && c.close < e.level) modelEvents.push({ type: 'broken-level-retest', dir: -1, index: j, confirmedIndex: j, level: e.level, label: 'bearish broken-level retest' });
       }
     }
-    if (e.type === 'CHoCH' || e.mss) modelEvents.push({ type: 'structure-shift', dir: e.dir, index: e.index, confirmedIndex, label: e.mss ? 'CHoCH/MSS' : e.type });
+    if (e.type === 'CHoCH' || e.mss) modelEvents.push({ type: 'structure-shift', id: JSON.stringify(['structure-shift', e.dir, e.index, e.pivotIndex, e.level]), dir: e.dir, index: e.index, confirmedIndex, level: e.level, pivotIndex: e.pivotIndex, displacementIndex: e.displacementIndex, mss: e.mss, label: e.mss ? 'CHoCH/MSS' : e.type });
     if (e.type === 'CHoCH') modelEvents.push({ type: 'opposite-structure', dir: e.dir, index: e.index, confirmedIndex, label: e.type });
   }
-  for (const d of base.displacement) modelEvents.push({ type: 'displacement', dir: d.dir, index: d.index, confirmedIndex: d.confirmedIndex ?? d.index, label: 'displacement' });
-  for (const e of base.liquidity.events) if (e.kind === 'sweep-candidate') {
-    const dir = e.side === 'buy' ? -1 : 1, candle = candles[e.index];
-    const classification = classifySweep(candle, { level: e.level, direction: dir, minorPivotConfirmed: e.source === 'pivot' && !e.majorLiquidity, majorLiquidity: !!e.majorLiquidity });
-    if (classification.classification === 'significant-liquidity') {
-      const sweepEvent = { type: 'significant-sweep', dir, index: e.index, confirmedIndex: e.confirmedIndex, level: e.level, source: e.source, classification: classification.classification, context: 'swing', label: `significant ${e.side}-side sweep` };
-      modelEvents.push(sweepEvent);
-      const eventPd = premiumDiscount(candles.slice(0, e.index + 1));
-      if (eventPd && ((dir === 1 && eventPd.zone === 'discount') || (dir === -1 && eventPd.zone === 'premium'))) modelEvents.push({ ...sweepEvent, context: 'dealing-range', label: `${sweepEvent.label} in ${eventPd.zone}` });
-    }
-  }
+  for (const d of base.displacement) modelEvents.push({ type: 'displacement', id: JSON.stringify(['displacement', d.dir, d.startIndex, d.index]), dir: d.dir, index: d.index, startIndex: d.startIndex, confirmedIndex: d.confirmedIndex ?? d.index, label: 'displacement' });
   const inducements = detectInducements(candles, { granularity: opts.granularity || 60, structure: base });
   for (const event of inducements) {
     if (event.state !== 'confirmed') continue;
@@ -214,17 +218,47 @@ export function analyzeEvidence(input, opts = {}) {
   for (const e of pat.wyckoff) {
     if (e.kind === 'SOS' || e.kind === 'SOW') modelEvents.push({ type: 'sos-or-sow', dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, label: e.kind });
     if (e.kind === 'spring' || e.kind === 'upthrust') {
-      const classification = classifySweep(candles[e.index], { level: e.level, direction: e.dir, majorLiquidity: true });
-      if (classification.classification === 'significant-liquidity') modelEvents.push({ type: 'significant-sweep', dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex ?? e.index, context: 'range', classification: classification.classification, label: e.kind });
+      const event = modelASpringEvent({ candles, candidateIndex: e.index, kind: e.kind, liquidity: base.liquidity, asOfIndex: last });
+      if (!event) continue;
+      for (const diagnostic of event.diagnostics) limitations.push(`Model A ${e.index}: ${diagnostic}`);
+      modelEvents.push(event);
     }
   }
   const ranges = detectTradingRanges(candles, { atr: base.atr });
-  for (const r of ranges.ranges) modelEvents.push({ type: 'range-established', dir: 0, index: r.startIndex, confirmedIndex: r.confirmedIndex, level: r.high, label: 'trading range established' });
+  const rangeId = (r) => `${r.startIndex}:${r.confirmedIndex}`;
+  for (const r of ranges.ranges) modelEvents.push({ type: 'range-established', dir: 0, index: r.startIndex, confirmedIndex: r.confirmedIndex, rangeId: rangeId(r), level: r.high, label: 'trading range established' });
   for (const e of ranges.events) {
-    if (e.type === 'LPS' || e.type === 'LPSY') modelEvents.push({ type: 'lps-or-lpsy', dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex, level: e.level, label: e.type });
-    if (e.type === 'SOS' || e.type === 'SOW') modelEvents.push({ type: 'sos-or-sow', dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex, level: e.level, label: e.type });
+    if (e.type === 'LPS' || e.type === 'LPSY') modelEvents.push({ type: 'lps-or-lpsy', dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex, rangeId: rangeId(e.range), level: e.level, label: e.type });
+    if (e.type === 'SOS' || e.type === 'SOW') modelEvents.push({ type: 'sos-or-sow', dir: e.dir, index: e.index, confirmedIndex: e.confirmedIndex, rangeId: rangeId(e.range), level: e.level, label: e.type });
   }
   for (const reaction of pat.candle) if (reaction.dir !== 0) modelEvents.push({ type: 'reaction', dir: reaction.dir, index: reaction.index, confirmedIndex: reaction.confirmedIndex ?? reaction.index, label: reaction.label || reaction.kind });
+  const groupedModelEvents = new Map();
+  const ungroupedModelEvents = [];
+  for (const event of modelEvents) {
+    if (!event.modelAGroupId) {
+      ungroupedModelEvents.push(event);
+      continue;
+    }
+    const previous = groupedModelEvents.get(event.modelAGroupId);
+    if (!previous) {
+      groupedModelEvents.set(event.modelAGroupId, event);
+      continue;
+    }
+    const patternEvent = ['spring', 'upthrust'].includes(previous.kind) || ['spring', 'upthrust'].includes(event.kind)
+      ? (['spring', 'upthrust'].includes(previous.kind) ? previous : event) : null;
+    const canonical = patternEvent || previous;
+    const combinedPools = [...(previous.coSweptPools || []), ...(event.coSweptPools || [])];
+    const coSweptPools = [...new Map(combinedPools.map((pool) => [pool.poolId, pool])).values()]
+      .sort((a, b) => Number(a.poolId) - Number(b.poolId));
+    const poolSweepEventIds = [...new Set([...(previous.poolSweepEventIds || []), ...(event.poolSweepEventIds || [])])];
+    const groupMemberKinds = [...new Set([...(previous.groupMemberKinds || [previous.groupMemberKind]),
+      ...(event.groupMemberKinds || [event.groupMemberKind])].filter(Boolean))].sort();
+    groupedModelEvents.set(event.modelAGroupId, { ...canonical, groupId: event.modelAGroupId,
+      modelAGroupId: event.modelAGroupId, coSweptPools, poolIds: coSweptPools.map((pool) => pool.poolId),
+      poolSweepEventIds, groupMemberKinds });
+  }
+  modelEvents.length = 0;
+  modelEvents.push(...ungroupedModelEvents, ...groupedModelEvents.values());
   modelEvents.sort((x, y) => x.confirmedIndex - y.confirmedIndex || x.type.localeCompare(y.type));
   const timedModelEvents = modelEvents.map((event) => ({ ...event, occurredAt: candles[event.index]?.epoch ?? null, confirmedAt: candles[event.confirmedIndex]?.epoch == null ? null : candles[event.confirmedIndex].epoch + (opts.granularity || 0) }));
 

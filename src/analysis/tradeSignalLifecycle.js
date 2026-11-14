@@ -1,5 +1,6 @@
 import { transitionLifecycle, WATCHING_EXPIRY_SEC, TERMINAL_STATES } from './tradeSignalArchitecture.js?v=fvg2';
-import { LIFECYCLE_STORAGE_KEY } from './tradeSignalLifecycleStore.js';
+import { LIFECYCLE_STORAGE_KEY } from './tradeSignalLifecycleStore.js?v=integrity4';
+import { copySnapshot } from './tradeSignalTracker.js?v=2';
 
 export { LIFECYCLE_STORAGE_KEY };
 
@@ -130,12 +131,12 @@ export function createLifecycleRegistry({ storage = globalThis.localStorage, key
     let record = records.get(id) || { key: id, state: 'No Setup', lifecycleHistory: [], watchingSince: null };
     if (TERMINAL_STATES.includes(record.state) || record.state === 'Closed') {
       sig.lifecycleState = record.state;
-      sig.lifecycleHistory = record.lifecycleHistory;
+      sig.lifecycleHistory = copySnapshot(record.lifecycleHistory);
       sig.waitingCondition = record.waitingCondition || 'setup is terminal';
       sig.nearestLevel = record.nearestLevel ?? null;
       sig.status = record.state === 'Opposed' ? 'wait' : 'none';
       sig.headline = `${sig.label || sig.symbol}: ${record.state}`;
-      return record;
+      return copySnapshot(record);
     }
     const previousState = record.state;
     const hasBias = sig.dir === 1 || sig.dir === -1;
@@ -181,7 +182,7 @@ export function createLifecycleRegistry({ storage = globalThis.localStorage, key
     const entryFrozen = record.entryFrozenAt != null;
     Object.assign(record, { bias: sig.bias || null, waitingCondition: sig.status === 'signal' ? 'holding until the profile period ends' : (sig.waitingCondition || sig.reason || ''), nearestLevel: sig.nearestLevel ?? sig.layers?.location?.evidence?.[0]?.price ?? null, updatedAt: at, profileName: sig.profileName || profile.name || profile.id, status: sig.status, action: sig.action || null, headline: sig.headline || '', reason: sig.reason || '' });
     if (!entryFrozen) {
-      Object.assign(record, entrySnapshot);
+      Object.assign(record, copySnapshot(entrySnapshot));
       if (record.state === 'Trigger Detected' || record.state === 'Signal Active') record.entryFrozenAt = at;
     }
     if (sig.status === 'signal' && record.state === 'Signal Active' && previousState !== 'Signal Active') {
@@ -190,23 +191,23 @@ export function createLifecycleRegistry({ storage = globalThis.localStorage, key
     records.set(id, record); dirty.add(id);
     // The row must show the real state even when storage is full, so apply it before persisting.
     sig.lifecycleState = record.state;
-    sig.lifecycleHistory = record.lifecycleHistory;
+    sig.lifecycleHistory = copySnapshot(record.lifecycleHistory);
     sig.waitingCondition = record.waitingCondition || (record.state === 'Signal Active' ? 'holding until the profile period ends' : '');
     sig.nearestLevel = record.nearestLevel;
     persist();
-    return record;
+    return copySnapshot(record);
   }
 
   function close(id, at, reason = 'end-of-period outcome resolved') {
     const record = records.get(id);
-    if (!record || record.state !== 'Signal Active') return record || null;
+    if (!record || record.state !== 'Signal Active') return copySnapshot(record || null);
     transitionLifecycle(record, 'Closed', at, reason);
     record.updatedAt = at;
     records.set(id, record); dirty.add(id);
     persist();
-    return record;
+    return copySnapshot(record);
   }
 
-  function list() { return [...records.values()].map((record) => ({ ...record, lifecycleHistory: [...record.lifecycleHistory] })); }
-  return { init, flush, load, update, close, get: (id) => records.get(id) || null, list, persist, get persistenceError() { return persistenceError; } };
+  function list() { return [...records.values()].map(copySnapshot); }
+  return { init, flush, load, update, close, get: (id) => copySnapshot(records.get(id) || null), list, persist, get persistenceError() { return persistenceError; } };
 }

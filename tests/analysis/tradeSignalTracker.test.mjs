@@ -1,6 +1,6 @@
 ﻿import test from 'node:test';
 import assert from 'node:assert/strict';
-import { openTracked, updateTracked, progress, summarize, deduplicateOpenRecords, HORIZON_SEC } from '../../src/analysis/tradeSignalTracker.js';
+import { openTracked, updateTracked, progress, summarize, deduplicateOpenRecords, lifecycleMatchesPrediction, HORIZON_SEC } from '../../src/analysis/tradeSignalTracker.js';
 
 const sig = (dir, o = {}) => ({ status: 'signal', symbol: 'R_100', label: 'V100', dir, action: dir === 1 ? 'BUY' : 'SELL', headline: 'h',
   price: 100, target: { price: dir === 1 ? 102 : 98 }, invalidation: { price: dir === 1 ? 99 : 101 }, ...o });
@@ -11,6 +11,15 @@ const minuteSeries = (openedAt, expiresAt, close = 101) => {
   for (let t = Math.floor(openedAt / 60) * 60 + 60; t + 60 <= expiresAt; t += 60) bars.push(candle(t, 103, 97, close));
   return bars;
 };
+
+test('resolution closes only the lifecycle belonging to the tracked prediction', () => {
+  const record = openTracked(sig(1, { profile: 'scalp' }), T0);
+  assert.equal(lifecycleMatchesPrediction({ signalId: record.id }, record), true);
+  assert.equal(lifecycleMatchesPrediction({ signalId: 'R_100|scalp@1' }, record), false);
+  assert.equal(lifecycleMatchesPrediction({}, record), false);
+  assert.equal(lifecycleMatchesPrediction(null, record), false);
+  assert.equal(lifecycleMatchesPrediction({ signalId: '' }, { id: '' }), false);
+});
 
 test('only real signals open a record and exact entry metadata is retained', () => {
   assert.equal(openTracked({ status: 'wait' }, T0), null);

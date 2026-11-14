@@ -1,14 +1,27 @@
 // Prediction History uses one IndexedDB archive. Browser localStorage is read only as a migration source.
 export const ARCHIVE_KEY = 'mfx_ts_archive_v1';
 export const PREDICTION_HISTORY_DB = 'mfx_prediction_history_v1';
-// Version 2 adds the lifecycle store; both stores are created together so either module may open the database first.
-export const PREDICTION_HISTORY_VERSION = 2;
+// Version 3 copies version 2 lifecycle rows into a new authoritative store.
+export const PREDICTION_HISTORY_VERSION = 3;
 export const PREDICTION_HISTORY_STORE = 'records';
-export const LIFECYCLE_STORE = 'lifecycle';
+export const LEGACY_LIFECYCLE_STORE = 'lifecycle';
+export const LIFECYCLE_STORE = 'lifecycle_v3';
 
-export function ensureStores(db) {
+export function ensureStores(db, transaction) {
+  const migrateLifecycle = db.objectStoreNames.contains(LEGACY_LIFECYCLE_STORE) && !db.objectStoreNames.contains(LIFECYCLE_STORE);
   if (!db.objectStoreNames.contains(PREDICTION_HISTORY_STORE)) db.createObjectStore(PREDICTION_HISTORY_STORE, { keyPath: 'storageKey' });
-  if (!db.objectStoreNames.contains(LIFECYCLE_STORE)) db.createObjectStore(LIFECYCLE_STORE, { keyPath: 'key' });
+  if (!db.objectStoreNames.contains(LEGACY_LIFECYCLE_STORE)) db.createObjectStore(LEGACY_LIFECYCLE_STORE, { keyPath: 'key' });
+  if (!db.objectStoreNames.contains(LIFECYCLE_STORE)) {
+    const canonical = db.createObjectStore(LIFECYCLE_STORE, { keyPath: 'key' });
+    if (migrateLifecycle) {
+      if (!transaction) throw new Error('Lifecycle migration requires an upgrade transaction');
+      const request = transaction.objectStore(LEGACY_LIFECYCLE_STORE).openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (cursor) { canonical.put(cursor.value); cursor.continue(); }
+      };
+    }
+  }
 }
 
 export function migrateLegacyRecord(record) {
@@ -34,7 +47,7 @@ export function migrateArchiveRecords(records = []) {
     const record = migrateLegacyRecord(original), key = recordKey(record, index);
     if (positions.has(key)) {
       const existing = positions.get(key);
-      migrated[existing] = { ...migrated[existing], ...record };
+      migrated[existing] = mergePreserving(migrated[existing], record);
     } else { positions.set(key, migrated.length); migrated.push(record); }
   }
   return migrated;
@@ -42,9 +55,22 @@ export function migrateArchiveRecords(records = []) {
 
 function mergePreserving(existing, incoming) {
   const merged = { ...existing };
+  const resolved = (state) => state === 'correct' || state === 'wrong';
+  const advancing = existing.state === 'open' && resolved(incoming.state);
+  const outcomeFields = new Set(['state', 'hit', 'hitAt', 'targetHit', 'last', 'resolvedAt', 'exitAt',
+    'resolution_method', 'resolutionPending', 'resolutionIssue', 'gaps', 'duplicateCandles']);
+  const lifecycleFields = new Set(['lifecycleState', 'lifecycleHistory', 'updatedAt']);
+  const newerLifecycle = Number.isFinite(incoming.updatedAt) &&
+    (!Number.isFinite(existing.updatedAt) || incoming.updatedAt > existing.updatedAt) &&
+    !(resolved(existing.state) && incoming.state === 'open');
   for (const [key, value] of Object.entries(incoming)) {
-    if (value == null && merged[key] != null) continue;
-    if (['state', 'hit', 'last', 'resolvedAt', 'exitAt', 'resolution_method', 'entry', 'openedAt', 'expiresAt'].includes(key) && merged[key] != null) continue;
+    if (outcomeFields.has(key)) {
+      if (advancing && Object.hasOwn(incoming, key)) merged[key] = value;
+      else if (merged[key] == null && !(resolved(existing.state) && incoming.state === 'open')) merged[key] = value;
+      continue;
+    }
+    if (lifecycleFields.has(key) && newerLifecycle) { merged[key] = value; continue; }
+    if (merged[key] != null) continue;
     merged[key] = value;
   }
   return merged;
@@ -84,12 +110,19 @@ export function createPredictionHistoryStore({ indexedDB = globalThis.indexedDB,
     if (!indexedDB) return Promise.reject(new Error('IndexedDB is unavailable; Prediction History was not modified'));
     if (!dbPromise) dbPromise = new Promise((resolve, reject) => {
       const request = indexedDB.open(PREDICTION_HISTORY_DB, PREDICTION_HISTORY_VERSION);
+      let blocked = false;
       request.onupgradeneeded = () => {
-        ensureStores(request.result);
+        if (blocked) { request.transaction.abort(); return; }
+        ensureStores(request.result, request.transaction);
       };
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => { dbPromise = null; reject(request.error || new Error('Prediction History database open failed')); };
-      request.onblocked = () => { dbPromise = null; reject(new Error('Prediction History database upgrade was blocked')); };
+      request.onsuccess = () => {
+        const db = request.result;
+        if (blocked) { db.close(); return; }
+        db.onversionchange = () => { db.close(); dbPromise = null; };
+        resolve(db);
+      };
+      request.onerror = () => { if (!blocked) dbPromise = null; reject(request.error || new Error('Prediction History database open failed')); };
+      request.onblocked = () => { blocked = true; dbPromise = null; reject(new Error('Prediction History database upgrade was blocked')); };
     });
     return dbPromise;
   }

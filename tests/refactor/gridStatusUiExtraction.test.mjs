@@ -46,7 +46,7 @@ test('the remaining Deriv-flow state/functions this slice deliberately left unto
   // here as "still inline" anymore. This test now only re-confirms the
   // boundary THIS slice (Phase 1h) was responsible for respecting.
   assert.match(html, /let gridWs = null, gridAuthed = false, gridPing = null;/, 'gridWs/gridAuthed must remain in the classic script');
-  assert.match(html, /function gridPlaceTrade\(dir, source\)/, 'gridPlaceTrade must remain inline');
+  assert.match(html, /function gridPlaceTrade\(dir,\s*source,\s*options\s*=\s*\{\}\)/, 'gridPlaceTrade must remain inline');
 });
 
 test('index.html gained the gridLoggedIn bridge entry this slice added (later upgraded read-write in Phase 1j once gridCheckSession itself moved)', () => {

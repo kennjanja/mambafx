@@ -47,7 +47,7 @@ test('index.html no longer contains the old inline Aggression Bot code (aggScore
 test('the Deriv trade-execution state this slice deliberately left untouched is still declared inline (gridWs/gridAuthed/etc. were NOT moved)', () => {
   const html = readIndexHtml();
   assert.match(html, /let gridWs = null, gridAuthed = false, gridPing = null;/, 'gridWs/gridAuthed must remain in the classic script -- moving them would break the existing bridge that mfxBot.js/dabBot.js depend on');
-  assert.match(html, /function gridPlaceTrade\(dir, source\)/, 'gridPlaceTrade must remain a classic-script function declaration (auto-window), not yet extracted');
+  assert.match(html, /function gridPlaceTrade\(dir,\s*source,\s*options\s*=\s*\{\}\)/, 'gridPlaceTrade must remain a classic-script function declaration (auto-window), not yet extracted');
 });
 
 test('index.html has at least the 22 bridge entries accumulated by Phase 1b/1c/1e, and this slice added zero of its own (decimals was already bridged, drawCandleChart/gridPlaceTrade are already auto-window function declarations)', () => {

@@ -65,7 +65,7 @@ test('the remaining Deriv-flow functions and state are still untouched', () => {
   // inline" anymore. This test now only re-confirms the boundary THIS
   // slice (Phase 1i) was responsible for respecting.
   assert.match(html, /let gridWs = null, gridAuthed = false, gridPing = null;/);
-  assert.match(html, /function gridPlaceTrade\(dir, source\)/);
+  assert.match(html, /function gridPlaceTrade\(dir,\s*source,\s*options\s*=\s*\{\}\)/);
 });
 
 test('the Phase 8 seal markers are unaffected by this extraction (still present, still correctly ordered)', () => {

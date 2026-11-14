@@ -7,9 +7,9 @@
 // This is a rule-based reading of evidence. The evidence weights are provisional and unvalidated, so the output
 // is NOT a forecast, a probability or a profitability claim.
 
-import { analyzeEvidence } from './evidence.js?v=fvg2';
-import { computeModelProgress } from './tradeSignalProgress.js?v=fvg2';
-import { aggregateEvidenceFamilies, FAMILY_WEIGHTS, evaluateEntryModels, evaluateLayers } from './tradeSignalArchitecture.js?v=fvg2';
+import { analyzeEvidence } from './evidence.js?v=integrity1';
+import { computeModelProgress } from './tradeSignalProgress.js?v=integrity1';
+import { aggregateEvidenceFamilies, FAMILY_WEIGHTS, evaluateEntryModels, evaluateLayers } from './tradeSignalArchitecture.js?v=integrity1';
 
 export const TRADE_SIGNAL_TFS = Object.freeze({
   entry: { g: 300, label: '5 min' },
@@ -55,9 +55,9 @@ function pickTarget(dir, price, evidences) {
 
 /** candles: { [granularity]: candle[] } -> setup description for one market. */
 export function selectClosedCandles(series = [], granularity, nowSec = null) {
-  return Number.isFinite(nowSec)
-    ? series.filter((c) => Number.isFinite(c.epoch) && c.epoch + granularity <= nowSec)
-    : series;
+  if (!Number.isFinite(nowSec)) throw new TypeError('closed-candle selection requires a finite as-of timestamp');
+  if (!Number.isFinite(granularity) || granularity <= 0) throw new TypeError('closed-candle selection requires a positive granularity');
+  return series.filter((c) => Number.isFinite(c.epoch) && c.epoch + granularity <= nowSec);
 }
 
 export function buildTradeSignal({ symbol, label = symbol, candles = {}, profile = PROFILES.intraday, tfs = profile.tfs, nowSec = null }) {
@@ -93,7 +93,8 @@ export function buildTradeSignal({ symbol, label = symbol, candles = {}, profile
   const hasWyckoffSequence = modelEvents.some((event) => event.type === 'range-established') && modelEvents.some((event) => event.type === 'sos-or-sow') && modelEvents.some((event) => event.type === 'lps-or-lpsy');
   const marketContext = hasWyckoffSequence ? ['trend', 'range'] : ['trend'];
   const evaluatedModels = evaluateEntryModels({ events: modelEvents, biasDirection: dir, entryDirection, marketContext,
-    locations: locationEvidence, fvgs: entry.facts.qualifiedFvgs || [], nearestInvalidationDistance: invalidation ? Math.abs(price - invalidation.price) : Infinity, asOfIndex: entry.candles.length - 1 });
+    locations: locationEvidence, fvgs: entry.facts.qualifiedFvgs || [], candles: entry.candles,
+    nearestInvalidationDistance: invalidation ? Math.abs(price - invalidation.price) : Infinity, asOfIndex: entry.candles.length - 1 });
   base.modelProgress = computeModelProgress({ events: modelEvents, dir, hasLocation: locationEvidence.length > 0, confirmedIds: evaluatedModels.candidates.map((c) => c.model_id) });
   const reversalIndex = reversal ? entry.candles.findIndex((c) => c.epoch === reversal.epoch) : -1;
   const eligible = evaluatedModels.candidates.filter((candidate) => {

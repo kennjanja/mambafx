@@ -54,56 +54,56 @@ export function analyzeLiquidity(candles, opts = {}) {
   const periodOf = { day: dayId, week: weekId };
   const pools = [];
   const events = [];
-  const touched = new Set();
+  const poolSnapshots = opts.captureSnapshots ? [] : null;
+  const identityDiagnostics = opts.captureSnapshots ? [] : null;
+  const diagnostics = [];
+  const deferredPivots = [];
   let nextId = 1;
 
-  const addEvent = (e) => { events.push(e); return e; };
+  const addEvent = (e) => {
+    if (identityDiagnostics && e.kind === 'sweep-confirmed') {
+      const candidate = candles[e.index], confirmation = candles[e.confirmedIndex];
+      const valid = e.confirmedIndex === e.index + 1 && (e.side === 'buy'
+        ? candidate.high > e.level && candidate.close < e.level && confirmation.close < e.level
+        : candidate.low < e.level && candidate.close > e.level && confirmation.close > e.level);
+      if (valid) {
+        const extreme = e.side === 'buy' ? candidate.high : candidate.low;
+        const groupId = JSON.stringify([e.side, e.index, e.confirmedIndex, extreme]);
+        Object.defineProperties(e, {
+          extreme: { value: extreme, enumerable: true },
+          groupId: { value: groupId, enumerable: true },
+          id: { value: JSON.stringify(['pool-sweep', e.poolId, groupId]), enumerable: true },
+          eligible: { value: e.side === 'buy' ? confirmation.high <= extreme : confirmation.low >= extreme, enumerable: true },
+        });
+      } else {
+        identityDiagnostics.push(Object.freeze({ code: 'unverified-sweep-confirmation', poolId: e.poolId,
+          index: e.index, confirmedIndex: e.confirmedIndex }));
+      }
+    }
+    events.push(e); return e;
+  };
 
   for (let i = 0; i < candles.length; i++) {
     const c = candles[i];
-    touched.clear();
-
-    for (const p of byConfirm.get(i) || []) {
-      const side = p.type === 'high' ? 'buy' : 'sell';
-      const tol = (atr[i] || 0) * tolMult;
-      let pool = pools.find(q => q.source === 'pivot' && q.side === side && q.status === 'active' && !q.pending
-        && Math.abs(q.level - p.price) <= tol);
-      if (pool) {
-        pool.touches++; pool.pivotIndices.push(p.index); pool.lastTouchIndex = p.index;
-        pool.level = side === 'buy' ? Math.max(pool.level, p.price) : Math.min(pool.level, p.price);
-        pool.equal = true; pool.updatedIndex = i;
-      } else {
-        pool = {
-          id: nextId++, source: 'pivot', side, level: p.price, touches: 1, equal: false,
-          pivotIndices: [p.index], lastTouchIndex: p.index, formedIndex: i, formedEpoch: c.epoch,
-          updatedIndex: i, status: 'active', pending: null, period: null, periodId: null,
-        };
-        pools.push(pool);
-      }
-      touched.add(pool.id);
-    }
-    for (const r of refAt.get(i) || []) {
-      const pool = {
-        id: nextId++, source: r.source, side: r.side, level: r.level, touches: 1, equal: false,
-        pivotIndices: [], lastTouchIndex: null, formedIndex: i, formedEpoch: c.epoch, updatedIndex: i,
-        status: 'active', pending: null, period: r.period, periodId: r.periodId, partial: r.partial,
-      };
-      pools.push(pool); touched.add(pool.id);
-    }
 
     for (const pool of pools) {
-      if (pool.status !== 'active' || touched.has(pool.id)) continue;
+      if (pool.status !== 'active') continue;
       const expired = pool.period ? periodOf[pool.period](c.epoch) !== pool.periodId : i - pool.formedIndex > maxAge;
       if (expired && !pool.pending) { pool.status = 'expired'; continue; }
       const above = pool.side === 'buy';
       const through = above ? c.high > pool.level : c.low < pool.level;
-      const inside = above ? c.close <= pool.level : c.close >= pool.level;
+      const inside = above ? c.close < pool.level : c.close > pool.level;
+      const outside = above ? c.close > pool.level : c.close < pool.level;
 
       if (pool.pending) {
-        if (!inside) {
+        if (outside) {
           pool.pending.stage = 'failed';
           addEvent({ kind: 'sweep-failed', poolId: pool.id, side: pool.side, level: pool.level, index: pool.pending.index, confirmedIndex: i });
           pool.status = 'invalidated'; pool.pending = null; continue;
+        }
+        if (!inside) {
+          pool.pending = null;
+          continue;
         }
         if (i - pool.pending.index >= confirmBars) {
           const ev = addEvent({
@@ -124,9 +124,64 @@ export function analyzeLiquidity(candles, opts = {}) {
           const ev = addEvent({ kind: 'sweep-confirmed', poolId: pool.id, source: pool.source, side: pool.side, level: pool.level, index: i, epoch: c.epoch, confirmedIndex: i, confirmedEpoch: c.epoch, excess, equal: pool.equal, touches: pool.touches, majorLiquidity: pool.source !== 'pivot' || pool.equal || pool.touches > 1, reaction: null });
           pool.status = 'swept'; pool.sweptIndex = i; pool.pending = null; ev.reactionDue = i + reactionBars;
         }
-      } else if (through && !inside) {
+      } else if (through && outside) {
         pool.status = 'invalidated'; pool.brokenIndex = i;
       }
+    }
+    const confirmedNow = [...(byConfirm.get(i) || [])].sort((a, b) =>
+      a.confirmedIndex - b.confirmedIndex || a.index - b.index ||
+      (a.type === b.type ? 0 : a.type === 'high' ? -1 : 1));
+    if (!Number.isFinite(atr[i])) {
+      for (const pivot of confirmedNow) {
+        deferredPivots.push(pivot);
+        diagnostics.push(Object.freeze({ code: 'pivot-pool-assignment-awaiting-atr',
+          index: pivot.index, confirmedIndex: pivot.confirmedIndex, type: pivot.type }));
+      }
+    }
+    const deferred = Number.isFinite(atr[i]) ? deferredPivots.splice(0).sort((a, b) =>
+      a.confirmedIndex - b.confirmedIndex || a.index - b.index ||
+      (a.type === b.type ? 0 : a.type === 'high' ? -1 : 1)) : [];
+    const eligibleDeferred = deferred.filter((pivot) => {
+      const crossed = candles.slice(pivot.confirmedIndex + 1, i + 1).some((bar) =>
+        pivot.type === 'high' ? bar.high > pivot.price : bar.low < pivot.price);
+      if (crossed) diagnostics.push(Object.freeze({ code: 'deferred-pivot-traded-through',
+        index: pivot.index, confirmedIndex: pivot.confirmedIndex, type: pivot.type, processedIndex: i }));
+      return !crossed;
+    });
+    const assignable = Number.isFinite(atr[i]) ? [...eligibleDeferred, ...confirmedNow] : [];
+    for (const p of assignable) {
+      const side = p.type === 'high' ? 'buy' : 'sell';
+      const tol = atr[i] * tolMult;
+      let pool = pools.filter(q => q.source === 'pivot' && q.side === side && q.status === 'active' && !q.pending
+        && Math.abs(q.level - p.price) <= tol)
+        .sort((a, b) => Math.abs(a.level - p.price) - Math.abs(b.level - p.price) || a.id - b.id)[0];
+      if (pool) {
+        pool.touches++; pool.pivotIndices.push(p.index); pool.lastTouchIndex = p.index;
+        pool.level = side === 'buy' ? Math.max(pool.level, p.price) : Math.min(pool.level, p.price);
+        pool.equal = true; pool.updatedIndex = i;
+      } else {
+        pool = {
+          id: nextId++, source: 'pivot', side, level: p.price, touches: 1, equal: false,
+          pivotIndices: [p.index], lastTouchIndex: p.index, formedIndex: i, formedEpoch: c.epoch,
+          updatedIndex: i, status: 'active', pending: null, period: null, periodId: null,
+        };
+        pools.push(pool);
+      }
+    }
+    for (const r of refAt.get(i) || []) {
+      pools.push({
+        id: nextId++, source: r.source, side: r.side, level: r.level, touches: 1, equal: false,
+        pivotIndices: [], lastTouchIndex: null, formedIndex: i, formedEpoch: c.epoch, updatedIndex: i,
+        status: 'active', pending: null, period: r.period, periodId: r.periodId, partial: r.partial,
+      });
+    }
+    if (poolSnapshots) {
+      const snapshotPools = pools.map((pool) => Object.freeze({
+        ...pool,
+        pivotIndices: Object.freeze([...pool.pivotIndices]),
+        pending: pool.pending ? Object.freeze({ ...pool.pending }) : null,
+      }));
+      poolSnapshots.push(Object.freeze({ index: i, epoch: c.epoch, pools: Object.freeze(snapshotPools) }));
     }
   }
 
@@ -143,5 +198,6 @@ export function analyzeLiquidity(candles, opts = {}) {
       ev.reaction = { bars: reactionBars, matureIndex: end, atrMove: best / atr[ev.confirmedIndex] };
     }
   }
-  return { pools, events, referenceLevels: refs };
+  return { pools, events, referenceLevels: refs, diagnostics: Object.freeze(diagnostics),
+    ...(poolSnapshots ? { poolSnapshots: Object.freeze(poolSnapshots), identityDiagnostics: Object.freeze(identityDiagnostics) } : {}) };
 }

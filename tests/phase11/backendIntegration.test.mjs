@@ -13,6 +13,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { buildCandidateProvenance } from '../../research/src/provenance/CandidateProvenance.js';
 import { IndicatorFeature } from '../../research/src/candidate/IndicatorFeature.js';
@@ -43,7 +44,7 @@ const PHASE_D_FILES = [
   'provenance/CandidateProvenance.js',
 ];
 
-const RESEARCH_SRC = path.resolve(new URL('.', import.meta.url).pathname, '../../research/src');
+const RESEARCH_SRC = fileURLToPath(new URL('../../research/src/', import.meta.url));
 
 test('backend integration: no Phase 11 file imports a protected legacy module', async () => {
   for (const file of PHASE_D_FILES) {

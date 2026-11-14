@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { analyzeEvidence } from '../../src/analysis/evidence.js';
+import { evaluateEntryModels } from '../../src/analysis/tradeSignalArchitecture.js';
 
 const K = (o, h, l, c, i) => ({ epoch: 1.7e9 + i * 60, open: o, high: h, low: l, close: c, });
 function rng(seed) { let s = seed; return () => (s = (s * 1664525 + 1013904223) % 4294967296) / 4294967296; }
@@ -10,6 +11,36 @@ function walk(seed, n, drift = 0) {
   return out;
 }
 const flat = (n) => Array.from({ length: n }, (_, i) => K(100, 100.5, 99.5, 100 + (i % 2 ? 0.05 : -0.05), i));
+
+test('range sweep events retain the actual swept level for model A', () => {
+  for (const [dir, bar, kind, level] of [
+    [1, K(100, 100.5, 98, 100, 70), 'spring', 99.5],
+    [-1, K(100, 102, 99.5, 100, 70), 'upthrust', 100.5],
+  ]) {
+    const candles = flat(80); candles[70] = bar;
+    const evidence = analyzeEvidence(candles, { granularity: 60 });
+    const sweep = evidence.facts.modelEvents.find((e) => e.type === 'significant-sweep' && e.context === 'range' && e.index === 70 && e.dir === dir);
+    assert.ok(sweep, `${kind} must produce a range sweep`);
+    assert.equal(sweep.level, level);
+    const events = [sweep, { type: 'displacement', dir, index: 71, startIndex: 71, confirmedIndex: 71 },
+      { type: 'structure-shift', dir, index: 72, confirmedIndex: 72, displacementIndex: 71 }];
+    const options = { biasDirection: dir, asOfIndex: 72, locations: [{ dir, bottom: level, top: level }], events };
+    assert.ok(evaluateEntryModels(options).candidates.some((c) => c.model_id === 'A' && c.context === 'range'));
+    assert.equal(evaluateEntryModels({ ...options, locations: [{ dir, bottom: level + 1, top: level + 2 }] }).candidates.some((c) => c.model_id === 'A'), false);
+    assert.equal(evaluateEntryModels({ ...options, events: [{ ...sweep, level: null }, ...events.slice(1)] }).candidates.some((c) => c.model_id === 'A'), false);
+  }
+});
+
+test('model J evidence retains a shared identity from the detected range through breakout and retest', () => {
+  const candles = flat(80);
+  candles[65] = K(100, 104.2, 99.8, 104, 65);
+  candles[66] = K(101, 102, 100.5, 101.5, 66);
+  const events = analyzeEvidence(candles, { granularity: 60 }).facts.modelEvents;
+  const breakout = events.find((e) => e.type === 'sos-or-sow' && e.index === 65 && e.rangeId);
+  assert.ok(breakout);
+  assert.ok(events.some((e) => e.type === 'range-established' && e.rangeId === breakout.rangeId));
+  assert.ok(events.some((e) => e.type === 'lps-or-lpsy' && e.rangeId === breakout.rangeId));
+});
 
 test('insufficient data is reported, not guessed', () => {
   const e = analyzeEvidence(walk(1, 30));

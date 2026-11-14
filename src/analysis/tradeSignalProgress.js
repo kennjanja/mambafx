@@ -1,4 +1,4 @@
-import { MODEL_REGISTRY } from './tradeSignalArchitecture.js?v=fvg2';
+import { MODEL_REGISTRY } from './tradeSignalArchitecture.js?v=integrity1';
 
 // Read-only diagnostics: how far each model's ordered sequence has progressed. Never feeds scoring or signal selection.
 const STEP_TEXT = Object.freeze({
@@ -25,7 +25,10 @@ export function computeModelProgress({ events = [], dir = 0, hasLocation = false
   const usable = events.filter((e) => Number.isFinite(e.confirmedIndex));
   const models = MODEL_REGISTRY.map((model) => {
     const total = model.sequence.length;
-    const matched = dir ? matchedPrefix(usable, model.sequence, dir) : 0;
+    const matched = !dir ? 0 : model.model_id === 'J'
+      ? Math.max(0, ...usable.filter((event) => event.type === 'range-established' && typeof event.rangeId === 'string' && event.rangeId)
+        .map((range) => matchedPrefix(usable.filter((event) => event.rangeId === range.rangeId), model.sequence, dir)))
+      : matchedPrefix(usable, model.sequence, dir);
     const confirmed = confirmedIds.includes(model.model_id);
     const text = confirmed ? `Model ${model.model_id}: confirmed`
       : matched === 0 ? `Model ${model.model_id}: waiting for ${stepText(model.sequence[0])}`

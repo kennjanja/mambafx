@@ -29449,15 +29449,21 @@ function gridHandleMsg(msg){
   }
 }
 
+function tradeSignalExecutionBlockReason(){
+  return "Trade Signal execution is unavailable: prediction identity and lifecycle eligibility cannot yet be verified across tabs.";
+}
+window.tsBotExecutionBlockReason = tradeSignalExecutionBlockReason;
+
 // Place a Rise/Fall contract. dir: 1 = CALL (rise), -1 = PUT (fall). source: 'manual'|'auto'
 function gridPlaceTrade(dir, source, options = {}){
+  const isTradeSignal = source === "ts-manual" || source === "ts-auto";
+  if (isTradeSignal) return false;
   if (!gridWs || gridWs.readyState !== WebSocket.OPEN || !gridAuthed){
     if (source === "manual") alert("Connect and authorize a Deriv token first.");
     return false;
   }
   const openCount = Object.keys(gridOpenContracts).length;
   const maxConc = Math.max(1, parseInt($("gridMaxConc").value || "1", 10));
-  const isTradeSignal = source === "ts-manual" || source === "ts-auto";
   if (!isTradeSignal && openCount >= maxConc){
     if (source === "manual") alert(`Max open trades (${maxConc}) reached.`);
     return false;
@@ -29516,6 +29522,12 @@ function gridPlaceTrade(dir, source, options = {}){
       return;
     }
     const buyQuotedContract = () => {
+    if (isTradeSignal) {
+      row.status = "rejected: " + tradeSignalExecutionBlockReason();
+      if (row.signalKey) window.dispatchEvent(new CustomEvent('mambafx:tradeRejected', { detail:{ source:row.source, signalKey:row.signalKey, error:row.status } }));
+      renderGridTrades();
+      return;
+    }
     // Step 2: buy using the EXACT proposal id and ask_price — do not alter
     // symbol/duration/etc between proposal and buy, and do it immediately
     // since proposal ids are short-lived.
@@ -29626,6 +29638,9 @@ window.tsBotConnectAccount = async function(type){
 };
 
 window.tsBotPlaceTrade = function(signal, source, stake, accountType, signalKey){
+  if (source !== "ts-manual" && source !== "ts-auto") return { ok:false, error:"Invalid Trade Signal execution source." };
+  const executionBlock = tradeSignalExecutionBlockReason();
+  if (executionBlock) return { ok:false, error:executionBlock };
   if (!signal || ![-1, 1].includes(signal.dir)) return { ok:false, error:"Signal direction is unavailable." };
   if (gridVolatilityAbove100(signal.symbol)) return { ok:false, error:"Volatility indices above 100 are disabled for Trade Signal trading." };
   if (!gridAuthed || !gridWs || gridWs.readyState !== WebSocket.OPEN) return { ok:false, error:"Connect the selected account before trading." };
@@ -34020,8 +34035,8 @@ try {
 </div>
 
 <script type="module" src="src/bazu/page.js?v=34"></script>
-<script type="module" src="src/analysis/tradeSignalPage.js?v=20"></script>
-<script type="module" src="src/analysis/predictionHistoryPage.js?v=5"></script>
+<script type="module" src="src/analysis/tradeSignalPage.js?v=27"></script>
+<script type="module" src="src/analysis/predictionHistoryPage.js?v=8"></script>
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/analysis/sosSowPage.js?v=9"></script>
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
@@ -34050,7 +34065,7 @@ try {
   setInterval(() => { if (body.offsetParent !== null) run(); }, 5000);
 })();
 </script>
-<script type="module">import * as E from "./src/analysis/all.js?v=7"; import * as TSM from "./src/analysis/tradeSignalMarkers.js?v=1"; window.MFXEngine = E; window.MFXTradeSignalMarkers = TSM; if (typeof TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
+<script type="module">import * as E from "./src/analysis/all.js?v=8"; import * as TSM from "./src/analysis/tradeSignalMarkers.js?v=1"; window.MFXEngine = E; window.MFXTradeSignalMarkers = TSM; if (typeof TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
 <script type="module" src="src/ldpe/under-over-bot.js?v=2"></script>
 <script type="module" src="src/consec/consecAlert.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>

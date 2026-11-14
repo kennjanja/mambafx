@@ -80,7 +80,57 @@ function orderedSequence(events, sequence, dir) {
   return matches;
 }
 
-export function evaluateEntryModels({ events = [], biasDirection = 0, entryDirection = 0, locations = [], fvgs = [], nearestInvalidationDistance = Infinity, asOfIndex = Infinity, marketContext = 'trend', preEntryInvalidated = false, expired = false } = {}) {
+function modelASweepSequences(events, direction, asOfIndex, candles) {
+  const groups = events.filter((event) => event.type === 'significant-sweep'
+    && event.classification === 'significant-liquidity'
+    && typeof (event.modelAGroupId || event.groupId) === 'string'
+    && Number.isInteger(event.index) && Number.isInteger(event.confirmedIndex)
+    && event.confirmedIndex <= asOfIndex && ['buy', 'sell'].includes(event.side)
+    && Number.isFinite(event.extreme) && !event.invalidated && !event.retired);
+  const displacements = events.filter((event) => event.type === 'displacement' && event.dir === direction
+    && Number.isInteger(event.startIndex) && Number.isInteger(event.index)
+    && event.confirmedIndex <= asOfIndex).sort((a, b) => a.index - b.index || a.startIndex - b.startIndex);
+  const shifts = events.filter((event) => event.type === 'structure-shift' && event.dir === direction
+    && Number.isInteger(event.index) && Number.isInteger(event.confirmedIndex) && event.confirmedIndex <= asOfIndex);
+  const retired = new Set();
+  const sequences = [];
+  for (const displacement of displacements) {
+    const side = direction === 1 ? 'sell' : 'buy';
+    const eligible = groups.filter((group) => {
+      const id = group.modelAGroupId || group.groupId;
+      if (group.side !== side || retired.has(id) || group.index > displacement.startIndex
+        || group.confirmedIndex > displacement.index || displacement.index - group.confirmedIndex > 30
+        || (Number.isFinite(asOfIndex) && asOfIndex - group.confirmedIndex > 30)) return false;
+      if (!Array.isArray(candles)) return true;
+      for (let index = group.index; index <= displacement.index; index += 1) {
+        const candle = candles[index];
+        if (!candle || (side === 'buy' ? candle.high > group.extreme : candle.low < group.extreme)) return false;
+      }
+      return true;
+    }).sort((a, b) => b.confirmedIndex - a.confirmedIndex
+      || (side === 'buy' ? b.extreme - a.extreme : a.extreme - b.extreme)
+      || a.index - b.index);
+    const selected = eligible[0];
+    if (selected) {
+      const shift = shifts.filter((event) => event.confirmedIndex >= displacement.index
+        && event.confirmedIndex <= displacement.index + 2
+        && event.displacementIndex === displacement.index)
+        .sort((a, b) => a.confirmedIndex - b.confirmedIndex || a.index - b.index)[0];
+      if (shift && (!Array.isArray(candles) || !candles.slice(selected.index, Math.max(shift.confirmedIndex, asOfIndex) + 1).some((candle) =>
+        side === 'buy' ? candle.high > selected.extreme : candle.low < selected.extreme))) {
+        const groupId = selected.modelAGroupId || selected.groupId;
+        const displacementId = displacement.id || JSON.stringify(['displacement', displacement.dir, displacement.startIndex, displacement.index]);
+        const structureId = shift.id || JSON.stringify(['structure-shift', shift.dir, shift.index, shift.level ?? null]);
+        sequences.push({ group: selected, displacement: { ...displacement, id: displacementId },
+          structureShift: { ...shift, id: structureId }, groupId });
+      }
+    }
+    for (const group of eligible) retired.add(group.modelAGroupId || group.groupId);
+  }
+  return sequences;
+}
+
+export function evaluateEntryModels({ events = [], biasDirection = 0, entryDirection = 0, locations = [], fvgs = [], nearestInvalidationDistance = Infinity, asOfIndex = Infinity, marketContext = 'trend', candles = null, preEntryInvalidated = false, expired = false } = {}) {
   if (preEntryInvalidated || expired) return { primary: null, secondary: [], candidates: [] };
   const activeEvents = events.filter((event) => Number.isFinite(event.confirmedIndex) && event.confirmedIndex <= asOfIndex);
   const candidates = [];
@@ -137,12 +187,37 @@ export function evaluateEntryModels({ events = [], biasDirection = 0, entryDirec
         const scopedEvents = model.model_id === 'A'
           ? activeEvents.filter((event) => event.type !== 'significant-sweep' || (event.context || 'swing') === context)
           : activeEvents;
+        if (model.model_id === 'A') {
+          for (const sequence of modelASweepSequences(scopedEvents, direction, asOfIndex, candles)) {
+            const sweep = sequence.group;
+            const location = alignedLocations.find((item) => Number.isFinite(item.top) && Number.isFinite(item.bottom)
+              && sweep.level <= item.top && sweep.level >= item.bottom);
+            if (!location) continue;
+            const matched = [sweep, sequence.displacement, sequence.structureShift];
+            candidates.push({ model_id: model.model_id, name: model.name, context, direction,
+              classification: model.classification, confirmingEvents: matched, confirmingEventCount: matched.length,
+              groupId: sequence.groupId, displacementId: sequence.displacement.id, structureShiftId: sequence.structureShift.id,
+              eventId: sweep.eventId || sweep.sweptLevelId || null, poolId: sweep.poolId ?? null,
+              poolSnapshotState: sweep.poolSnapshotState ?? null, attributionCandidates: sweep.attributionCandidates || [],
+              poolSweepEventId: sweep.poolSweepEventId || null,
+              poolAttributed: sweep.poolAttributed === true, matchCount: sweep.matchCount,
+              attributionAmbiguous: sweep.attributionAmbiguous, poolIds: sweep.poolIds || [],
+              poolSweepEventIds: sweep.poolSweepEventIds || [], coSweptPools: sweep.coSweptPools || [],
+              invalidationDistance: Number.isFinite(nearestInvalidationDistance) ? nearestInvalidationDistance : Infinity,
+              reason: `${model.name}: ${matched.map((event) => event.label || event.type).join(' then ')}`, location });
+          }
+          continue;
+        }
         const sequenceEvents = model.sequence.includes('reaction') && Number.isFinite(asOfIndex)
           ? scopedEvents.filter((event) => event.type !== 'reaction' || event.confirmedIndex >= asOfIndex - 2)
           : scopedEvents;
-        const matched = orderedSequence(sequenceEvents, model.sequence, direction);
+        const matched = model.model_id === 'J'
+          ? sequenceEvents.filter((event) => event.type === 'range-established' && typeof event.rangeId === 'string' && event.rangeId)
+            .map((range) => orderedSequence(sequenceEvents.filter((event) => event.rangeId === range.rangeId), model.sequence, direction))
+            .find((sequence) => sequence && Number.isFinite(sequence[2].level) && alignedLocations.some((location) =>
+              Number.isFinite(location.top) && Number.isFinite(location.bottom) && sequence[2].level <= location.top && sequence[2].level >= location.bottom))
+          : orderedSequence(sequenceEvents, model.sequence, direction);
         if (!matched) continue;
-        if (model.model_id === 'A' && !matched.some((event) => event.type === 'significant-sweep' && event.classification === 'significant-liquidity' && event.dir === direction && (event.context || 'swing') === context)) continue;
         const locationEvent = ({ A: 'significant-sweep', B: 'ob-retest', C: 'fvg-retest', D: 'breaker-retest', F: 'inducement-confirmed', G: 'broken-level-retest', J: 'lps-or-lpsy' })[model.model_id];
         const relevantLocationLevel = matched.find((event) => event.type === locationEvent)?.level;
         if (!Number.isFinite(relevantLocationLevel) || !alignedLocations.some((location) => Number.isFinite(location.top) && Number.isFinite(location.bottom)

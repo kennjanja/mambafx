@@ -1,6 +1,18 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { computeModelProgress, createFunnel } from '../../src/analysis/tradeSignalProgress.js';
+
+test('model J progress does not combine unrelated or unidentified ranges', () => {
+  const events = [
+    { type: 'range-established', dir: 0, confirmedIndex: 1, rangeId: 'a' },
+    { type: 'sos-or-sow', dir: 1, confirmedIndex: 2, rangeId: 'b' },
+    { type: 'lps-or-lpsy', dir: 1, confirmedIndex: 3, rangeId: 'a' },
+  ];
+  const progress = (input) => computeModelProgress({ events: input, dir: 1 }).models.find((m) => m.id === 'J');
+  assert.equal(progress(events).matched, 1);
+  assert.equal(progress([...events, { ...events[1], rangeId: 'a' }]).matched, 3);
+  assert.equal(progress(events.map(({ rangeId, ...event }) => event)).matched, 0);
+});
 import { MODEL_REGISTRY } from '../../src/analysis/tradeSignalArchitecture.js';
 
 const modelA = MODEL_REGISTRY[0];

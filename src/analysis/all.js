@@ -2,8 +2,8 @@ import { analyze } from './engine.js';
 import { analyzeZones } from './zones.js?v=fvg2';
 import { analyzePatterns } from './patterns.js';
 import { analyzeLevels } from './levels.js';
-export { analyzeEvidence } from './evidence.js?v=fvg2';
-export { buildTradeSignal, TRADE_SIGNAL_TFS } from './tradeSignal.js?v=fvg2';
+export { analyzeEvidence } from './evidence.js?v=integrity1';
+export { buildTradeSignal, TRADE_SIGNAL_TFS } from './tradeSignal.js?v=integrity1';
 
 export function analyzeAll(candles, opts = {}) {
   const base = analyze(candles, opts);

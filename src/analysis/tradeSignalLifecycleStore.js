@@ -1,11 +1,46 @@
 // Lifecycle state lives in the same IndexedDB database as Prediction History (separate object store, keyPath 'key').
 // localStorage is only a migration source: it is never modified until the migration has been read back and verified.
-import { PREDICTION_HISTORY_DB, PREDICTION_HISTORY_VERSION, LIFECYCLE_STORE, ensureStores } from './tradeSignalStorage.js';
+import { PREDICTION_HISTORY_DB, PREDICTION_HISTORY_VERSION, LIFECYCLE_STORE, ensureStores } from './tradeSignalStorage.js?v=4';
 
 export const LIFECYCLE_STORAGE_KEY = 'mfx_ts_lifecycle_v1';
 
 const plain = (record) => JSON.parse(JSON.stringify(record));
 const stamp = (record) => (Number.isFinite(record?.updatedAt) ? record.updatedAt : 0);
+const terminal = (state) => ['Closed', 'Invalidated Before Entry', 'Expired Without Entry', 'Opposed', 'Insufficient Data'].includes(state);
+const frozenFields = ['direction', 'entry', 'overallBalance', 'familyValues', 'primaryModel', 'secondaryModels',
+  'target', 'invalidation', 'holdLabel', 'trigger', 'entryG', 'price', 'confirmedAt', 'detectedAt',
+  'model_id', 'model_context', 'inducementEvents', 'evidenceSnapshot', 'entryFrozenAt', 'signalId'];
+
+export function reconcileLifecycle(existing, incoming) {
+  if (!existing) return incoming;
+  if (existing.signalId && incoming.signalId && existing.signalId !== incoming.signalId) {
+    throw new Error(`Conflicting lifecycle prediction identities for ${existing.key}`);
+  }
+  if (terminal(existing.state)) {
+    if (terminal(incoming.state) && existing.state !== incoming.state) {
+      throw new Error(`Conflicting terminal lifecycle states for ${existing.key}: ${existing.state} and ${incoming.state}`);
+    }
+    return existing;
+  }
+  if (stamp(incoming) < stamp(existing)) return existing;
+  if (stamp(incoming) === stamp(existing) && existing.state !== incoming.state) {
+    const before = existing.lifecycleHistory || [], after = incoming.lifecycleHistory || [];
+    if (after.length <= before.length || !before.every((event, index) => JSON.stringify(event) === JSON.stringify(after[index]))) {
+      throw new Error(`Ambiguous concurrent lifecycle states for ${existing.key}`);
+    }
+  }
+  const merged = { ...incoming };
+  if (existing.entryFrozenAt != null) {
+    for (const field of frozenFields) {
+      if (Object.hasOwn(existing, field) && Object.hasOwn(incoming, field) &&
+          JSON.stringify(existing[field]) !== JSON.stringify(incoming[field])) {
+        throw new Error(`Conflicting frozen lifecycle field ${field} for ${existing.key}`);
+      }
+      if (Object.hasOwn(existing, field)) merged[field] = existing[field];
+    }
+  }
+  return merged;
+}
 
 export function createLifecycleStore({ indexedDB = globalThis.indexedDB, legacyStorage = globalThis.localStorage, legacyKey = LIFECYCLE_STORAGE_KEY } = {}) {
   let dbPromise = null, migrationPromise = null;
@@ -14,14 +49,19 @@ export function createLifecycleStore({ indexedDB = globalThis.indexedDB, legacyS
     if (!indexedDB) return Promise.reject(new Error('IndexedDB is unavailable; lifecycle state is kept in memory only'));
     if (!dbPromise) dbPromise = new Promise((resolve, reject) => {
       const request = indexedDB.open(PREDICTION_HISTORY_DB, PREDICTION_HISTORY_VERSION);
-      request.onupgradeneeded = () => ensureStores(request.result);
+      let blocked = false;
+      request.onupgradeneeded = () => {
+        if (blocked) { request.transaction.abort(); return; }
+        ensureStores(request.result, request.transaction);
+      };
       request.onsuccess = () => {
         const db = request.result;
+        if (blocked) { db.close(); return; }
         db.onversionchange = () => { try { db.close(); } catch {} dbPromise = null; };
         resolve(db);
       };
-      request.onerror = () => { dbPromise = null; reject(request.error || new Error('Lifecycle database open failed')); };
-      request.onblocked = () => { dbPromise = null; reject(new Error('Lifecycle database upgrade was blocked by another open MambaFX tab')); };
+      request.onerror = () => { if (!blocked) dbPromise = null; reject(request.error || new Error('Lifecycle database open failed')); };
+      request.onblocked = () => { blocked = true; dbPromise = null; reject(new Error('Lifecycle database upgrade was blocked by another open MambaFX tab')); };
     });
     return dbPromise;
   }
@@ -39,21 +79,32 @@ export function createLifecycleStore({ indexedDB = globalThis.indexedDB, legacyS
     });
   }
 
-  // One atomic transaction: either every put/delete is applied or none is.
+  // The read and reconciliation must share the same readwrite transaction as the writes.
   async function write({ put = [], remove = [] } = {}) {
     if (!put.length && !remove.length) return;
     const rows = put.map(plain), db = await open();
     await new Promise((resolve, reject) => {
-      let tx;
+      let tx, failure;
       try {
         tx = db.transaction(LIFECYCLE_STORE, 'readwrite');
         const store = tx.objectStore(LIFECYCLE_STORE);
-        for (const key of remove) store.delete(key);
-        for (const row of rows) store.put(row);
+        const request = store.getAll();
+        request.onsuccess = () => {
+          try {
+            const current = new Map((request.result || []).map((row) => [row.key, row]));
+            for (const key of remove) { store.delete(key); current.delete(key); }
+            for (const row of rows) {
+              const next = reconcileLifecycle(current.get(row.key), row);
+              current.set(row.key, next);
+              store.put(next);
+            }
+          } catch (error) { failure = error; tx.abort(); }
+        };
+        request.onerror = () => { failure = request.error || new Error('Lifecycle reconciliation read failed'); tx.abort(); };
       } catch (error) { try { tx?.abort(); } catch {} reject(error); return; }
       tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error || new Error('Lifecycle write failed'));
-      tx.onabort = () => reject(tx.error || new Error('Lifecycle write aborted'));
+      tx.onerror = () => reject(failure || tx.error || new Error('Lifecycle write failed'));
+      tx.onabort = () => reject(failure || tx.error || new Error('Lifecycle write aborted'));
     });
   }
 
