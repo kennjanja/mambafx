@@ -11,7 +11,7 @@ Deriv synthetic indices (e.g. R_10) publish a price tick roughly once per second
 ## 2. Data handling
 
 - Digit extraction (`extractDigit`): taken from the quote string using the symbol's declared decimals; if the string's precision does not match, the digit is `null` and the tick is rejected (never guessed). Scientific notation and malformed strings are rejected.
-- Per tick: duplicate, out-of-order, precision-mismatch and time-gap flags are recorded (gap = interval > 3× the median interval). Data-quality failure (gap rate > 20% after 50 ticks) suppresses trading.
+- Per tick: duplicate, out-of-order, precision-mismatch and time-gap flags are recorded (gap = interval > 3× the median interval). Data-quality failure (gap rate > 20% after 50 ticks) causes a `SKIP` forecast; the separately armed Prediction Digit Trade bot can still use that forecast as described below.
 - Warm-up: 100 ticks of model state are required before any forecast can be a TRADE.
 - Buffer: up to 10,000 ticks retained; ticks are persisted (no credentials) and a reload reconstructs model state by deterministic replay, then reconciles with history backfill (overlap must be proven; otherwise the hole is recorded and the pending forecasts are marked unscorable).
 
@@ -57,6 +57,8 @@ Any module returning an invalid vector is excluded for that forecast.
 ## 7. Execution (separate from prediction)
 
 Orders go only through `exec.js` (the single order path). The user selects the Demo | Real account; there is no fallback to the other account on error. A Stop switch pauses automatic trading while forecasts continue to be generated and scored. Stake, cooldown (ticks) and stop-after-N are ordinary user settings. Stakes are rounded to 2 decimals. Duplicate orders are prevented across reconnects and repeated events; settlement updates are applied once.
+
+**Prediction Digit Trade** is a separately armed Matches bot. It freezes the current live predicted digit until an actual contract win is confirmed, then selects the next live forecast; it intentionally accepts `SKIP` forecasts, including during warm-up or poor data quality. It uses LDPE's account and horizon, allows overlapping orders, and counts all unresolved orders in the current cycle as losses for its configured multiplier. It requires positive session profit and loss limits, but these apply only to settled P/L: already-submitted purchases cannot always be cancelled, and resulting losses can exceed the stop loss. Pricing proposals are cancelled on stop or a cycle win; unknown or open orders block re-arming, including after reload. Disconnects, account or duration changes, order errors, and a computed stake over 100000 also stop it. The shared executor rate limit may skip ticks. Martingale does not create an edge and can grow exposure rapidly.
 
 ## 8. Evidence to date (honest status)
 

@@ -40,6 +40,14 @@ export class Executor {
   setAccountType(t) { this.accountType = t === "real" ? "real" : "demo"; }
   setStopped(b) { this.stopped = !!b; }
 
+  cancelPricing(predicate, reason) {
+    for (const order of this.orders.values()) {
+      if (order.state !== "pricing" || !predicate(order)) continue;
+      order.cancelledBeforeBuy = true;
+      this._finish(order, "rejected", reason);
+    }
+  }
+
   // The error to show when the connected account is not the selected one (never falls back).
   accountMismatch(a = this.host.account()) {
     const want = this.accountType === "demo";
@@ -150,7 +158,7 @@ export class Executor {
     if (order.state !== "buying" && order.state !== "unknown") { this._note(`ignored duplicate buy response for ${order.id}`); return; }
     if (err) return this._finish(order, "rejected", "buy rejected: " + (err.message || "error"));
     const id = buy && buy.contract_id != null ? String(buy.contract_id) : null;
-    if (!id) return this._finish(order, "rejected", "buy response missing contract id");
+    if (!id) return this._finish(order, "unknown", "buy response missing contract id; check the account");
     if (this.byContract.has(id) && this.byContract.get(id) !== order) { this._note(`contract ${id} already mapped to another order`); return; }
     order.contractId = id; order.buyPrice = Number(buy.buy_price);
     order.purchaseTime = num(buy.purchase_time);
@@ -170,10 +178,15 @@ export class Executor {
     if (c.exit_tick_time != null) order.exitEpoch = num(c.exit_tick_time);
     const final = c.is_sold || c.is_expired || c.status === "won" || c.status === "lost";
     if (!final) { if (order.state === "unknown") this._set(order, "open"); this._emit(order, "update"); return { handled: true, order }; }
+    const pnl = num(c.profit);
+    if (pnl == null) {
+      this._set(order, "unknown", "final contract update missing profit; check the account");
+      this._emit(order, "unknown");
+      return { handled: true, order };
+    }
     if (this.settled.has(id)) { this._set(order, "settled"); return { handled: true, duplicate: true, order }; }
     this.settled.add(id);
-    const pnl = c.profit != null ? Number(c.profit) : null;
-    order.pnl = pnl; order.result = pnl != null && pnl >= 0 ? "won" : "lost";
+    order.pnl = pnl; order.result = pnl >= 0 ? "won" : "lost";
     order.settledAt = this._now();
     this._set(order, "settled", null);
     this._emit(order, "settled");

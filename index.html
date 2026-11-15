@@ -1487,6 +1487,20 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       </div>
     </div>
 
+    <div class="dig-card" id="pdtCard">
+      <h2>Prediction Digit Trade</h2>
+      <div class="dig-sub">Trades Matches on the current LDPE predicted digit every accepted tick until a contract wins, then uses a new prediction. Uses the LDPE account and forecast duration. It also uses predictions marked SKIP, including during warm-up or poor data quality; predictions are not evidence of an edge.</div>
+      <div class="dig-sub"><b>Risk:</b> unsettled overlapping orders count as losses for Martingale, so stakes can grow rapidly. Profit and loss limits use settled results; outstanding purchases can make losses exceed the stop loss or reverse a profit after the bot stops. The executor may skip ticks due to its API rate limit. The bot also stops on errors, disconnects, account or duration changes, and stakes over 100000.</div>
+      <div class="gc-row">
+        <div class="gc-field"><label for="pdtStake">Base stake</label><input id="pdtStake" type="number" min="0.35" step="0.01" value="0.50"></div>
+        <div class="gc-field"><label for="pdtMultiplier">Martingale multiplier (×N)</label><input id="pdtMultiplier" type="number" min="1" max="10" step="0.1" value="2"></div>
+        <div class="gc-field"><label for="pdtTP">Target profit (required)</label><input id="pdtTP" type="number" min="0.01" step="0.01" placeholder="Required"></div>
+        <div class="gc-field"><label for="pdtSL">Stop loss (required)</label><input id="pdtSL" type="number" min="0.01" step="0.01" placeholder="Required"></div>
+      </div>
+      <label style="display:flex;gap:6px;align-items:center;margin:8px 0"><input type="checkbox" id="pdtArm" onchange="window.PDT && window.PDT.arm(this.checked)"> <b>Arm Prediction Digit Trade</b></label>
+      <div id="pdtStatus" class="cell-mut">Waiting for LDPE.</div>
+    </div>
+
     <!-- Digit distribution — the core visual -->
     <div class="dig-card">
       <h2>Digit Distribution <span id="digTickCount" style="font-weight:400;font-size:11px;color:var(--muted);margin-left:auto">0 ticks</span></h2>
@@ -30199,7 +30213,12 @@ function gridBookStake(buy){
 
 function gridUpdateContract(c){
   // LDPE orders settle exactly once inside the executor (idempotent); other contracts are ignored by it.
-  if (window.LDPE) { try { window.LDPE.onContractUpdate(c); } catch(e){ console.warn("[ldpe] contract update failed", e); } }
+  if (window.LDPE) {
+    try {
+      const result = window.LDPE.onContractUpdate(c);
+      if (result.handled && result.order && result.order.state === "unknown" && (c.is_sold || c.is_expired || c.status === "won" || c.status === "lost")) return;
+    } catch(e){ console.warn("[ldpe] contract update failed", e); }
+  }
   const id = String(c.contract_id);
   let row = gridFindRow(id);
   if (!row) return;
@@ -30263,7 +30282,7 @@ function gridUpdateContract(c){
     if (gridTrades.some(t => t.id === id) && typeof gridMult === 'function' && !String(row.source || '').startsWith('ts-'))
       gridMult().record(stk, won);
     if (typeof digTrades !== 'undefined' && digTrades.some(t => t.id === id) && typeof digMult === 'function')
-      { if (window.UOBOT && window.UOBOT.recordResult && window.UOBOT.recordResult(id, stk, won)) { /* Under 2 / Over 7 bot: own progression */ } else if (window.GAPRES && window.GAPRES.recordResult && window.GAPRES.recordResult(id, stk, won)) { /* digit research order: own progression */ } else if (!(window.LDPE && window.LDPE.stakeCounts) || window.LDPE.stakeCounts(id)) digMult().record(stk, won); }
+      { if (window.PDT && window.PDT.owns(id)) { /* Prediction Digit Trade manages its own progression. */ } else if (window.UOBOT && window.UOBOT.recordResult && window.UOBOT.recordResult(id, stk, won)) { /* Under 2 / Over 7 bot: own progression */ } else if (window.GAPRES && window.GAPRES.recordResult && window.GAPRES.recordResult(id, stk, won)) { /* digit research order: own progression */ } else if (!(window.LDPE && window.LDPE.stakeCounts) || window.LDPE.stakeCounts(id)) digMult().record(stk, won); }
     if (typeof engTrades !== 'undefined' && engTrades.some(t => t.id === id) && typeof engMult === 'function')
       engMult().record(stk, won);
     // Mamba FX bot and Deriv Auto Bot multipliers are handled inside their own IIFEs
@@ -31242,7 +31261,9 @@ function digOnTick(price, epoch){
     const rq = window.__rawQuote;
     const fracLen = rq && rq.includes(".") ? rq.split(".")[1].length : 0;
     const raw = (rq && fracLen === decimals) ? rq : Number(price).toFixed(decimals);
-    _tickSafe("ldpe", () => window.LDPE.ingest(SYMBOL, raw, decimals, epoch));
+    let ldpeTick;
+    _tickSafe("ldpe", () => { ldpeTick = window.LDPE.ingest(SYMBOL, raw, decimals, epoch); });
+    _tickSafe("prediction digit bot", () => { if (window.PDT) window.PDT.afterTick(SYMBOL, ldpeTick, epoch); });
     _tickSafe("gap trader", () => { if (window.GAPRES && window.GAPRES.afterTick) window.GAPRES.afterTick(SYMBOL, d, epoch); });
     _tickSafe("under/over bot", () => { if (window.UOBOT && window.UOBOT.afterTick) window.UOBOT.afterTick(SYMBOL, d, epoch); });
   } else {
@@ -34435,7 +34456,8 @@ try {
 <script type="module" src="src/analysis/predictionHistoryPage.js?v=8"></script>
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/analysis/sosSowPage.js?v=9"></script>
-<script type="module" src="src/ldpe/bridge.js?v=13"></script>
+<script type="module" src="src/ldpe/bridge.js?v=14"></script>
+<script type="module" src="src/ldpe/prediction-digit-bot.js?v=1"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>
 <script type="module">import * as S from "./src/analysis/modifiedSr.js?v=3"; window.MFXModifiedSR = S; if (typeof CHART_TIMEFRAMES !== "undefined") { [900, 3600, 14400, 86400].forEach(tfRefreshDerived); CHART_TIMEFRAMES.forEach(tf => drawTfCandles(tf.g)); }</script>
