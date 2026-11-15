@@ -4534,6 +4534,7 @@ function connect(){
   ws.onclose = () => {
     if (_connectTimeout){ clearTimeout(_connectTimeout); _connectTimeout = null; }
     console.log("[deriv ws] closed:", url);
+    if (window.PDT) window.PDT.pauseFeed(SYMBOL);
     if (!_opened) _endpointIdx++;   // never opened — rotate to the next endpoint
     setConn("dead");
     scheduleReconnect();
@@ -34456,8 +34457,8 @@ try {
 <script type="module" src="src/analysis/predictionHistoryPage.js?v=8"></script>
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/analysis/sosSowPage.js?v=9"></script>
-<script type="module" src="src/ldpe/bridge.js?v=14"></script>
-<script type="module" src="src/ldpe/prediction-digit-bot.js?v=1"></script>
+<script type="module" src="src/ldpe/bridge.js?v=15"></script>
+<script type="module" src="src/ldpe/prediction-digit-bot.js?v=2"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>
 <script type="module">import * as S from "./src/analysis/modifiedSr.js?v=3"; window.MFXModifiedSR = S; if (typeof CHART_TIMEFRAMES !== "undefined") { [900, 3600, 14400, 86400].forEach(tfRefreshDerived); CHART_TIMEFRAMES.forEach(tf => drawTfCandles(tf.g)); }</script>

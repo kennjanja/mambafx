@@ -90,6 +90,61 @@ test("take profit stops and duplicate settlements do not count twice", () => {
   assert.match(h.bot.reason, /Target profit/);
 });
 
+test("feed interruptions pause new purchases and resume the same cycle after orders settle", () => {
+  const h = setup(); h.arm(); h.tick(1, 7); h.tick(2, 4);
+  const [open, pricing] = h.orders();
+  h.open(open);
+  const pending = h.sent.find(m => m.proposal && m.amount === pricing.stake);
+  h.bot.pauseFeed("OTHER");
+  assert.equal(h.bot.feedPaused, false);
+  h.bot.pauseFeed("S"); h.bot.pauseFeed("S");
+  assert.equal(h.bot.armed, true);
+  assert.equal(h.bot.feedPaused, true);
+  assert.equal(pricing.state, "rejected");
+  h.callbacks.get(pending.req_id)({ id: "late", ask_price: pricing.stake });
+  assert.equal(h.sent.filter(m => m.buy).length, 1);
+  h.tick(3, 5);
+  assert.equal(h.orders().length, 2);
+  h.settle(open, -0.5);
+  h.tick(4, 6);
+  assert.equal(h.bot.feedPaused, false);
+  assert.equal(h.bot.pnl, -0.5);
+  assert.equal(h.orders()[2].digit, 7);
+  assert.equal(h.orders()[2].stake, 1);
+});
+
+test("a win or profit limit reached while feed is paused is honored before resuming", () => {
+  const h = setup(); h.arm(); h.tick(1, 7);
+  const order = h.orders()[0]; h.open(order); h.bot.pauseFeed("S");
+  h.settle(order, 2); h.tick(2, 4);
+  assert.equal(h.bot.pnl, 2);
+  assert.equal(h.orders()[1].digit, 4);
+  assert.equal(h.orders()[1].stake, 0.5);
+
+  const limited = setup({ targetProfit: 1 }); limited.arm(); limited.tick(1);
+  const winner = limited.orders()[0]; limited.open(winner); limited.bot.pauseFeed("S");
+  limited.settle(winner, 1.5); limited.tick(2);
+  assert.equal(limited.bot.armed, false);
+  assert.match(limited.bot.reason, /Target profit/);
+  assert.equal(limited.orders().length, 1);
+});
+
+test("unknown purchases and manual stops do not resume after a feed interruption", () => {
+  const h = setup(); h.arm(); h.tick(1);
+  const proposal = h.sent[0];
+  h.callbacks.get(proposal.req_id)({ id: "p", ask_price: 0.5 });
+  h.bot.pauseFeed("S");
+  h.ex.onDisconnect();
+  assert.equal(h.bot.armed, false);
+  assert.match(h.bot.reason, /unknown/i);
+  h.tick(2);
+  assert.equal(h.orders().length, 1);
+
+  const stopped = setup(); stopped.arm(); stopped.bot.pauseFeed("S");
+  stopped.bot.stop("Manually stopped"); stopped.tick(1);
+  assert.equal(stopped.orders().length, 0);
+});
+
 test("arming requires positive limits and refuses unresolved orders after reload", () => {
   const h = setup({ targetProfit: 0 });
   assert.equal(h.arm().ok, false);
@@ -171,6 +226,9 @@ test("page adapter arms with LDPE settings and sends the live forecast through t
     assert.equal(sent.length, 1);
     assert.equal(sent[0].contract_type, "DIGITMATCH");
     assert.equal(sent[0].barrier, String(result.forecast.predictedDigit));
+    window.PDT.pauseFeed("S");
+    assert.equal(elements.pdtArm.checked, true);
+    assert.match(elements.pdtStatus.textContent, /PAUSED/);
     window.PDT.interrupt("Feed interrupted");
     assert.equal(elements.pdtArm.checked, false);
     assert.match(elements.pdtStatus.textContent, /Feed interrupted/);
