@@ -24,6 +24,9 @@ export async function openExecutionStore({ indexedDB = globalThis.indexedDB, nam
     });
   }
   return {
+    async list() {
+      return transaction("readonly", store => store.getAll());
+    },
     async load(accountId) {
       if (typeof accountId !== "string" || !accountId) throw new Error("Trading account is required");
       return transaction("readonly", store => store.get(accountId));

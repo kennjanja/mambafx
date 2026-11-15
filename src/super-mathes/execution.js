@@ -4,8 +4,7 @@ const CONFIG_KEYS = ["baseStake", "maximumStake", "maximumExposure", "cycleLoss"
   "sessionTarget", "dailyTarget", "maxAttempts", "martingale", "multiplierNumerator", "multiplierDenominator",
   "timeZone", "windowSize", "frequencyWeight", "durationTicks"];
 
-// This controller requires exclusive ownership and durable writes from its host.
-// It is not connected to the application or enabled for trading.
+// The host must hold exclusive ownership for the entire durable-write lifetime.
 export class ResearchExecution {
   constructor({ host, store, research, now = Date.now }) {
     this.host = host;
@@ -56,6 +55,7 @@ export class ResearchExecution {
     try {
       const account = this.host.account(), feed = this.host.feed();
       if (!account || !feed || !account.id) throw new Error("Account and feed are required");
+      if (!Number.isSafeInteger(feed.segment) || feed.segment < 1) throw new Error("Feed segment is unavailable");
       accountDay(this.now(), config.timeZone);
       const saved = await this.store.load(account.id);
       if (saved && (saved.order?.phase === "buying" || saved.order?.phase === "unknown" || saved.order?.phase === "open")) {
@@ -66,6 +66,7 @@ export class ResearchExecution {
       const day = accountDay(this.now(), config.timeZone);
       const session = saved?.session || { accountId: account.id, isVirtual: account.isVirtual, currency: account.currency, pnl: 0, daily: {} };
       const candidate = saved?.cycle || { source: feed.source, pnl: 0, staked: 0, losses: 0, attempts: 0, unresolved: false };
+      if (saved?.cycle && saved.cycle.segment !== feed.segment) throw new Error("Feed segment changed; close the stopped cycle");
       const decision = assessTradeRisk({ config, account, session: { ...session, dailyPnl: session.daily[day] ?? 0 }, cycle: candidate, feed });
       if (!decision.allowed) throw new Error(decision.reason);
       this.state = saved ? { ...saved, config: { ...config }, reason: "Running" } : {
@@ -79,17 +80,35 @@ export class ResearchExecution {
     } finally { this.busy = false; }
   }
 
-  async stop(reason = "Stopped by user") {
+  requestStop() {
     this.running = false;
     this.generation++;
+  }
+
+  async stop(reason = "Stopped by user") {
+    this.requestStop();
     if (this.state) {
       this.state.reason = reason;
       await this.save();
     }
   }
 
+  async closeCycle() {
+    if (this.running || this.busy) throw new Error("Stop trading before closing a cycle");
+    if (!this.state?.cycle) throw new Error("There is no active cycle to close");
+    if (this.state.cycle.unresolved || ["buying", "unknown", "open"].includes(this.state.order?.phase)) {
+      throw new Error("Reconcile the unresolved order before closing its cycle");
+    }
+    if (this.state.order?.phase === "pricing") this.state.order.phase = "cancelled";
+    this.state.history.push({ cycle: structuredClone(this.state.cycle), termination: "closed by user" });
+    this.state.cycle = null;
+    this.state.reason = "Cycle closed by user";
+    await this.save();
+  }
+
   risk() {
     const account = this.host.account(), feed = this.host.feed();
+    if (this.state.cycle.segment !== feed?.segment) return { allowed: false, reason: "Feed segment changed; close the stopped cycle" };
     const day = accountDay(this.now(), this.state.config.timeZone);
     return assessTradeRisk({ config: this.state.config, account, feed, cycle: this.state.cycle,
       session: { ...this.state.session, dailyPnl: this.state.session.daily[day] ?? 0 } });
@@ -103,7 +122,9 @@ export class ResearchExecution {
       if (this.host.ownsExecution() !== true) throw new Error("Exclusive execution ownership lost");
       if (this.state.order && ["buying", "unknown", "open"].includes(this.state.order.phase)) return;
       const feed = this.host.feed();
-      if (!feed?.continuous || !feed.source) throw new Error("Feed continuity unavailable");
+      if (!feed?.continuous || !feed.source || !Number.isSafeInteger(feed.segment) || feed.segment < 1) {
+        throw new Error("Feed continuity unavailable");
+      }
       if (!this.state.cycle) {
         const row = await this.research.createModelPrediction(this.state.config.windowSize, "combined", this.state.config.frequencyWeight);
         if (!this.running || generation !== this.generation) return;
@@ -111,9 +132,16 @@ export class ResearchExecution {
             !Number.isInteger(row.prediction.selectedDigit) || row.prediction.selectedDigit < 0 || row.prediction.selectedDigit > 9) {
           throw new Error("Combined prediction source or evidence is invalid");
         }
-        this.state.cycle = { id: row.id, source: row.source, digit: row.prediction.selectedDigit,
+        this.state.cycle = { id: row.id, source: row.source, segment: feed.segment, digit: row.prediction.selectedDigit,
           pnl: 0, staked: 0, losses: 0, attempts: 0, unresolved: false };
         await this.save();
+      }
+      const original = await this.research.getPrediction(this.state.cycle.id);
+      if (!this.running || generation !== this.generation) return;
+      if (!original || original.source !== this.state.cycle.source ||
+          original.prediction?.model !== "combined-frequency-markov" ||
+          original.prediction.selectedDigit !== this.state.cycle.digit) {
+        throw new Error("Original cycle prediction is unavailable or changed");
       }
       let decision = this.risk();
       if (!decision.allowed) throw new Error(decision.reason);
@@ -132,11 +160,15 @@ export class ResearchExecution {
       }
       if (!this.running || generation !== this.generation) return;
       if (this.host.ownsExecution() !== true) throw new Error("Exclusive execution ownership lost");
+      await this.host.verifyAuthorization();
+      if (!this.running || generation !== this.generation) return;
       decision = this.risk();
       if (!decision.allowed || decision.stake !== order.stake) throw new Error(decision.reason || "Stake changed");
       if (!proposal || typeof proposal.id !== "string" || !proposal.id || proposal.askPrice !== order.stake) {
         throw new Error("Proposal price or identity is invalid");
       }
+      order.proposalId = proposal.id;
+      order.quotedPrice = proposal.askPrice;
       order.phase = "buying";
       this.state.cycle.unresolved = true;
       await this.save();
@@ -146,23 +178,31 @@ export class ResearchExecution {
         await this.save();
         return;
       }
-      decision = this.riskBeforeBuy(order);
+      try {
+        decision = this.riskBeforeBuy(order);
+      } catch (error) {
+        order.phase = "cancelled";
+        this.state.cycle.unresolved = false;
+        throw error;
+      }
       if (!decision.allowed) {
         order.phase = "cancelled";
         this.state.cycle.unresolved = false;
         throw new Error(decision.reason);
       }
       let buy;
-      try { buy = await this.host.buy(proposal.id, order.stake); }
+      try { buy = await this.host.buy(order.proposalId, order.quotedPrice); }
       catch {
         order.phase = "unknown";
         throw new Error("Purchase outcome unknown; reconcile the account");
       }
-      if (!buy || !/^[1-9]\d*$/.test(String(buy.contractId)) || buy.buyPrice !== order.stake) {
+      if (!buy || !/^[1-9]\d*$/.test(String(buy.contractId)) || buy.buyPrice !== order.stake ||
+          (buy.transactionId !== undefined && !/^[1-9]\d*$/.test(String(buy.transactionId)))) {
         order.phase = "unknown";
         throw new Error("Purchase response is incomplete; reconcile the account");
       }
       order.contractId = String(buy.contractId);
+      if (buy.transactionId !== undefined) order.transactionId = String(buy.transactionId);
       order.phase = "open";
       this.state.cycle.attempts++;
       this.state.cycle.staked += order.stake;
@@ -178,6 +218,7 @@ export class ResearchExecution {
 
   riskBeforeBuy(order) {
     const cycle = { ...this.state.cycle, unresolved: false };
+    if (cycle.segment !== this.host.feed()?.segment) return { allowed: false, reason: "Feed segment changed; close the stopped cycle" };
     const day = accountDay(this.now(), this.state.config.timeZone);
     const decision = assessTradeRisk({ config: this.state.config, account: this.host.account(), feed: this.host.feed(), cycle,
       session: { ...this.state.session, dailyPnl: this.state.session.daily[day] ?? 0 } });
@@ -198,8 +239,8 @@ export class ResearchExecution {
         throw new Error("Reconnect the original account to reconcile the contract");
       }
       let result;
-      try { result = await this.host.contract(order.contractId); }
-      catch { throw new Error("Contract status unavailable; reconnect and reconcile"); }
+      try { result = await this.host.contract(order.contractId, structuredClone(order)); }
+      catch (error) { throw new Error(`Contract status unavailable: ${error.message}`); }
       if (!result || String(result.contractId) !== order.contractId) throw new Error("Contract identity cannot be verified");
       if (result.status !== "won" && result.status !== "lost") return false;
       if (!Number.isSafeInteger(result.profit) || !Number.isSafeInteger(result.payout) || result.payout < 0 ||

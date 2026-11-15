@@ -95,7 +95,7 @@ async function authStart(env) {
   const state = randomId(24);
   const verifier = randomId(48);
   const challenge = await pkceChallenge(verifier);
-  await env.SESSION.put("oauth:" + state, JSON.stringify({ verifier, t: Date.now() }), { expirationTtl: STATE_TTL });
+  await env.SESSION.put("oauth:" + state, JSON.stringify({ verifier, scope: SCOPE, t: Date.now() }), { expirationTtl: STATE_TTL });
   const u = new URL(AUTH_URL);
   u.searchParams.set("response_type", "code");
   u.searchParams.set("client_id", env.CLIENT_ID);
@@ -146,8 +146,12 @@ async function authCallback(env, url) {
   if (!tok || typeof tok.access_token !== "string" || !tok.access_token) return fail("token_exchange_failed");
 
   const ttl = Math.max(60, Math.min(Number(tok.expires_in) || DEFAULT_SESSION_TTL, 86400));
+  const grantedScope = tok.scope === undefined && typeof pending.scope === "string" ? pending.scope :
+    typeof tok.scope === "string" ? tok.scope : "";
   const sid = randomId(32);
-  await env.SESSION.put("sess:" + sid, JSON.stringify({ access_token: tok.access_token, created: Date.now() }), {
+  await env.SESSION.put("sess:" + sid, JSON.stringify({
+    access_token: tok.access_token, created: Date.now(), trade_authorized: grantedScope.split(/\s+/).includes("trade"),
+  }), {
     expirationTtl: ttl,
   });
   const handoff = randomId(24);
@@ -258,7 +262,10 @@ export default {
       if (path === "/auth/start" && method === "GET") return await authStart(env);
       if (path === "/auth/callback" && method === "GET") return await authCallback(env, url);
       if (path === "/auth/exchange" && method === "POST") return await authExchange(env, request);
-      if (path === "/me/session" && method === "GET") return json(env, request, { logged_in: !!(await loadSession(env, request)) });
+      if (path === "/me/session" && method === "GET") {
+        const session = await loadSession(env, request);
+        return json(env, request, session ? { logged_in: true, trade_authorized: session.trade_authorized === true } : { logged_in: false });
+      }
       if (path === "/me/accounts" && method === "GET") return await meAccounts(env, request);
       if (path === "/ws/otp" && method === "POST") return await wsOtp(env, request);
       if (path === "/logout" && method === "POST") return await logout(env, request);

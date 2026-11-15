@@ -7,8 +7,10 @@ export function coordinateResearch(service, {
   now = Date.now,
   report = error => console.error("[super-mathes coordination]", error),
 } = {}) {
-  const status = { state: "starting", role: "waiting", activeSource: null, lastError: null };
+  const status = { state: "starting", role: "waiting", activeSource: null, lastError: null,
+    lastObservationAt: null, pendingUpdates: 0, segment: null };
   let owned = false, stopped = false, release, heartbeatAt = 0;
+  let interruptions = 0;
   if (!locks || !Channel) {
     status.state = "failed";
     status.lastError = "Web Locks and BroadcastChannel are required for safe collection";
@@ -28,7 +30,7 @@ export function coordinateResearch(service, {
   const broadcast = () => {
     if (!owned) return;
     status.state = service.status.state;
-    status.activeSource = service.status.activeSource;
+    status.activeSource = interruptions ? null : service.status.activeSource;
     status.lastError = service.status.lastError;
     channel.postMessage({ type: "status", state: status.state, activeSource: status.activeSource, lastError: status.lastError });
   };
@@ -89,8 +91,23 @@ export function coordinateResearch(service, {
   }
   return {
     ...service, status,
-    ingest: (...args) => owned ? Promise.resolve(service.ingest(...args)).finally(broadcast) : Promise.resolve({ ignored: true }),
-    interrupt: (...args) => owned ? Promise.resolve(service.interrupt(...args)).finally(broadcast) : Promise.resolve(),
+    ingest: (...args) => {
+      if (!owned) return Promise.resolve({ ignored: true });
+      status.lastObservationAt = now();
+      status.pendingUpdates++;
+      return Promise.resolve(service.ingest(...args)).then(result => {
+        status.segment = result.duplicate ? null : result.observation.segment;
+        return result;
+      }).finally(() => { status.pendingUpdates--; broadcast(); });
+    },
+    interrupt: (...args) => {
+      if (!owned) return Promise.resolve();
+      interruptions++;
+      status.activeSource = null;
+      status.lastObservationAt = null;
+      status.segment = null;
+      return Promise.resolve(service.interrupt(...args)).finally(() => { interruptions--; broadcast(); });
+    },
     createPrediction: leaderOnly("createPrediction"),
     createModelPrediction: leaderOnly("createModelPrediction"),
     benchmark: leaderOnly("benchmark"),

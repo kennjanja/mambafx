@@ -98,17 +98,24 @@ test("concurrent tabs elect one collector and safely hand over pending predictio
     await waitFor(() => first.status.role === "collector" && second.status.role === "follower");
     await Promise.all([first.ingest(tick(1)), second.ingest(tick(1))]);
     assert.equal((await first.getSource(source)).lastSeq, 1);
-    await first.createPrediction(prediction(1), 1);
-    await assert.rejects(second.createPrediction(prediction(1), 1), /collector tab/);
+    assert.equal(first.status.segment, 1);
+    const interrupted = first.interrupt("Feed disconnected");
+    assert.equal(first.status.activeSource, null);
+    assert.equal(first.status.segment, null);
+    await interrupted;
+    await first.ingest(tick(2));
+    assert.equal(first.status.segment, 2);
+    await first.createPrediction(prediction(2), 2);
+    await assert.rejects(second.createPrediction(prediction(2), 2), /collector tab/);
     assert.equal((await second.getPrediction("p")).status, "Pending Immediate Outcome");
     await first.stop();
     await waitFor(() => second.status.role === "collector");
-    await second.ingest(tick(2));
-    assert.equal((await second.getSource(source)).lastSeq, 2);
+    await second.ingest(tick(3));
+    assert.equal((await second.getSource(source)).lastSeq, 3);
     assert.equal((await second.getPrediction("p")).status, "Unscorable");
     const gaps = await second.listIntervals(source);
     assert.equal(gaps[0].reason, "Collector closed");
-    assert.equal(gaps[0].resumedSequence, 2);
+    assert.equal(gaps[0].resumedSequence, 3);
   } finally { await first.stop(); await second.stop(); fake.teardown(); }
 });
 

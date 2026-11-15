@@ -159,7 +159,7 @@ test('handoff code: exchange gives a Bearer session token once; Bearer works wit
   assert.ok(token && !text.includes(SECRET_TOKEN));
   assert.equal((await ex()).status, 400);
   const h = { Authorization: 'Bearer ' + token };
-  assert.deepEqual(await (await call(env, '/me/session', { headers: h })).json(), { logged_in: true });
+  assert.deepEqual(await (await call(env, '/me/session', { headers: h })).json(), { logged_in: true, trade_authorized: true });
   await call(env, '/logout', { method: 'POST', headers: h });
   assert.deepEqual(await (await call(env, '/me/session', { headers: h })).json(), { logged_in: false });
   assert.equal((await call(env, '/auth/exchange', { method: 'POST', body: '{"code":"../x"}' })).status, 400);
@@ -170,8 +170,41 @@ test('/me/session reflects login state and never leaks the token', async () => {
   assert.deepEqual(await (await call(env, '/me/session')).json(), { logged_in: false });
   const { cookie } = await login(env);
   const text = await (await call(env, '/me/session', { headers: { Cookie: cookie } })).text();
-  assert.deepEqual(JSON.parse(text), { logged_in: true });
+  assert.deepEqual(JSON.parse(text), { logged_in: true, trade_authorized: true });
   assert.ok(!text.includes(SECRET_TOKEN));
+});
+
+test('session reports trade authorization only for the granted OAuth scope', async () => {
+  for (const [scope, expected] of [['trade', true], ['read trade', true], ['read', false], [null, false]]) {
+    const env = mkEnv();
+    const { state } = await startFlow(env);
+    mockFetch(() => new Response(JSON.stringify({ access_token: SECRET_TOKEN, scope })));
+    const response = await call(env, `/auth/callback?code=abc&state=${state}`);
+    const cookie = response.headers.get('Set-Cookie').split(';')[0];
+    const session = await (await call(env, '/me/session', { headers: { Cookie: cookie } })).json();
+    assert.deepEqual(session, { logged_in: true, trade_authorized: expected });
+  }
+});
+
+test('sessions created before scope tracking do not imply trade authorization', async () => {
+  const env = mkEnv();
+  const id = 'a'.repeat(32);
+  await env.SESSION.put('sess:' + id, JSON.stringify({ access_token: SECRET_TOKEN }));
+  const response = await call(env, '/me/session', { headers: { Authorization: 'Bearer ' + id } });
+  assert.deepEqual(await response.json(), { logged_in: true, trade_authorized: false });
+});
+
+test('an omitted token scope is not inferred from an older OAuth request', async () => {
+  const env = mkEnv();
+  const { state } = await startFlow(env);
+  const pending = JSON.parse(env.SESSION.m.get('oauth:' + state));
+  delete pending.scope;
+  await env.SESSION.put('oauth:' + state, JSON.stringify(pending));
+  mockFetch(() => new Response(JSON.stringify({ access_token: SECRET_TOKEN })));
+  const response = await call(env, `/auth/callback?code=abc&state=${state}`);
+  const cookie = response.headers.get('Set-Cookie').split(';')[0];
+  assert.deepEqual(await (await call(env, '/me/session', { headers: { Cookie: cookie } })).json(),
+    { logged_in: true, trade_authorized: false });
 });
 
 test('/me/accounts maps accounts, uses bearer token, 401 when logged out', async () => {

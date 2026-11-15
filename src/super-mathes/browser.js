@@ -1,6 +1,9 @@
 import { createLiveResearch } from "./live.js?v=3";
 import { attachDashboard } from "./dashboard.js?v=3";
-import { coordinateResearch } from "./coordination.js?v=2";
+import { coordinateResearch } from "./coordination.js?v=3";
+import { attachTradingDashboard } from "./tradingDashboard.js?v=1";
+import { createDerivRequest, readAccountBalance } from "./derivRequest.js?v=1";
+import { createTradingRuntime } from "./tradingRuntime.js?v=1";
 
 function runValidation(observations, options) {
   return new Promise((resolve, reject) => {
@@ -24,5 +27,31 @@ window.SuperMathes = new Proxy({}, {
   },
 });
 attachDashboard(window.SuperMathes);
-window.addEventListener("pagehide", () => { coordinator.stop().catch(error => console.error("[super-mathes]", error)); });
-window.addEventListener("pageshow", event => { if (event.persisted) coordinator = coordinateResearch(service); });
+const connection = window.MFXDerivConnection;
+const request = createDerivRequest(connection);
+function newRuntime() {
+  return createTradingRuntime({ connection, research: window.SuperMathes,
+    fetchSession: () => window.mfxAuthFetch("/me/session"),
+    fetchAccounts: () => window.mfxAuthFetch("/me/accounts"),
+    sessionKey: () => localStorage.getItem("mfx_session_token") });
+}
+let runtime = newRuntime(), closing = Promise.resolve();
+const runtimeProxy = new Proxy({}, {
+  get(_target, key) {
+    const value = runtime[key];
+    return typeof value === "function" ? (...args) => runtime[key](...args) : value;
+  },
+});
+attachTradingDashboard(window.SuperMathes, connection.account, () => readAccountBalance(request, connection.account), runtimeProxy);
+setInterval(() => { runtime.pulse().catch(() => {}); }, 1500);
+window.addEventListener("pagehide", () => {
+  closing = runtime.dispose();
+  closing.catch(error => console.error("[super-mathes trading]", error));
+  coordinator.stop().catch(error => console.error("[super-mathes]", error));
+});
+window.addEventListener("pageshow", event => {
+  if (event.persisted) {
+    coordinator = coordinateResearch(service);
+    closing.then(() => { runtime = newRuntime(); }).catch(error => console.error("[super-mathes trading]", error));
+  }
+});

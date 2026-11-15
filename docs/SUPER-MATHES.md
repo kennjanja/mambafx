@@ -2,12 +2,17 @@
 
 ## Status
 
-Super Mathes is an independent, analysis-only research module with a dedicated
-dashboard, source-qualified live capture, browser persistence, two explicitly
-selected research models and five-observation records. It never submits trades
-or accesses credentials. Neither model is independently validated or promoted,
-and no predictive advantage is claimed. Neural/deep-learning models and the
-complete 75-role system are **not implemented**.
+Super Mathes is an independent research and trading module with source-qualified
+live capture, browser persistence, two research models and five-observation
+records. The trading dashboard and authenticated execution integration are
+implemented in the development worktree but the dashboard has **not** been
+deployed. One $1 USD Demo Digit Matches contract was purchased and settled as
+a loss using development modules loaded into the authenticated browser. The
+record was recovered after a page reload and account reconnection without
+sending another request. The authorization backend update was deployed
+separately. Neither model is independently validated or
+promoted, and no predictive advantage is claimed. Neural/deep-learning models
+and the complete 75-role system are **not implemented**.
 
 Work in progress: a configurable linear pool of the frequency and Markov
 models can produce a research prediction when at least 20 observations and
@@ -18,19 +23,28 @@ the prediction. Tied combined leaders are rejected. The independent evaluator
 scores the combined model only when this data gate and the unique-leader rule
 are satisfied; paired log-loss and Brier differences use the same eligible
 outcomes. No calibration or profitability claim follows from combining models.
-Automated trading, account separation and execution risk controls are not
-implemented in this work-in-progress version.
-An isolated, currently unused risk-checking module accepts confirmed ledger
-values in integer currency minor units and can derive the calendar day in an
-explicit account time zone. It is not a trading controller: account identity,
-currency precision, confirmed-loss counts, outstanding contracts and daily
-ledger values must be established by the future authenticated execution
-integration before these checks can protect any trade.
-An isolated execution prototype and separate browser storage also exist, with
-mocked lifecycle tests. They are not wired to the authenticated Deriv socket,
-cross-tab execution ownership or the dashboard, and must not be used for
-trading until those integrations and recovery paths are implemented and
-verified.
+The Trading Dashboard connects the combined prediction to the authenticated
+Deriv socket, confirmed account currency and account type, quoted-price
+Digit Matches purchases, settlement monitoring and a separate account-keyed
+IndexedDB ledger. Web Locks restrict execution to the active research collector
+tab. An eight-decimal accounting scale is stored with execution snapshots; it
+is not a claim about a currency's supported precision. Unrepresentable values
+and incompatible stored histories are rejected.
+
+The backend records the OAuth trade scope in new sessions; existing sessions
+without scope information fail closed and require a fresh login after the
+backend is updated. Daily limits use `Africa/Nairobi` as requested; server time is not an account
+time zone and the current socket has not supplied one. The configured zone is
+not independently verified against the account.
+
+A confirmed loss keeps the original digit; a confirmed match closes the cycle.
+An interrupted or changed feed segment stops further purchases using that
+cycle. Once stopped and with no unresolved order, the user may explicitly close
+the cycle, preserving its history. Open contracts are reconciled on the original
+account after reconnect or refresh. An interrupted buy without a confirmed
+contract ID remains unknown and blocks further purchases; statement entries
+cannot safely be attributed solely by time, stake or digit, and the dashboard
+does not yet provide a way to resolve such an ambiguous purchase.
 
 The requested role numbering contains 1–65 and 86–95: those 75 roles are mapped
 below. Positions 66–85 and 96–100 are not created. Existing leadership and
@@ -47,7 +61,7 @@ entropy, mutual information, log loss and Brier scoring have been replaced by
 independent implementations in `math.js`. The mutual-information estimate is
 descriptive and does not provide the LDPE significance test. No LDPE state,
 configuration, persistence, predictions or executor is read or written.
-The Cloudflare Worker is not involved.
+The Cloudflare Worker is not involved in the research pipeline.
 
 The intended pipeline is source-qualified observations → validated sequence →
 statistical features → independently evaluated models → calibrated aggregation
@@ -69,7 +83,7 @@ precision. Timestamps alone cannot prove continuity.
 | Dashboard, live integration, history persistence and import | Dedicated navigation, live status, prediction and report history, IndexedDB settings; historical import is API-only |
 | Machine learning, hidden-state, neural and generator-forensics research | A first-order Markov model only; neural, hidden-state and generator forensics are not implemented |
 | Professional contribution registry | This implementation map only; no runtime professional dashboard or execution tracking |
-| Independent validation and production readiness | Not completed; no real-world predictive claims or trade integration |
+| Independent validation and production readiness | No independently supported predictive advantage; one Demo loss was verified, while live loss retry, win progression and ambiguous-purchase resolution remain unverified or incomplete |
 
 `recurrenceProbabilities` accepts conditional hazards, not marginal
 probabilities. The five-draw independent uniform baseline is 40.951%; that
@@ -90,6 +104,15 @@ Benchmarks score each outcome before updating the model. The latest stored
 report compares the selected model with uniform; this is exploratory, not an
 independent holdout or proof of edge. The history selector can inspect stored
 sources even when they are not currently live.
+
+In the development dashboard, select **Trading Dashboard**, connect the desired
+account in Trading Grid and review all
+stake, exposure, loss and target limits before starting. Take profit applies to
+the cycle, session and Nairobi day; stop loss applies to the cycle and
+session. The default stake, maximum stake, exposure, stop loss and take profit
+are each one unit of the account currency. A Real-account start requires an
+additional confirmation. Stop prevents new purchases but continues monitoring
+known open contracts. Only the active collector tab can start or stop trading.
 
 `window.SuperMathes` exposes `status`, `listSources()`, `getSource(source)`,
 `listObservations(source, limit)`, `listPredictions(source, limit)`,

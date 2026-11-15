@@ -6,18 +6,20 @@ function harness({ isVirtual = true } = {}) {
   const saved = new Map(), sent = [], predictions = [];
   let contractId = 0, currentResult = null, owns = true;
   const account = { id: isVirtual ? "VRTC1" : "CR1", isVirtual, connected: true, authorized: true, balance: 10000, currency: "USD" };
-  const feed = { source: "source", continuous: true };
+  const feed = { source: "source", segment: 1, continuous: true };
   const store = {
     async load(id) { return saved.has(id) ? structuredClone(saved.get(id)) : null; },
     async save(state) { saved.set(state.accountId, structuredClone(state)); },
   };
   const host = {
     ownsExecution: () => owns, account: () => account, feed: () => feed,
+    async verifyAuthorization() {},
     async proposal(input) { sent.push({ proposal: input }); return { id: "proposal", askPrice: input.stake }; },
     async buy(id, stake) { sent.push({ buy: id, stake }); return { contractId: String(++contractId), buyPrice: stake }; },
     async contract(id) { return currentResult && { ...currentResult, contractId: id }; },
   };
-  const research = { async createModelPrediction(_window, model) {
+  const research = { async getPrediction(id) { return predictions.find(row => row.id === id); },
+    async createModelPrediction(_window, model) {
     assert.equal(model, "combined");
     const digit = predictions.length ? 6 : 3;
     const result = { id: `p${predictions.length}`, source: "source", prediction: { selectedDigit: digit, model: "combined-frequency-markov", evidence: { present: true } } };
@@ -76,6 +78,30 @@ test("ambiguous buys remain unresolved after restart and are never retried", asy
   assert.equal(restored.state.order.phase, "unknown");
 });
 
+test("a known open contract is reconciled once after restart", async () => {
+  const h = harness();
+  await h.bot.start(h.config);
+  await h.bot.onTick();
+  const restored = new ResearchExecution({ host: h.host, store: h.store, research: h.research });
+  await restored.restore(h.account.id);
+  assert.equal(restored.state.order.phase, "open");
+  await assert.rejects(restored.start(h.config), /reconciliation/);
+  h.result({ status: "lost", profit: -100, payout: 0, settledAt: Date.parse("2026-03-08T06:00:00Z") });
+  assert.equal(await restored.reconcile(), true);
+  assert.equal(await restored.reconcile(), false);
+  assert.equal(restored.state.session.pnl, -100);
+  assert.equal(restored.state.cycle.digit, 3);
+  assert.equal(h.sent.filter(x => x.buy).length, 1);
+});
+
+test("a confirmed buy transaction ID is stored with its order", async () => {
+  const h = harness();
+  h.host.buy = async (_id, stake) => ({ contractId: "123", transactionId: "456", buyPrice: stake });
+  await h.bot.start(h.config);
+  await h.bot.onTick();
+  assert.equal((await h.store.load(h.account.id)).order.transactionId, "456");
+});
+
 test("disconnect, lost ownership, rejection, and stop prevent purchases", async () => {
   const h = harness();
   h.host.proposal = async input => { h.feed.continuous = false; return { id: "p", askPrice: input.stake }; };
@@ -88,6 +114,20 @@ test("disconnect, lost ownership, rejection, and stop prevent purchases", async 
   await l.bot.start(l.config);
   await assert.rejects(l.bot.onTick(), /ownership/);
   assert.equal(l.sent.filter(x => x.buy).length, 0);
+});
+
+test("a failing final risk check cancels the unsent order", async () => {
+  const h = harness();
+  const save = h.store.save;
+  h.store.save = async state => {
+    await save(state);
+    if (state.order?.phase === "buying") h.account.balance = null;
+  };
+  await h.bot.start(h.config);
+  await assert.rejects(h.bot.onTick(), /account balance/);
+  assert.equal(h.sent.filter(x => x.buy).length, 0);
+  assert.equal((await h.store.load(h.account.id)).order.phase, "cancelled");
+  assert.equal(h.bot.state.cycle.unresolved, false);
 });
 
 test("settlement requires actual profit, payout, timestamp and contract identity", async () => {

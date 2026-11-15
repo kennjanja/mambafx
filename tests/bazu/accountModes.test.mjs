@@ -146,7 +146,9 @@ test('only choke3m.js (and execution.js itself) can reach the Deriv buy client',
   for (const f of walk(root).filter((x) => /\.(js|mjs)$/.test(x))) {
     const rel = path.relative(root, f).replace(/\\/g, '/');
     if (rel === 'bazu/execution.js' || rel === 'bazu/choke3m.js') continue;
-    if (/buyRiseFall|execution\.js/.test(strip(fs.readFileSync(f, 'utf8'))) && !/^bazu\/(page|engine)\.js$/.test(rel)) offenders.push(rel);
+    const code = strip(fs.readFileSync(f, 'utf8'));
+    const bazuExecution = rel.startsWith('bazu/') ? /['"][^'"]*execution\.js(?:\?|['"])/ : /['"][^'"]*\/bazu\/execution\.js(?:\?|['"])/;
+    if ((/buyRiseFall/.test(code) || bazuExecution.test(code)) && !/^bazu\/(page|engine)\.js$/.test(rel)) offenders.push(rel);
     if (/\{\s*"?buy"?\s*:|buy:\s*proposal|JSON\.stringify\(\{\s*buy\b/.test(fs.readFileSync(f, 'utf8')) && rel.startsWith('bazu/')) offenders.push(rel + ' (raw buy)');
   }
   assert.deepEqual(offenders, []);
