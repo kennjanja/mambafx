@@ -6,9 +6,10 @@
   const WINDOW = 100;
   const $ = id => document.getElementById(id);
   const finite = value => Number.isFinite(value);
-  const empty = () => ({account: null, config: null, total: 0, marketPnl: 0, active: null, direction: null, skipTicks: 0, lastMarket: null, nextStake: null, trade: null, wins: 0, losses: 0});
+  const empty = () => ({account: null, config: null, total: 0, marketPnl: 0, active: null, direction: null, lastMarket: null, nextStake: null, trade: null, openTrades: [], closingMarket: null, wins: 0, losses: 0});
   let state = empty(), running = false, feed = null, feedReady = false, data = {}, status = 'Stopped.';
-  let releaseLock = null, lockHeld = false, lockRequested = false, requestTimer = null, feedPing = null, recoveryRequest = null, balanceAccount = null;
+  let releaseLock = null, lockHeld = false, lockRequested = false, requestTimer = null, feedPing = null, balanceAccount = null;
+  const recoveryRequests = new Map();
   let storageError = null;
 
   function load() {
@@ -19,13 +20,18 @@
         if (!saved || typeof saved !== 'object' || !finite(saved.total) || !finite(saved.marketPnl) ||
             !finite(saved.wins) || !finite(saved.losses) || !('trade' in saved) ||
             (saved.trade && (!saved.config || !['proposal', 'buy_pending', 'unknown', 'open'].includes(saved.trade.phase)))) throw new Error('Invalid saved session');
+        if (saved.openTrades == null) saved.openTrades = [];
+        if (!Array.isArray(saved.openTrades) || saved.openTrades.length > 2 ||
+            saved.openTrades.some(t => !t || t.phase !== 'open' || !t.contractId) ||
+            new Set(saved.openTrades.map(t => String(t.contractId))).size !== saved.openTrades.length) throw new Error('Invalid open trades');
+        if (saved.trade && saved.trade.phase === 'open') { saved.openTrades.push(saved.trade); saved.trade = null; }
+        if (saved.openTrades.length + (saved.trade ? 1 : 0) > 2) throw new Error('Too many outstanding trades');
         state = saved;
         if (!state.direction) state.direction = state.trade && state.trade.phase !== 'proposal' ? state.trade.direction : null;
-        if (state.skipTicks == null) state.skipTicks = 0;
-        if (state.skipTicks !== 0 && state.skipTicks !== 1) throw new Error('Invalid tick delay');
+        if (!state.direction && state.openTrades.length) state.direction = state.openTrades[0].direction;
         if (state.trade && state.trade.phase === 'proposal') state.trade = null;
         if (state.trade && state.trade.phase === 'buy_pending') state.trade.phase = 'unknown';
-        status = state.trade ? 'Stopped — interrupted trade requires reconciliation.' : 'Stopped — previous session restored.';
+        status = state.trade || state.openTrades.length ? 'Stopped — interrupted trades require reconciliation.' : 'Stopped — previous session restored.';
       }
     } catch (e) { storageError = e.message; status = 'Stopped — cannot read session storage: ' + e.message; }
   }
@@ -36,7 +42,7 @@
   function render() {
     const text = $( 'rfdStatus'), summary = $('rfdSummary'), button = $('rfdToggle');
     if (text) text.textContent = status;
-    if (summary) summary.textContent = 'Account: ' + (state.account || 'not connected') + ' | Market: ' + (state.active || 'scanning') + ' | Direction: ' + (state.direction || '—') + ' | Market P/L: ' + state.marketPnl.toFixed(2) + ' | Overall P/L: ' + state.total.toFixed(2) + ' | Wins: ' + state.wins + ' | Losses: ' + state.losses + (state.trade ? ' | Trade: ' + state.trade.phase : '');
+    if (summary) summary.textContent = 'Account: ' + (state.account || 'not connected') + ' | Market: ' + (state.active || 'scanning') + ' | Direction: ' + (state.direction || '—') + ' | Market P/L: ' + state.marketPnl.toFixed(2) + ' | Overall P/L: ' + state.total.toFixed(2) + ' | Wins: ' + state.wins + ' | Losses: ' + state.losses + ' | Open: ' + state.openTrades.length + ' / 2' + (state.trade ? ' | Pending: ' + state.trade.phase : '');
     if (button) button.textContent = running ? 'Stop dashboard bot' : 'Start dashboard bot';
   }
   function release() {
@@ -46,11 +52,15 @@
   }
   function stop(message) {
     running = false;
+    if (state.trade && state.trade.phase === 'proposal') {
+      delete gridPending[state.trade.request]; clearTimeout(requestTimer); state.trade = null;
+      save();
+    }
     status = storageError ? 'Stopped — session storage unavailable: ' + storageError : message;
     if (feed) { const old = feed; feed = null; old.close(); }
     feedReady = false;
     clearInterval(feedPing);
-    if (!state.trade) release();
+    if (!state.trade && !state.openTrades.length) release();
     render();
   }
   async function lock() {
@@ -79,6 +89,13 @@
     if (state.total >= state.config.overallTP - 1e-9) return 'Overall take profit reached: ' + state.total.toFixed(2);
     if (state.total <= -state.config.overallSL + 1e-9) return 'Overall stop loss reached: ' + state.total.toFixed(2);
     return null;
+  }
+  function finishMarket() {
+    if (!state.closingMarket || state.trade || state.openTrades.length) return null;
+    const message = state.closingMarket + '; final market P/L: ' + state.marketPnl.toFixed(2) + '; scanning another market.';
+    state.lastMarket = state.active; state.active = null; state.direction = null;
+    state.marketPnl = 0; state.nextStake = state.config.stake; state.closingMarket = null;
+    return message;
   }
   function trend(candles, epoch) {
     const c = candles.filter(x => x.epoch + 60 <= epoch);
@@ -177,14 +194,6 @@
         if (prev && (tick.time < prev.time || tick.time - prev.time > 10)) d.ticks = [];
         d.ticks.push(tick);
         if (d.ticks.length > 500) d.ticks.shift();
-        if (running && !state.trade && state.active === sym && state.direction && state.skipTicks > 0) {
-          if (!freshTick(sym)) return;
-          state.skipTicks--;
-          if (!save()) { stop(status); return; }
-          status = 'Skipped one tick on ' + sym + '; waiting for the next tick to continue ' + state.direction + '.';
-          render();
-          return;
-        }
         evaluate(sym);
       }
     };
@@ -192,7 +201,7 @@
     socket.onerror = () => { if (feed === socket) stop('Stopped — market feed connection error.'); };
   }
   function evaluate(symbol) {
-    if (!running || !feedReady || state.trade || state.skipTicks > 0 || (state.active && state.active !== symbol) || (!state.active && state.lastMarket === symbol)) return;
+    if (!running || !feedReady || state.trade || state.openTrades.length >= 2 || state.closingMarket || (state.active && state.active !== symbol) || (!state.active && state.lastMarket === symbol)) return;
     if (!gridAuthed || !gridWs || gridWs.readyState !== 1 || gridLoginId !== state.account) { stop('Stopped — Trading Grid connection or account changed.'); return; }
     const hit = limit();
     if (hit) { stop(hit); return; }
@@ -202,7 +211,8 @@
     if (!freshTick(symbol)) return;
     if (!state.active) { state.active = symbol; state.marketPnl = 0; state.nextStake = state.config.stake; }
     const stake = Math.round(state.nextStake * 100) / 100;
-    if (!finite(stake) || stake < 0.35 || balanceAccount !== state.account || !finite(gridBalance) || stake > gridBalance) { stop('Stopped — next stake exceeds available balance or balance is unavailable.'); return; }
+    const reserved = state.openTrades.reduce((sum, trade) => sum + trade.stake, 0);
+    if (!finite(stake) || stake < 0.35 || balanceAccount !== state.account || !finite(gridBalance) || stake + reserved > gridBalance) { stop('Stopped — next stake exceeds available balance or balance is unavailable.'); return; }
     const id = ++gridReqId;
     state.trade = {phase: 'proposal', symbol, direction, stake, request: id, initial};
     if (!save()) return;
@@ -215,10 +225,11 @@
       if (error || !proposal || !proposal.id || !finite(Number(proposal.ask_price)) || Number(proposal.ask_price) <= 0) {
         state.trade = null; save(); stop('Stopped — proposal rejected: ' + (error && (error.message || error.code) || 'invalid proposal')); return;
       }
-      if (!running || !feedReady || gridWs !== socket || !gridAuthed || gridLoginId !== state.account || limit() || !freshTick(symbol) || (initial && !validSignal(symbol, direction))) {
+      if (!running || state.closingMarket || !feedReady || gridWs !== socket || !gridAuthed || gridLoginId !== state.account || limit() || !freshTick(symbol) || (initial && !validSignal(symbol, direction))) {
         state.trade = null; save(); stop('Stopped — trade cancelled before buy because signal or connection changed.'); return;
       }
-      if (balanceAccount !== state.account || !finite(gridBalance) || Number(proposal.ask_price) > gridBalance) { state.trade = null; save(); stop('Stopped — proposal price exceeds available balance or balance is unavailable.'); return; }
+      const reservedNow = state.openTrades.reduce((sum, item) => sum + item.stake, 0);
+      if (balanceAccount !== state.account || !finite(gridBalance) || Number(proposal.ask_price) + reservedNow > gridBalance) { state.trade = null; save(); stop('Stopped — proposal price exceeds available balance or balance is unavailable.'); return; }
       const buyId = ++gridReqId;
       state.direction = direction;
       state.trade.phase = 'buy_pending'; state.trade.request = buyId;
@@ -226,15 +237,19 @@
       gridPending[buyId] = (buy, buyError) => {
         if (!state.trade || state.trade.request !== buyId || !['buy_pending', 'unknown'].includes(state.trade.phase)) return;
         clearTimeout(requestTimer);
-        if (buyError) { if (initial) state.direction = null; state.trade = null; save(); stop('Stopped — buy rejected: ' + (buyError.message || buyError.code)); return; }
+        if (buyError) { if (initial) state.direction = null; state.trade = null; finishMarket(); save(); stop('Stopped — buy rejected: ' + (buyError.message || buyError.code)); return; }
         if (!buy || buy.contract_id == null) { state.trade.phase = 'unknown'; save(); stop('Stopped — buy outcome unknown; reconcile with Deriv before reset.'); return; }
-        state.trade.phase = 'open'; state.trade.contractId = String(buy.contract_id);
-        if (finite(Number(buy.buy_price))) state.trade.stake = Number(buy.buy_price);
+        const accepted = state.trade;
+        accepted.phase = 'open'; accepted.contractId = String(buy.contract_id);
+        if (state.openTrades.some(t => t.contractId === accepted.contractId)) { accepted.phase = 'unknown'; save(); stop('Stopped — duplicate contract identity; reconcile with Deriv.'); return; }
+        if (finite(Number(buy.buy_price))) accepted.stake = Number(buy.buy_price);
+        state.openTrades.push(accepted); state.trade = null;
         if (!save()) { stop(status); return; }
-        if (typeof acctOnBuy === 'function') acctOnBuy(state.account, state.trade.stake);
-        status = 'Trade open: ' + state.trade.contractId;
+        if (typeof acctOnBuy === 'function') acctOnBuy(state.account, accepted.stake);
+        status = 'Trade open: ' + accepted.contractId;
         render();
         recover(true);
+        if (running && !state.closingMarket) evaluate(symbol);
       };
       try { socket.send(JSON.stringify({buy: proposal.id, price: Number(proposal.ask_price), req_id: buyId})); }
       catch (e) { state.trade.phase = 'unknown'; save(); stop('Stopped — buy submission uncertain; reconcile with Deriv before reset.'); return; }
@@ -245,7 +260,7 @@
     requestTimer = setTimeout(() => { if (state.trade && state.trade.request === id && state.trade.phase === 'proposal') { delete gridPending[id]; state.trade = null; save(); stop('Stopped — proposal timed out.'); } }, 15000);
   }
   function handleContract(c) {
-    const trade = state.trade;
+    const trade = state.openTrades.find(t => t.contractId === String(c.contract_id));
     if (!lockHeld || !trade || trade.phase !== 'open' || String(c.contract_id) !== trade.contractId || gridLoginId !== state.account) return false;
     if (!(c.is_sold || c.is_expired)) return true;
     const pnl = c.profit == null || c.profit === '' ? NaN : Number(c.profit);
@@ -255,70 +270,77 @@
     state.total += pnl; state.marketPnl += pnl;
     if (pnl > 0 || (pnl === 0 && reported === 'won')) { state.wins++; state.nextStake = state.config.stake; }
     else { state.losses++; state.nextStake = trade.stake * state.config.multiplier; }
-    state.trade = null;
+    state.openTrades = state.openTrades.filter(t => t !== trade);
     const overall = limit();
-    if (state.marketPnl >= state.config.marketTP - 1e-9 || state.marketPnl <= -state.config.marketSL + 1e-9) {
+    if (!state.closingMarket && (state.marketPnl >= state.config.marketTP - 1e-9 || state.marketPnl <= -state.config.marketSL + 1e-9)) {
       const reason = state.marketPnl >= state.config.marketTP - 1e-9 ? 'Market take profit' : 'Market stop loss';
-      status = reason + ' reached on ' + state.active + ': ' + state.marketPnl.toFixed(2) + '; scanning another market.';
-      state.lastMarket = state.active; state.active = null; state.direction = null; state.skipTicks = 0; state.marketPnl = 0; state.nextStake = state.config.stake;
-    } else {
-      state.skipTicks = 1;
-      status = 'Settled ' + trade.symbol + ': ' + pnl.toFixed(2) + '; skipping one tick before continuing ' + state.direction + '.';
+      state.closingMarket = reason + ' reached on ' + state.active + ': ' + state.marketPnl.toFixed(2);
     }
+    if (overall && !state.overallStop) state.overallStop = overall;
+    if (state.trade && state.trade.phase === 'proposal') {
+      delete gridPending[state.trade.request]; clearTimeout(requestTimer); state.trade = null;
+    }
+    const closing = state.closingMarket;
+    const marketDone = finishMarket();
+    status = marketDone || (closing ? closing + '; waiting for outstanding trades.' : 'Settled ' + trade.symbol + ': ' + pnl.toFixed(2) + '.');
     if (!save()) { stop(status); return true; }
     if (typeof acctOnTrade === 'function') acctOnTrade(state.account, Math.max(0, trade.stake + pnl));
-    if (overall) stop(overall);
-    else if (!running) { release(); render(); }
-    else render();
+    if (state.overallStop) stop(state.overallStop + (state.openTrades.length || state.trade ? ' — waiting for outstanding trades.' : ' — final P/L: ' + state.total.toFixed(2)));
+    else if (!running) { if (!state.trade && !state.openTrades.length) release(); render(); }
+    else { render(); if (!state.closingMarket && state.active) evaluate(state.active); }
     return true;
   }
   function interrupted() {
     balanceAccount = null;
     if (!lockHeld) return;
     clearTimeout(requestTimer);
-    recoveryRequest = null;
+    for (const [id, timer] of recoveryRequests.values()) { clearTimeout(timer); delete gridPending[id]; gridRecoveryRequests.delete(id); }
+    recoveryRequests.clear();
     if (state.trade && state.trade.phase === 'proposal') {
       delete gridPending[state.trade.request]; state.trade = null;
     } else if (state.trade && state.trade.phase === 'buy_pending') state.trade.phase = 'unknown';
     save();
-    stop(state.trade ? 'Stopped — trade interrupted; reconnect to reconcile or check Deriv before reset.' : 'Stopped — Trading Grid disconnected.');
+    stop(state.trade || state.openTrades.length ? 'Stopped — trades interrupted; reconnect to reconcile or check Deriv before reset.' : 'Stopped — Trading Grid disconnected.');
   }
   async function recover(quiet) {
-    if (!state.trade || state.trade.phase !== 'open') { if (!quiet) { status = state.trade ? 'Unknown buy — check Deriv before resetting.' : 'No open dashboard trade to reconcile.'; render(); } return; }
+    if (!state.openTrades.length) { if (!quiet) { status = state.trade ? 'Unknown buy — check Deriv before resetting.' : 'No open dashboard trade to reconcile.'; render(); } return; }
     if (state.account !== gridLoginId || !gridAuthed || !gridWs || gridWs.readyState !== 1) { status = 'Connect the original Trading Grid account to reconcile the open trade.'; render(); return; }
     const alreadyHeld = lockHeld;
     if (!await lock()) return;
     if (!alreadyHeld) load();
-    if (!state.trade) { release(); return; }
+    if (!state.trade && !state.openTrades.length) { release(); return; }
     if (storageError) { status = 'Cannot reconcile: session storage is unavailable or invalid.'; render(); return; }
-    if (state.trade.phase !== 'open' || state.account !== gridLoginId || !gridAuthed || !gridWs || gridWs.readyState !== 1 || recoveryRequest) return;
-    const contractId = state.trade.contractId, id = ++gridReqId;
-    recoveryRequest = id;
-    gridRecoveryRequests.add(id);
-    gridPending[id] = (c, e) => {
-      if (recoveryRequest === id) recoveryRequest = null;
-      clearTimeout(recoveryTimer);
-      gridRecoveryRequests.delete(id);
-      if (e || !c || String(c.contract_id) !== contractId) { status = 'Reconciliation failed: ' + (e && (e.message || e.code) || 'invalid response'); render(); return; }
-      handleContract(c);
-    };
-    let recoveryTimer;
-    try {
-      gridWs.send(JSON.stringify({proposal_open_contract: 1, contract_id: Number(contractId), req_id: id}));
-      recoveryTimer = setTimeout(() => {
-        if (recoveryRequest !== id) return;
-        delete gridPending[id]; gridRecoveryRequests.delete(id); recoveryRequest = null;
-        status = 'Reconciliation timed out; retry with Reconcile open trade.'; render();
-      }, 15000);
+    if (state.account !== gridLoginId || !gridAuthed || !gridWs || gridWs.readyState !== 1) return;
+    for (const trade of state.openTrades) {
+      const contractId = trade.contractId;
+      if (recoveryRequests.has(contractId)) continue;
+      const id = ++gridReqId;
+      gridRecoveryRequests.add(id);
+      gridPending[id] = (c, e) => {
+        const request = recoveryRequests.get(contractId);
+        if (request && request[0] === id) { clearTimeout(request[1]); recoveryRequests.delete(contractId); }
+        gridRecoveryRequests.delete(id);
+        if (e || !c || String(c.contract_id) !== contractId) { status = 'Reconciliation failed: ' + (e && (e.message || e.code) || 'invalid response'); render(); return; }
+        handleContract(c);
+      };
+      try {
+        gridWs.send(JSON.stringify({proposal_open_contract: 1, contract_id: Number(contractId), req_id: id}));
+        const timer = setTimeout(() => {
+          const request = recoveryRequests.get(contractId);
+          if (!request || request[0] !== id) return;
+          delete gridPending[id]; gridRecoveryRequests.delete(id); recoveryRequests.delete(contractId);
+          status = 'Reconciliation timed out; retry with Reconcile open trade.'; render();
+        }, 15000);
+        recoveryRequests.set(contractId, [id, timer]);
+      } catch (e) { delete gridPending[id]; gridRecoveryRequests.delete(id); status = 'Reconciliation request failed: ' + e.message; render(); }
     }
-    catch (e) { delete gridPending[id]; gridRecoveryRequests.delete(id); recoveryRequest = null; status = 'Reconciliation request failed: ' + e.message; render(); }
   }
   async function toggle() {
-    if (running) { stop('Stopped by user' + (state.trade ? ' — awaiting trade settlement.' : '.')); return; }
+    if (running) { stop('Stopped by user' + (state.trade || state.openTrades.length ? ' — awaiting trade settlement.' : '.')); return; }
     if (storageError) { status = 'Stopped — session storage unavailable: ' + storageError; render(); return; }
     if (!await lock()) return;
     load();
-    if (storageError || state.trade) { status = storageError ? 'Stopped — session storage unavailable: ' + storageError : 'Stopped — reconcile the interrupted trade before starting.'; if (!state.trade) release(); render(); return; }
+    if (storageError || state.trade || state.openTrades.length) { status = storageError ? 'Stopped — session storage unavailable: ' + storageError : 'Stopped — reconcile the interrupted trades before starting.'; if (!state.trade && !state.openTrades.length) release(); render(); return; }
     if (!gridAuthed || !gridWs || gridWs.readyState !== 1 || !gridLoginId) { stop('Connect an account on Trading Grid first.'); return; }
     if (balanceAccount !== gridLoginId || !finite(gridBalance)) { stop('Wait for the connected account balance on Trading Grid.'); return; }
     if (state.account && state.account !== gridLoginId) { stop('Stopped — reset the previous session before changing accounts.'); return; }
@@ -327,16 +349,17 @@
     if (state.config && JSON.stringify(state.config) !== JSON.stringify(settings)) { stop('Reset the stopped session before changing its settings.'); return; }
     if (gridIsVirtual !== true && !confirm('Start automatic trading on account ' + gridLoginId + ', which is not confirmed as demo? Martingale can rapidly increase losses.')) { stop('Start cancelled.'); return; }
     state.account = gridLoginId; state.config = settings;
-    const hit = limit(); if (hit) { stop(hit + ' — reset to start a new session.'); return; }
+    finishMarket();
+    const hit = state.overallStop || limit(); if (hit) { stop(hit + ' — reset to start a new session.'); return; }
     if (!save()) { stop(status); return; }
     running = true; status = 'Connecting to the market feed…'; render(); openFeed();
   }
   async function reset() {
-    if (running || (state.trade && ['proposal', 'buy_pending', 'open'].includes(state.trade.phase))) { status = 'Stop the bot and wait for the open trade to settle before resetting.'; render(); return; }
+    if (running || state.openTrades.length || (state.trade && ['proposal', 'buy_pending', 'open'].includes(state.trade.phase))) { status = 'Stop the bot and wait for the open trades to settle before resetting.'; render(); return; }
     if (!await lock()) return;
     load();
     if (storageError) { status = 'Cannot reset: session storage is unavailable or invalid.'; render(); release(); return; }
-    if (state.trade && state.trade.phase !== 'unknown') { status = 'Cannot reset until the open trade is reconciled.'; render(); return; }
+    if (state.openTrades.length || (state.trade && state.trade.phase !== 'unknown')) { status = 'Cannot reset until the open trades are reconciled.'; render(); return; }
     if (state.trade && (!gridAuthed || gridLoginId !== state.account)) { status = 'Connect the original account ' + state.account + ' before resetting the unknown buy.'; render(); return; }
     const message = state.trade ? 'The buy outcome is UNKNOWN. Check Deriv account ' + state.account + ' and confirm that all related contracts have settled. Reset discards this session and its unverified P/L. Continue?' : 'Reset the dashboard bot session and its profit/loss?';
     if (!confirm(message)) { if (!state.trade) release(); return; }
@@ -347,5 +370,5 @@
   window.MFXDashboardAuto = {toggle, reset, interrupted, recover, handleContract, signal, trend, noteBalance(account, balance) {
     balanceAccount = finite(balance) && gridAuthed && account === gridLoginId ? account : null;
   }};
-  if (state.trade && state.trade.phase === 'open' && gridAuthed) recover();
+  if (state.openTrades.length && gridAuthed) recover(true);
 })();

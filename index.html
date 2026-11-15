@@ -2723,7 +2723,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
 <div id="page-risefalldashboard" class="page">
   <div class="grid-card" style="margin:12px 0">
     <h3>Dashboard automatic trading — strict preset</h3>
-    <div class="gc-sub">Connect an account on Trading Grid first. Scans for a 100-change signal and closed 1-minute EMA trend, then trades the original direction until the market target or stop loss, skipping one tick after each settlement. This is a separate trading session from the Rise/Fall Autobot.</div>
+    <div class="gc-sub">Connect an account on Trading Grid first. After a 100-change signal with closed 1-minute EMA trend, the bot trades the original direction with up to two trades open or pending. It requests the next trade as soon as one is accepted or settles; no tick is intentionally skipped. This is a separate session from the Rise/Fall Autobot.</div>
     <div style="display:flex;flex-wrap:wrap;gap:12px;margin:12px 0">
       <label>Stake <input id="rfdStake" type="number" min="0.35" step="0.01" value="1"></label>
       <label>Martingale multiplier <input id="rfdMultiplier" type="number" min="1" max="10" step="0.1" value="2"></label>
@@ -2737,7 +2737,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     <button class="gc-btn" onclick="window.MFXDashboardAuto.recover()">Reconcile open trade</button>
     <div id="rfdStatus" class="gc-sub" role="status">Stopped.</div>
     <div id="rfdSummary" class="gc-sub"></div>
-    <div class="gc-sub">Limits are checked on settlement and can be exceeded. Martingale increases exposure rapidly. An interrupted or unconfirmed buy must be reconciled before restarting.</div>
+    <div class="gc-sub">Limits are checked on settlement; outstanding trades can exceed them. Stake follows the latest settled result. Martingale increases exposure rapidly. Interrupted trades must be reconciled before restarting.</div>
   </div>
   <iframe id="riseFallDashboardFrame" title="Rise/Fall market dashboard" sandbox="allow-scripts" style="width:100%;height:calc(100vh - 100px);min-height:650px;border:0;border-radius:10px"></iframe>
 </div>
@@ -34314,7 +34314,7 @@ try {
   </div>
 </div>
 
-<script src="src/trading/dashboardAuto.js"></script>
+<script src="src/trading/dashboardAuto.js?v=2"></script>
 <script type="module" src="src/bazu/page.js?v=34"></script>
 <script type="module" src="src/analysis/tradeSignalPage.js?v=27"></script>
 <script type="module" src="src/analysis/predictionHistoryPage.js?v=8"></script>

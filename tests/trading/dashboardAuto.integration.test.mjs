@@ -62,7 +62,7 @@ function harness(saved = null, overrides = {}) {
   return {ctx, bot, state, sent, pending, recovery, elements, memory, feed, message, prime, tick, start, proposal, buy, setTime(value){now = value;}};
 }
 
-test('one-tick orders use the strict dashboard signal, martingale and market rotation', async () => {
+test('accepted trade immediately requests a second and never exceeds two in flight', async () => {
   const h = harness();
   await h.start();
   h.prime();
@@ -72,20 +72,15 @@ test('one-tick orders use the strict dashboard signal, martingale and market rot
   h.prime('R_25');
   assert.equal(h.sent.filter(x => x.proposal).length, 1);
   h.buy();
-  assert.equal(h.bot.handleContract({contract_id:123,is_sold:1,profit:-1}), true);
-  h.tick('R_10', 160);
-  assert.equal(h.sent.filter(x => x.proposal).length, 1);
-  h.tick('R_10', 161);
-  assert.equal(h.proposal().amount, 2);
-  h.buy(124);
-  h.bot.handleContract({contract_id:124,is_sold:1,profit:-2});
-  assert.equal(h.state().active, null);
-  assert.equal(h.state().lastMarket, 'R_10');
-  assert.match(h.elements.rfdStatus.textContent, /Market stop loss reached.*-3.00/);
-  h.prime('R_25', true);
-  assert.equal(h.proposal().underlying_symbol, 'R_25');
-  assert.equal(h.proposal().contract_type, 'PUT');
+  assert.equal(h.sent.filter(x => x.proposal).length, 2);
   assert.equal(h.proposal().amount, 1);
+  h.buy(124);
+  h.tick('R_10', 160);
+  assert.equal(h.sent.filter(x => x.proposal).length, 2);
+  assert.equal(h.state().openTrades.length, 2);
+  assert.equal(h.bot.handleContract({contract_id:123,is_sold:1,profit:-1}), true);
+  assert.equal(h.proposal().amount, 2);
+  assert.equal(h.proposal().underlying_symbol, 'R_10');
 });
 
 test('overall profit and loss limits stop with the actual P/L and cannot restart', async () => {
@@ -99,55 +94,48 @@ test('overall profit and loss limits stop with the actual P/L and cannot restart
   }
 });
 
-test('market profit switches market and a winning trade resets martingale', async () => {
-  const h = harness(null, {rfdMarketTP:'1'});
+test('market limit waits for the other trade and assigns its result to the original market', async () => {
+  const h = harness(null, {rfdMarketTP:'1', rfdOverallTP:'10'});
   await h.start(); h.prime(); h.buy();
-  h.bot.handleContract({contract_id:123,is_sold:1,profit:-0.5});
-  h.tick('R_10', 160);
-  h.tick('R_10', 161);
-  assert.equal(h.proposal().amount, 2);
   h.buy(124);
-  h.bot.handleContract({contract_id:124,is_sold:1,profit:1.6});
+  h.bot.handleContract({contract_id:124,is_sold:1,profit:1.2});
+  assert.equal(h.state().active, 'R_10');
+  assert.equal(h.sent.filter(x => x.proposal).length, 2);
+  h.prime('R_25');
+  assert.equal(h.sent.filter(x => x.proposal).length, 2);
+  h.bot.handleContract({contract_id:123,is_sold:1,profit:-0.5});
   assert.equal(h.state().active, null);
+  assert.equal(h.state().total, 0.7);
   assert.equal(h.state().nextStake, 1);
-  assert.match(h.elements.rfdStatus.textContent, /Market take profit reached.*1.10/);
+  assert.match(h.elements.rfdStatus.textContent, /Market take profit reached.*final market P\/L: 0.70/);
+  h.tick('R_25', 160);
+  assert.equal(h.proposal().underlying_symbol, 'R_25');
 });
 
-test('skips one tick then continues in the original direction even if the signal reverses', async () => {
+test('continues in the original direction even if the signal reverses', async () => {
   const h = harness(null, {rfdMarketTP:'4', rfdMarketSL:'8', rfdOverallSL:'20'});
-  await h.start(); h.prime('R_10', true); h.buy();
+  await h.start(); h.prime('R_10', true); h.buy(); h.buy(124);
   let price = -160;
   for (let i = 0; i < 100; i++) h.tick('R_10', ++price);
   h.bot.handleContract({contract_id:123,is_sold:1,profit:-1});
-  assert.equal(h.sent.filter(x => x.proposal).length, 1);
-  h.tick('R_10', ++price);
-  assert.equal(h.sent.filter(x => x.proposal).length, 1);
-  h.tick('R_10', ++price);
-  assert.equal(h.sent.filter(x => x.proposal).length, 2);
+  assert.equal(h.sent.filter(x => x.proposal).length, 3);
   assert.equal(h.proposal().contract_type, 'PUT');
   assert.equal(h.proposal().amount, 2);
-  h.buy(124);
+  h.buy(125);
   h.bot.handleContract({contract_id:124,is_sold:1,profit:1});
-  h.tick('R_10', ++price);
-  assert.equal(h.sent.filter(x => x.proposal).length, 2);
-  h.tick('R_10', ++price);
-  assert.equal(h.sent.filter(x => x.proposal).length, 3);
+  assert.equal(h.sent.filter(x => x.proposal).length, 4);
   assert.equal(h.proposal().contract_type, 'PUT');
   assert.equal(h.proposal().amount, 1);
 });
 
-test('does not count stale ticks towards the one-tick delay', async () => {
+test('does not place a replacement with stale market data', async () => {
   const h = harness();
-  await h.start(); h.prime(); h.buy();
+  await h.start(); h.prime(); h.buy(); h.buy(124);
   h.setTime(10020);
   h.bot.handleContract({contract_id:123,is_sold:1,profit:-1});
-  assert.equal(h.sent.filter(x => x.proposal).length, 1);
-  h.tick('R_10', 99, 10000);
-  assert.equal(h.state().skipTicks, 1);
-  h.tick('R_10', 100, 10020);
-  assert.equal(h.sent.filter(x => x.proposal).length, 1);
-  h.tick('R_10', 101, 10020);
   assert.equal(h.sent.filter(x => x.proposal).length, 2);
+  h.tick('R_10', 100, 10020);
+  assert.equal(h.sent.filter(x => x.proposal).length, 3);
   assert.equal(h.proposal().contract_type, 'CALL');
   assert.equal(h.proposal().amount, 2);
 });
@@ -157,21 +145,19 @@ test('recovered settlement while stopped never starts another trade', async () =
   await h.start(); h.prime(); h.buy();
   await h.bot.toggle();
   h.bot.handleContract({contract_id:123,is_sold:1,profit:-1});
-  assert.equal(h.sent.filter(x => x.proposal).length, 1);
+  assert.equal(h.sent.filter(x => x.proposal).length, 2);
+  assert.equal(h.state().trade, null);
   assert.equal(h.state().direction, 'RISE');
 });
 
-test('preserves the locked direction and remaining tick delay after restart', async () => {
+test('preserves the locked direction after restart', async () => {
   const h = harness();
   await h.start(); h.prime(); h.buy();
+  await h.bot.toggle();
   h.bot.handleContract({contract_id:123,is_sold:1,profit:-1});
-  assert.equal(h.state().skipTicks, 1);
   const reloaded = harness(JSON.stringify(h.state()));
   await reloaded.start();
   reloaded.tick('R_10', 100);
-  assert.equal(reloaded.state().skipTicks, 0);
-  assert.equal(reloaded.sent.filter(x => x.proposal).length, 0);
-  reloaded.tick('R_10', 99);
   assert.equal(reloaded.proposal().contract_type, 'CALL');
   assert.equal(reloaded.proposal().amount, 2);
 });
@@ -203,6 +189,62 @@ test('known contracts recover after restart and settle exactly once', async () =
   assert.equal(reload.state().total, 0.8);
   assert.equal(reload.bot.handleContract({contract_id:123,is_sold:1,profit:0.8}), false);
   assert.equal(reload.state().total, 0.8);
+});
+
+test('recovers two open contracts independently and only once in either order', async () => {
+  const h = harness(null, {rfdMarketTP:'10', rfdMarketSL:'10', rfdOverallTP:'20', rfdOverallSL:'20'});
+  await h.start(); h.prime(); h.buy(); h.buy(124);
+  const reload = harness(JSON.stringify(h.state()));
+  await new Promise(resolve => setImmediate(resolve));
+  const requests = reload.sent.filter(x => x.proposal_open_contract);
+  assert.deepEqual(requests.map(x => x.contract_id).sort(), [123, 124]);
+  reload.pending[requests[1].req_id]({contract_id:124,is_sold:1,profit:-1}, null);
+  assert.equal(reload.state().openTrades.length, 1);
+  assert.equal(reload.bot.handleContract({contract_id:124,is_sold:1,profit:-1}), false);
+  reload.pending[requests[0].req_id]({contract_id:123,is_sold:1,profit:0.8}, null);
+  assert.equal(reload.state().openTrades.length, 0);
+  assert.ok(Math.abs(reload.state().total + 0.2) < 1e-9);
+  assert.equal(reload.sent.filter(x => x.proposal).length, 0);
+});
+
+test('overall stop is latched even if another outstanding win reverses the P/L', async () => {
+  const h = harness(null, {rfdOverallSL:'1', rfdMarketSL:'10'});
+  await h.start(); h.prime(); h.buy(); h.buy(124);
+  h.bot.handleContract({contract_id:123,is_sold:1,profit:-1});
+  assert.match(h.elements.rfdStatus.textContent, /Overall stop loss reached/);
+  assert.equal(h.sent.filter(x => x.proposal).length, 2);
+  h.bot.handleContract({contract_id:124,is_sold:1,profit:2});
+  assert.equal(h.state().total, 1);
+  assert.match(h.elements.rfdStatus.textContent, /Overall stop loss reached.*final P\/L: 1.00/);
+  await h.bot.toggle();
+  assert.match(h.elements.rfdStatus.textContent, /reset to start a new session/);
+});
+
+test('a limit reached while a buy is pending waits for its acceptance and settlement', async () => {
+  const h = harness(null, {rfdMarketSL:'1', rfdOverallSL:'10'});
+  await h.start(); h.prime(); h.buy();
+  const proposal = h.proposal();
+  h.pending[proposal.req_id]({id:'quote2',ask_price:1}, null);
+  const buy = h.sent.filter(x => x.buy).at(-1);
+  h.bot.handleContract({contract_id:123,is_sold:1,profit:-1});
+  assert.equal(h.state().active, 'R_10');
+  assert.ok(h.state().closingMarket);
+  h.pending[buy.req_id]({contract_id:124,buy_price:1}, null);
+  assert.equal(h.sent.filter(x => x.proposal).length, 2);
+  h.bot.handleContract({contract_id:124,is_sold:1,profit:-1});
+  assert.equal(h.state().active, null);
+  assert.match(h.elements.rfdStatus.textContent, /final market P\/L: -2.00/);
+});
+
+test('a settlement cancels an unaccepted proposal and reprices from the latest result', async () => {
+  const h = harness();
+  await h.start(); h.prime(); h.buy();
+  const old = h.proposal(), callback = h.pending[old.req_id];
+  h.bot.handleContract({contract_id:123,is_sold:1,profit:-1});
+  assert.notEqual(h.proposal().req_id, old.req_id);
+  assert.equal(h.proposal().amount, 2);
+  callback({id:'old',ask_price:1}, null);
+  assert.equal(h.sent.filter(x => x.buy).length, 1);
 });
 
 test('rejects short earlier window and stale prices or candles', () => {
@@ -259,7 +301,7 @@ test('ambiguous settlement leaves the contract unresolved and blocks trading', a
   const h = harness();
   await h.start(); h.prime(); h.buy();
   h.bot.handleContract({contract_id:123,is_sold:1,profit:0});
-  assert.equal(h.state().trade.phase, 'open');
+  assert.equal(h.state().openTrades[0].phase, 'open');
   assert.match(h.elements.rfdStatus.textContent, /outcome unavailable/);
   await h.bot.toggle();
   assert.match(h.elements.rfdStatus.textContent, /reconcile/);
