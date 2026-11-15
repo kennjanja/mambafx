@@ -12,6 +12,13 @@ test("amounts are converted exactly and unsupported precision is rejected", () =
   assert.throws(() => toMajor(100, null), /scale/);
 });
 
+test("the Deriv adapter rejects sub-cent stakes before making a request", async () => {
+  let requests = 0;
+  const adapter = createDerivExecution({ request: async () => { requests++; }, account: () => ({}), precision: 8 });
+  await assert.rejects(adapter.proposal({ source: "unused", digit: 3, stake: 100100000, durationTicks: 1 }), /Invalid contract parameters/);
+  assert.equal(requests, 0);
+});
+
 test("Deriv Digit Matches proposal, purchase and confirmed settlement use the original order", async () => {
   const sent = [], source = JSON.stringify(["deriv-public", "public", "R_100", 2]);
   const state = { connected: true, accountId: "VRTC1", currency: "USD", isVirtual: true, connectionGeneration: 1, tradeAuthorized: true };

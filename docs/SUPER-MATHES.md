@@ -27,7 +27,8 @@ Digit Matches purchases, settlement monitoring and a separate account-keyed
 IndexedDB ledger. Web Locks restrict execution to the active research collector
 tab. An eight-decimal accounting scale is stored with execution snapshots; it
 is not a claim about a currency's supported precision. Unrepresentable values
-and incompatible stored histories are rejected.
+and incompatible stored histories are rejected. Base stakes are limited to
+two decimal places, and Martingale stakes are rounded up to the next cent.
 
 The backend records the OAuth trade scope in new sessions; existing sessions
 without scope information fail closed and require a fresh login after the

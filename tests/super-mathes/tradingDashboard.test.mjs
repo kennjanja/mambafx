@@ -31,6 +31,10 @@ test("trading settings automatically use Nairobi time without requiring account 
   assert.equal(config.timeZone, "Africa/Nairobi");
 });
 
+test("rejects a base stake with more than two decimal places", () => {
+  assert.throws(() => tradingConfig({ baseStake: "1.001" }), /two decimal places/);
+});
+
 test("unconfirmed purchases are shown without inventing a payout or profit", () => {
   const state = { accountingScale: 8, accountId: "VRTC1", reason: "Stopped",
     session: { pnl: 0, currency: "USD", uncertainExposure: 100000000 }, cycle: null, order: null,

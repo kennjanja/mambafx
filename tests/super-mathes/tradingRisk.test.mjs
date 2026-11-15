@@ -45,6 +45,24 @@ test("martingale advances only with confirmed losses and stops at stake or expos
   assert.equal(assessTradeRisk(f).allowed, false);
 });
 
+test("martingale rounds up to cents and never permits a sub-cent base stake", () => {
+  const f = fixture();
+  for (const key of ["baseStake", "maximumStake", "maximumExposure", "cycleLoss", "sessionLoss", "cycleTarget", "sessionTarget", "dailyTarget"]) {
+    f.config[key] *= 1000000;
+  }
+  f.account.balance *= 1000000;
+  f.config.baseStake = 101000000;
+  f.config.martingale = true;
+  f.config.multiplierNumerator = 3;
+  f.config.multiplierDenominator = 2;
+  f.cycle.losses = 1;
+  f.cycle.attempts = 1;
+  f.cycle.staked = 101000000;
+  assert.equal(assessTradeRisk({ ...f, stakeQuantum: 1000000 }).stake, 152000000);
+  f.config.baseStake++;
+  assert.throws(() => assessTradeRisk({ ...f, stakeQuantum: 1000000 }), /configuration/);
+});
+
 test("limits include worst-case loss on the next contract", () => {
   const f = fixture();
   f.session.pnl = -4950;

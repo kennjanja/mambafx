@@ -1,7 +1,7 @@
-import { ResearchExecution } from "./execution.js?v=3";
+import { ResearchExecution } from "./execution.js?v=4";
 import { openExecutionStore } from "./executionStorage.js?v=2";
 import { createExecutionOwnership } from "./executionOwnership.js?v=1";
-import { createDerivExecution, toMinor } from "./derivExecution.js?v=1";
+import { createDerivExecution, toMinor } from "./derivExecution.js?v=2";
 import { createDerivRequest, readAccountBalance } from "./derivRequest.js?v=1";
 
 export const ACCOUNTING_SCALE = 8;
@@ -132,6 +132,7 @@ export function createTradingRuntime({ connection, research, fetchSession, fetch
       connectionGeneration = selected.connectionGeneration;
       controller = new ResearchExecution({ store: checkedStore(database), research, now: clock,
         host: { ...broker, ownsExecution: () => ownership.owns(), account, feed,
+          stakeQuantum: 10 ** (ACCOUNTING_SCALE - 2),
           verifyAuthorization: () => refreshAuthorization(true) } });
       await controller.restore(accountId);
     } catch (error) {

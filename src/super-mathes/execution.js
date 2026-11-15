@@ -1,4 +1,4 @@
-import { accountDay, assessTradeRisk } from "./tradingRisk.js?v=2";
+import { accountDay, assessTradeRisk } from "./tradingRisk.js?v=3";
 
 const CONFIG_KEYS = ["baseStake", "maximumStake", "maximumExposure", "cycleLoss", "sessionLoss", "cycleTarget",
   "sessionTarget", "dailyTarget", "maxAttempts", "martingale", "multiplierNumerator", "multiplierDenominator",
@@ -89,7 +89,8 @@ export class ResearchExecution {
       const session = saved?.session || { accountId: account.id, isVirtual: account.isVirtual, currency: account.currency, pnl: 0, daily: {} };
       const candidate = saved?.cycle || { source: feed.source, pnl: 0, staked: 0, losses: 0, attempts: 0, unresolved: false };
       if (saved?.cycle && saved.cycle.segment !== feed.segment) throw new Error("Feed segment changed; close the stopped cycle");
-      const decision = assessTradeRisk({ config, account, session: { ...session, dailyPnl: session.daily[day] ?? 0 }, cycle: candidate, feed });
+      const decision = assessTradeRisk({ config, account, session: { ...session, dailyPnl: session.daily[day] ?? 0 },
+        cycle: candidate, feed, stakeQuantum: this.host.stakeQuantum ?? 1 });
       if (!decision.allowed) throw new Error(decision.reason);
       this.state = saved ? { ...saved, config: { ...config }, reason: "Running" } : {
         accountId: account.id, config: { ...config }, session, cycle: null, order: null, history: [], reason: "Running",
@@ -133,7 +134,7 @@ export class ResearchExecution {
     if (this.state.cycle.segment !== feed?.segment) return { allowed: false, reason: "Feed segment changed; close the stopped cycle" };
     const day = accountDay(this.now(), this.state.config.timeZone);
     return assessTradeRisk({ config: this.state.config, account, feed, cycle: this.state.cycle,
-      session: { ...this.state.session, dailyPnl: this.state.session.daily[day] ?? 0 } });
+      session: { ...this.state.session, dailyPnl: this.state.session.daily[day] ?? 0 }, stakeQuantum: this.host.stakeQuantum ?? 1 });
   }
 
   async onTick() {
@@ -244,7 +245,7 @@ export class ResearchExecution {
     if (cycle.segment !== this.host.feed()?.segment) return { allowed: false, reason: "Feed segment changed; close the stopped cycle" };
     const day = accountDay(this.now(), this.state.config.timeZone);
     const decision = assessTradeRisk({ config: this.state.config, account: this.host.account(), feed: this.host.feed(), cycle,
-      session: { ...this.state.session, dailyPnl: this.state.session.daily[day] ?? 0 } });
+      session: { ...this.state.session, dailyPnl: this.state.session.daily[day] ?? 0 }, stakeQuantum: this.host.stakeQuantum ?? 1 });
     if (decision.allowed && decision.stake !== order.stake) return { allowed: false, reason: "Stake changed before purchase" };
     return decision;
   }

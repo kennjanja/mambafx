@@ -15,7 +15,7 @@ export function accountDay(timestamp, timeZone) {
   return `${part("year")}-${part("month")}-${part("day")}`;
 }
 
-export function assessTradeRisk({ config, account, session, cycle, feed }) {
+export function assessTradeRisk({ config, account, session, cycle, feed, stakeQuantum = 1 }) {
   if (!config || !account || !session || !cycle || !feed) throw new Error("Missing trading risk inputs");
   const base = money(config.baseStake, "base stake", { positive: true });
   const maximumStake = money(config.maximumStake, "maximum stake", { positive: true });
@@ -31,7 +31,8 @@ export function assessTradeRisk({ config, account, session, cycle, feed }) {
   const cyclePnl = money(cycle.pnl, "cycle profit and loss");
   const staked = money(cycle.staked, "cycle amount staked");
   const balance = money(account.balance, "account balance");
-  if (staked < 0 || balance < 0 || uncertainExposure < 0 || !Number.isSafeInteger(pnl - uncertainExposure) ||
+  if (!Number.isSafeInteger(stakeQuantum) || stakeQuantum < 1 || base % stakeQuantum !== 0 ||
+      staked < 0 || balance < 0 || uncertainExposure < 0 || !Number.isSafeInteger(pnl - uncertainExposure) ||
       !Number.isSafeInteger(cycle.losses) || cycle.losses < 0 || cycle.losses > 1000 ||
       !Number.isSafeInteger(cycle.attempts) || cycle.attempts < 0 ||
       cycle.losses > cycle.attempts ||
@@ -55,8 +56,9 @@ export function assessTradeRisk({ config, account, session, cycle, feed }) {
   let stake = BigInt(base);
   if (config.martingale) {
     const numerator = BigInt(config.multiplierNumerator), denominator = BigInt(config.multiplierDenominator);
+    const quantum = BigInt(stakeQuantum);
     for (let n = 0; n < cycle.losses; n++) {
-      stake = (stake * numerator + denominator - 1n) / denominator;
+      stake = ((stake * numerator + denominator * quantum - 1n) / (denominator * quantum)) * quantum;
       if (stake > BigInt(maximumStake)) return refuse("Maximum stake exceeded");
     }
   }

@@ -64,7 +64,8 @@ export function createDerivExecution({ request, account, precision }) {
   return {
     async proposal({ source, digit, stake, durationTicks }) {
       if (!Number.isInteger(digit) || digit < 0 || digit > 9 || !Number.isInteger(durationTicks) ||
-          durationTicks < 1 || durationTicks > 10 || !Number.isSafeInteger(stake) || stake <= 0) throw new Error("Invalid contract parameters");
+          durationTicks < 1 || durationTicks > 10 || !Number.isSafeInteger(stake) || stake <= 0 ||
+          stake % (10 ** Math.max(precision - 2, 0)) !== 0) throw new Error("Invalid contract parameters");
       const original = identity(), symbol = sourceSymbol(source);
       const balance = await readAccountBalance(request, account);
       if (!sameAccount(original, balance.currency)) throw new Error("Account changed while preparing proposal");

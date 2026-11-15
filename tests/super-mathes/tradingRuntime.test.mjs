@@ -95,6 +95,19 @@ test("runtime connects prediction, authorized proposal, purchase, loss and win l
   await runtime.dispose();
 });
 
+test("runtime rounds the next Martingale stake up to two decimals", async () => {
+  const h = harness(), runtime = h.newRuntime();
+  h.config.baseStake = 101000000;
+  h.config.multiplierNumerator = 15000;
+  h.config.multiplierDenominator = 10000;
+  await runtime.start(h.config);
+  await runtime.pulse();
+  h.shared.settlement = { is_sold: 1, status: "lost", profit: -1.01, sell_price: 0, date_settlement: 1700000000 };
+  await runtime.pulse();
+  assert.deepEqual(h.sent.filter(r => r.proposal).map(r => r.amount), [1.01, 1.52]);
+  await runtime.dispose();
+});
+
 test("ownership excludes another tab and recovery reconciles an open contract without another buy", async () => {
   const h = harness(), first = h.newRuntime(), second = h.newRuntime();
   await first.start(h.config);

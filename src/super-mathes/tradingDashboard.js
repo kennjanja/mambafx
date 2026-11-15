@@ -1,5 +1,5 @@
-import { toMajor, toMinor } from "./derivExecution.js?v=1";
-import { ACCOUNTING_SCALE } from "./tradingRuntime.js?v=2";
+import { toMajor, toMinor } from "./derivExecution.js?v=2";
+import { ACCOUNTING_SCALE } from "./tradingRuntime.js?v=3";
 
 function text(value) {
   return value == null ? "—" : String(value);
@@ -21,12 +21,14 @@ export function formatPrediction(records) {
 
 export function tradingConfig(values) {
   const amount = key => toMinor(values[key], ACCOUNTING_SCALE);
+  const baseStake = amount("baseStake");
+  if (baseStake % 10 ** (ACCOUNTING_SCALE - 2) !== 0) throw new Error("Base stake must have no more than two decimal places");
   const multiplier = toMinor(values.multiplier, 4);
   const steps = Number(values.maxSteps), durationTicks = Number(values.durationTicks);
   const windowSize = Number(values.windowSize), frequencyWeight = Number(values.frequencyWeight);
   if (!Number.isSafeInteger(steps) || steps < 0 || steps > 1000) throw new Error("Invalid maximum Martingale steps");
   return {
-    baseStake: amount("baseStake"), maximumStake: amount("maximumStake"), maximumExposure: amount("maximumExposure"),
+    baseStake, maximumStake: amount("maximumStake"), maximumExposure: amount("maximumExposure"),
     cycleLoss: amount("stopLoss"), sessionLoss: amount("stopLoss"), cycleTarget: amount("takeProfit"),
     sessionTarget: amount("takeProfit"), dailyTarget: amount("takeProfit"),
     maxAttempts: values.martingale ? steps + 1 : 0, martingale: values.martingale,
@@ -95,7 +97,7 @@ export function attachTradingDashboard(service, accountStatus, refreshBalance, r
     <p>Daily targets reset at midnight in Africa/Nairobi.</p>
     <form class="sm-trading-form" data-form="settings">
       <label>Duration (ticks) <input name="durationTicks" type="number" min="1" max="10" value="1" required></label>
-      <label>Base stake <input name="baseStake" type="number" min="0.00000001" step="any" value="1" required></label>
+      <label>Base stake <input name="baseStake" type="number" min="0.01" step="0.01" value="1" required></label>
       <label>Maximum stake <input name="maximumStake" type="number" min="0.00000001" step="any" value="1" required></label>
       <label>Maximum cycle exposure <input name="maximumExposure" type="number" min="0.00000001" step="any" value="1" required></label>
       <label>Stop loss <input name="stopLoss" type="number" min="0.00000001" step="any" value="1" required></label>
