@@ -137,6 +137,12 @@ Real-time technical indicator computation from the tick stream.
 
 ---
 
+## Candle Charts: modified support and resistance
+
+The optional modified S/R overlay (`src/analysis/modifiedSr.js`) finds confirmed swing lows and highs on closed candles. A group is confirmed only when all its timeframes have same-side pivots whose entire price spread is at most 0.25 of the smallest timeframe's 14-period Wilder ATR. Low uses 30s–10m, Medium 15m–45m, High 1h–8h, Ultra 1d–1 month; Sure requires all 15 within the 30s tolerance. These are descriptive labels, not probabilities or guarantees. Lines are shared across charts for the current market and are visible when in the chart's price range.
+
+The 45m, 2h, 8h, weekly and monthly candles are aggregated from 15m, 1h, 4h and daily history. Weeks begin Monday UTC and months follow the UTC calendar. Incomplete historical buckets are discarded; forming candles are excluded from confluence. A group remains unconfirmed when required history or its ATR is unavailable, and a disconnected feed suppresses the overlay. Levels are recalculated as new candles arrive rather than permanently stored.
+
 ## 5. Bot Engines (`index.html` inline)
 
 ### Prediction Bot (`pbPageInit`)

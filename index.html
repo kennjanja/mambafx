@@ -902,9 +902,9 @@ table.an-table tbody tr:last-child td{border-bottom:none}
   <!-- ============ PAGE 2: CANDLE CHARTS ============ -->
   <div id="page-candles" class="page">
     <div class="pa-toolbar">
-      <div class="pa-title">📐 Price-action overlays — computed independently per timeframe</div>
+      <div class="pa-title">📐 Price-action overlays — modified S/R uses multi-timeframe confluence; other overlays are computed per timeframe</div>
       <div class="pa-chips">
-        <label class="pa-chip"><input type="checkbox" id="pa-sr"><span class="sw sr"></span> Support / Resistance</label>
+        <label class="pa-chip"><input type="checkbox" id="pa-sr"><span class="sw sr"></span> Modified Support Resistance Lines</label>
         <label class="pa-chip"><input type="checkbox" id="pa-zones"><span class="sw dz"></span><span class="sw sz"></span> Demand / Supply</label>
         <label class="pa-chip"><input type="checkbox" id="pa-ob"><span class="sw obb"></span><span class="sw obs"></span> Order Blocks</label>
         <label class="pa-chip"><input type="checkbox" id="pa-fvg"><span class="sw fvg"></span> Unmitigated FVG</label>
@@ -935,6 +935,8 @@ table.an-table tbody tr:last-child td{border-bottom:none}
         <select id="pe-states" title="Zone and chart-pattern lifecycle filter" style="background:var(--panel2,#111827);color:var(--text);border:1px solid #243049;border-radius:6px;font-size:11px;padding:2px 4px"><option value="live">live zones only</option><option value="all">include ended zones &amp; patterns</option></select>
       </div>
       <div class="pa-note">
+        <b>Modified S/R:</b> dark support, magenta-red resistance. Every timeframe in a group must have a confirmed swing within 0.25 ATR of the group's smallest timeframe; Sure TFSR requires all 15. Low: 30s, 1m, 3m, 5m, 10m; Medium: 15m, 30m, 45m; High: 1h, 2h, 4h, 8h; Ultra: 1d, 1w, 1 month. Lines are shared across charts and only appear within the visible price range. Sure describes alignment, not a guarantee. Weekly candles start Monday UTC; monthly candles use UTC calendar months.<br>
+        <span id="tfSrStatus" role="status">Modified S/R: waiting for candle history.</span><br>
         <b style="color:var(--accent)">ICT / Smart-Money structure:</b> support/resistance · demand &amp; supply zones · order blocks (OB+/OB−) · unmitigated fair-value gaps · liquidity at equal highs/lows · <b>BOS / CHoCH</b> · <b>premium/discount</b> equilibrium · <b>OTE</b> (0.62–0.79 entry) · <b>trendlines</b> (auto, from swing pivots) · <b>AMD</b> (accumulation → manipulation → distribution, ICT Power of 3).<br>
         FVG quality labels are experimental price-action observations, not proof of institutional activity or profitability. The Trade Signal FVG models apply the formation and timely-retest filters and verify the current quote before purchase.<br>
         <b style="color:#56b6ff">🖐 Pan &amp; zoom:</b> drag any chart to move, scroll to zoom (Ctrl/Shift+scroll = vertical zoom), or use the ◀▶▲▼ ＋－⟳ buttons. Each chart shows the latest 50 candles and moves independently.<br>
@@ -4452,6 +4454,7 @@ function connect(){
       ws.send(JSON.stringify({ forget_all: "ticks" }));
       ws.send(JSON.stringify({ ticks: SYMBOL, subscribe: 1 }));
       seedTickHistory(ws, SYMBOL);
+      if (candlesPageReady && window.__tfSub !== _tickSubscriptionSymbol) requestAllTimeframes();
     }
   };
   ws.onmessage = ev => {
@@ -4478,6 +4481,7 @@ function connect(){
         ws.send(JSON.stringify({ ticks: SYMBOL, subscribe: 1 }));
         seedTickHistory(ws, SYMBOL);
       }
+      if (candlesPageReady && window.__tfSub !== _tickSubscriptionSymbol) requestAllTimeframes();
       return;
     }
     if (msg.msg_type === "history" && msg.req_id === _ldpeHistReqId && msg.history){
@@ -26512,11 +26516,12 @@ function switchMarket(code){
   // Close and reopen the socket cleanly on the new symbol
   if (reconnectTimer) clearTimeout(reconnectTimer);
   if (ws){ try { ws.onclose = null; ws.close(); } catch(_){} ws = null; }
+  _tickSubscriptionSymbol = code;
   connect();
   // If the candle-charts page has been opened, re-request all timeframes
   // for the newly selected market.
   if (candlesPageReady){
-    TIMEFRAMES.forEach(tf => { tfData[tf.g] = []; drawTfCandles(tf.g); });
+    CHART_TIMEFRAMES.forEach(tf => { tfData[tf.g] = []; drawTfCandles(tf.g); });
     requestAllTimeframes();
   }
   // Page 4/5: reload this market's signal log, refresh labels, and disarm auto
@@ -26557,6 +26562,15 @@ const TIMEFRAMES = [
   { g: 3600,  label: "1 hour", num: "1",  unit: "hour" },
   { g: 14400, label: "4 hour", num: "4",  unit: "hour" },
 ];
+// Additional charts use source candles aggregated in UTC, not unsupported Deriv granularities.
+const CHART_TIMEFRAMES = [...TIMEFRAMES,
+  { g: 2700, label: "45 min", num: "45", unit: "minute", source: 900, kind: 2700 },
+  { g: 7200, label: "2 hour", num: "2", unit: "hour", source: 3600, kind: 7200 },
+  { g: 28800, label: "8 hour", num: "8", unit: "hour", source: 14400, kind: 28800 },
+  { g: 86400, label: "1 day", num: "1", unit: "day" },
+  { g: 604800, label: "1 week", num: "1", unit: "week", source: 86400, kind: "week" },
+  { g: 2592000, label: "1 month", num: "1", unit: "month", source: 86400, kind: "month" },
+].sort((a, b) => a.g - b.g);
 const TF_COUNT = 500;           // analysis history fetched & kept per chart (overlays are computed on all of it)
 const TF_LEGACY_COUNT = 50;     // the window older consumers (prediction model, order-flow proxy) were built on
 const TF_VIEW_DEFAULT = 50;     // candles visible by default (pan/zoom window)
@@ -26580,9 +26594,54 @@ function tfGetView(g, len){
   v.count = count;
   return { count, start, yZoom: v.yZoom || 1, yPan: v.yPan || 0, auto: v.start == null };
 }
-TIMEFRAMES.forEach(tf => tfData[tf.g] = []);
+CHART_TIMEFRAMES.forEach(tf => tfData[tf.g] = []);
 // map req_id -> granularity for initial history responses
 const tfReqMap = {};
+let tfRequestSequence = 5000;
+const tfUnavailable = new Set();
+let tfRedrawTimer = null;
+let tfSrCache = null;
+let tfSrConnected = false;
+
+function tfRefreshDerived(source) {
+  if (!window.MFXModifiedSR) return;
+  CHART_TIMEFRAMES.filter(tf => tf.source === source).forEach(tf => {
+    tfData[tf.g] = window.MFXModifiedSR.aggregateCandles(tfData[source], source, tf.kind, Date.now() / 1000).slice(-TF_COUNT);
+    const st = $("tf-status-" + tf.g);
+    if (st) st.textContent = tfUnavailable.has(source) ? "unavailable" : tfData[tf.g].length ? "live" : "insufficient history";
+  });
+}
+function tfScheduleRedraw() {
+  if (tfRedrawTimer || window.__mfxCurrentPage !== "candles") return;
+  tfRedrawTimer = setTimeout(() => {
+    tfRedrawTimer = null;
+    CHART_TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));
+  }, 500);
+}
+function tfModifiedSr() {
+  if (!window.MFXModifiedSR) return null;
+  if (!tfSrConnected) {
+    const status = $("tfSrStatus");
+    if (status) status.textContent = "Modified S/R: candle feed disconnected; levels are unavailable until history is refreshed.";
+    return null;
+  }
+  const now = Date.now() / 1000;
+  const key = CHART_TIMEFRAMES.map(tf => {
+    const arr = tfData[tf.g] || [];
+    const last = arr[arr.length - 1], prev = arr[arr.length - 2];
+    return [tf.g, arr.length, arr[0]?.epoch, last?.epoch, tf.g === 30 || tf.g === 60 ? last?.close : '', prev?.epoch, prev?.high, prev?.low, prev?.close,
+      last && window.MFXModifiedSR.periodEnd(last.epoch, tf.kind || tf.g) <= now].join(':');
+  }).join('|');
+  if (tfSrCache && tfSrCache.key === key) return tfSrCache.value;
+  const current = (tfData[30] || []).at(-1) || (tfData[60] || []).at(-1);
+  const value = window.MFXModifiedSR.computeModifiedSr(tfData, now, current?.close);
+  const status = $("tfSrStatus");
+  if (status) status.textContent = value.missing.length
+    ? "Modified S/R: insufficient history for " + value.missing.map(g => CHART_TIMEFRAMES.find(tf => tf.g === g)?.label || g).join(", ") + "; affected groups and Sure cannot be confirmed."
+    : "Modified S/R: all 15 timeframes available; " + (value.support.length + value.resistance.length) + " confluence lines.";
+  tfSrCache = { key, value };
+  return value;
+}
 
 // Aggregate a tick into the synthetic timeframe g (bucketed by epoch; stale/out-of-order ticks are ignored)
 const tfSynthLast = {};
@@ -26604,7 +26663,7 @@ function buildTfCards(){
   const grid = document.getElementById("tfGrid");
   if (!grid || grid.dataset.built) return;
   // Highest timeframe first, 30s last.
-  grid.innerHTML = [...TIMEFRAMES].reverse().map(tf => `
+  grid.innerHTML = [...CHART_TIMEFRAMES].reverse().map(tf => `
     <div class="tf-card" id="tf-card-${tf.g}" data-g="${tf.g}">
       <div class="tf-head" data-g="${tf.g}" title="Click to expand / collapse" style="cursor:pointer">
         <div class="tf-name"><b>${tf.num}</b> ${tf.unit}</div>
@@ -26722,7 +26781,7 @@ function attachTfNav(){
   document.querySelectorAll(".tf-btn").forEach(btn => {
     btn.addEventListener("click", () => tfPanZoom(Number(btn.dataset.g), btn.dataset.act));
   });
-  TIMEFRAMES.forEach(tf => {
+  CHART_TIMEFRAMES.forEach(tf => {
     const g = tf.g;
     const svg = $("tf-chart-" + g);
     if (!svg) return;
@@ -26781,13 +26840,14 @@ function startTfTimers(){
   let _predTick = 0;
   const update = () => {
     const now = Date.now() / 1000;
-    TIMEFRAMES.forEach(tf => {
+    CHART_TIMEFRAMES.forEach(tf => {
       const el = $("tf-timer-" + tf.g);
       if (!el) return;
       const arr = tfData[tf.g];
       let closeAt;
-      if (arr && arr.length){ closeAt = arr[arr.length-1].epoch + tf.g; }
-      else { closeAt = Math.floor(now / tf.g) * tf.g + tf.g; }
+      if (window.MFXModifiedSR) closeAt = window.MFXModifiedSR.periodEnd(arr && arr.length ? arr[arr.length-1].epoch : now, tf.kind || tf.g);
+      else if (arr && arr.length) closeAt = arr[arr.length-1].epoch + tf.g;
+      else closeAt = Math.floor(now / tf.g) * tf.g + tf.g;
       let rem = Math.max(0, Math.floor(closeAt - now));
       const h = Math.floor(rem / 3600), m = Math.floor((rem % 3600) / 60), s = rem % 60;
       el.textContent = (h > 0 ? String(h).padStart(2,"0")+":" : "") + String(m).padStart(2,"0") + ":" + String(s).padStart(2,"0");
@@ -26831,7 +26891,7 @@ function showPage(which){
   if (which === "sossow" && typeof window.ssStart === "function") window.ssStart(); else if (typeof window.ssLeave === "function") window.ssLeave();
   if (which === "candles"){
     if (!candlesPageReady){ candlesPageReady = true; buildTfCards(); connectTfWs(); startTfTimers(); }
-    TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));
+    CHART_TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));
     // Recompute prediction every time candle page updates
     if (typeof predRender === 'function') setTimeout(predRender, 50);
   }
@@ -26956,7 +27016,7 @@ window.addEventListener("mfx:modules-changed", () => {
     try { localStorage.setItem(key, el.checked ? "1" : "0"); } catch(_){}
     const chip = el.closest(".pa-chip");
     if (chip) chip.classList.toggle("on", el.checked);
-    TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));
+    CHART_TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));
   });
 });
 
@@ -26973,6 +27033,7 @@ function connectTfWs(){
   let tfOpened = false;
   tfWs.onopen = () => {
     tfOpened = true;
+    tfSrConnected = true;
     requestAllTimeframes();
     if (tfPing) clearInterval(tfPing);
     tfPing = setInterval(() => { if (tfWs.readyState === WebSocket.OPEN) tfWs.send(JSON.stringify({ ping: 1 })); }, 20000);
@@ -26982,7 +27043,12 @@ function connectTfWs(){
     if (msg.error){
       // mark the affected timeframe (if identifiable) as errored
       const g = tfReqMap[msg.req_id];
-      if (g){ const st = $("tf-status-" + g); if (st) st.textContent = "unavailable"; }
+      if (g){
+        tfUnavailable.add(g);
+        tfData[g] = [];
+        const st = $("tf-status-" + g); if (st) { st.textContent = "unavailable"; st.title = msg.error.message; }
+        tfRefreshDerived(g); tfSrCache = null; tfScheduleRedraw();
+      }
       console.warn("TF candle error:", msg.error.message);
       return;
     }
@@ -26993,8 +27059,10 @@ function connectTfWs(){
       tfData[g] = [];
       const t = msg.history.times, pr = msg.history.prices;
       for (let k = 0; k < pr.length; k++) tfIngestTick(g, Number(t[k]), Number(pr[k]));
-      const st = $("tf-status-" + g); if (st) st.textContent = "live";
+      tfUnavailable.delete(g);
+      const st = $("tf-status-" + g); if (st) { st.textContent = "live"; st.title = ""; }
       drawTfCandles(g);
+      tfScheduleRedraw();
       return;
     }
     if (msg.msg_type === "tick" && msg.tick){
@@ -27002,24 +27070,28 @@ function connectTfWs(){
       if (!g || !tfData[g]) return;
       tfIngestTick(g, Number(msg.tick.epoch), Number(msg.tick.quote));
       drawTfCandles(g);
+      if ($("pa-sr")?.checked) tfScheduleRedraw();
       return;
     }
     // Initial history: full candle array
     if (msg.msg_type === "candles" && Array.isArray(msg.candles)){
-      const g = tfReqMap[msg.req_id] || (msg.echo_req && Number(msg.echo_req.granularity));
+      const g = tfReqMap[msg.req_id];
       if (!g) return;
-      tfData[g] = msg.candles.slice(-TF_COUNT).map(c => ({
+      tfData[g] = msg.candles.slice(g === 86400 ? -5000 : -TF_COUNT).map(c => ({
         epoch: Number(c.epoch), open: +c.open, high: +c.high, low: +c.low, close: +c.close
       }));
-      const st = $("tf-status-" + g); if (st) st.textContent = "live";
+      tfUnavailable.delete(g);
+      const st = $("tf-status-" + g); if (st) { st.textContent = "live"; st.title = ""; }
+      tfRefreshDerived(g); tfSrCache = null;
       drawTfCandles(g);
+      tfScheduleRedraw();
       return;
     }
     // Live update: a single ohlc object
     if (msg.msg_type === "ohlc" && msg.ohlc){
       const o = msg.ohlc;
-      const g = Number(o.granularity);
-      if (!tfData[g]) return;
+      const g = tfReqMap[msg.req_id];
+      if (!g || g !== Number(o.granularity) || !tfData[g]) return;
       const epoch = Number(o.open_time != null ? o.open_time : o.epoch);
       const candle = { epoch, open:+o.open, high:+o.high, low:+o.low, close:+o.close };
       const arr = tfData[g];
@@ -27028,14 +27100,17 @@ function connectTfWs(){
         arr[arr.length - 1] = candle;          // update forming candle
       } else if (!last || epoch > last.epoch){
         arr.push(candle);                        // new candle started
-        if (arr.length > TF_COUNT){ arr.shift(); const v = tfView[g]; if (v && v.start != null) v.start = Math.max(0, v.start - 1); }
+        if (arr.length > (g === 86400 ? 5000 : TF_COUNT)){ arr.shift(); const v = tfView[g]; if (v && v.start != null) v.start = Math.max(0, v.start - 1); }
       }
+      tfRefreshDerived(g);
       drawTfCandles(g);
+      tfScheduleRedraw();
       return;
     }
   };
   tfWs.onerror = () => {};
   tfWs.onclose = () => {
+    tfSrConnected = false; tfSrCache = null; tfScheduleRedraw();
     if (tfPing) clearInterval(tfPing);
     if (!tfOpened) _endpointIdx++;   // endpoint unreachable — try the next one
     if (candlesPageReady){ if (tfReconnect) clearTimeout(tfReconnect); tfReconnect = setTimeout(connectTfWs, 3000); }
@@ -27046,11 +27121,14 @@ function requestAllTimeframes(){
   if (!tfWs || tfWs.readyState !== WebSocket.OPEN) return;
   window.__tfMarket = SYMBOL; window.__tfSub = _tickSubscriptionSymbol;   // which market these candles belong to
   Object.keys(_tfEvCache).forEach(k => delete _tfEvCache[k]);
+  Object.keys(tfReqMap).forEach(k => delete tfReqMap[k]);
+  tfUnavailable.clear(); tfSrCache = null;
+  CHART_TIMEFRAMES.forEach(tf => { tfData[tf.g] = []; const st = $("tf-status-" + tf.g); if (st) { st.textContent = "loading…"; st.title = ""; } });
   // drop any existing candle subscriptions, then request fresh per timeframe
   tfWs.send(JSON.stringify({ forget_all: "candles" }));
   tfWs.send(JSON.stringify({ forget_all: "ticks" }));
-  TIMEFRAMES.forEach((tf, i) => {
-    const reqId = 5000 + i;
+  CHART_TIMEFRAMES.filter(tf => !tf.source).forEach(tf => {
+    const reqId = ++tfRequestSequence;
     tfReqMap[reqId] = tf.g;
     tfData[tf.g] = [];
     const st = $("tf-status-" + tf.g); if (st) st.textContent = "loading…";
@@ -27060,7 +27138,7 @@ function requestAllTimeframes(){
       return;
     }
     tfWs.send(JSON.stringify({
-      ticks_history: _tickSubscriptionSymbol, end: "latest", count: TF_COUNT,
+      ticks_history: _tickSubscriptionSymbol, end: "latest", count: tf.g === 86400 ? 5000 : TF_COUNT,
       style: "candles", granularity: tf.g, subscribe: 1, req_id: reqId
     }));
   });
@@ -27068,7 +27146,7 @@ function requestAllTimeframes(){
   if (window._tfWatch) clearTimeout(window._tfWatch);
   window._tfWatch = setTimeout(() => {
     if (!tfWs || tfWs.readyState !== WebSocket.OPEN) return;
-    const missing = TIMEFRAMES.some(tf => !(tfData[tf.g] && tfData[tf.g].length));
+    const missing = CHART_TIMEFRAMES.some(tf => !tf.source && !tfUnavailable.has(tf.g) && !(tfData[tf.g] && tfData[tf.g].length));
     if (missing) requestAllTimeframes();
   }, 8000);
 }
@@ -28852,10 +28930,12 @@ function tfEvidence(g){
   }
   if (arr.length < 2 || !window.MFXEngine) return null;
   const nowSec = Math.floor(Date.now() / 1000);
-  const closed = arr.filter(c => Number.isFinite(c.epoch) && c.epoch + g <= nowSec);
+  const chartFrame = CHART_TIMEFRAMES.find(t => t.g === g);
+  const closed = arr.filter(c => Number.isFinite(c.epoch) && (window.MFXModifiedSR ? window.MFXModifiedSR.periodEnd(c.epoch, chartFrame?.kind || g) : c.epoch + g) <= nowSec);
   if (closed.length < 2) return null;
-  const idx = TIMEFRAMES.findIndex(t => t.g === g);
-  const htf = TIMEFRAMES.slice(idx + 1).map(h => ({ tf: h.label, g: h.g, candles: (tfData[h.g] || []).filter(c => Number.isFinite(c.epoch) && c.epoch + h.g <= nowSec) })).filter(h => h.candles.length >= 60);
+  const frames = TIMEFRAMES.some(t => t.g === g) ? TIMEFRAMES : CHART_TIMEFRAMES;
+  const idx = frames.findIndex(t => t.g === g);
+  const htf = frames.slice(idx + 1).map(h => ({ tf: h.label, g: h.g, candles: (tfData[h.g] || []).filter(c => Number.isFinite(c.epoch) && (window.MFXModifiedSR ? window.MFXModifiedSR.periodEnd(c.epoch, h.kind || h.g) : c.epoch + h.g) <= nowSec) })).filter(h => h.candles.length >= 60);
   const sig = a => { const l = a[a.length - 1]; return l ? a.length + "|" + a[0].epoch + "|" + a[0].open + "|" + l.epoch + "|" + l.close : "0"; };
   const key = sig(closed) + "#" + htf.map(h => sig(h.candles)).join(",");
   const c = _tfEvCache[g], now = Date.now();
@@ -28916,7 +28996,7 @@ window.mfxTfFocusRefresh = function(){
   const bar = $("tfFocusBar"), txt = $("tfFocusText"), f = window.__tsFocus;
   if (bar) bar.classList.toggle("on", !!f);
   if (txt && f) txt.textContent = "Evidence highlight (blue) — " + f.headline;
-  TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));
+  CHART_TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));
   // the candle socket can be opened before the market switch has resolved its symbol: re-request until they agree
   [1500, 4000, 8000].forEach(ms => setTimeout(() => {
     if (candlesPageReady && window.__tfMarket && (window.__tfMarket !== SYMBOL || window.__tfSub !== _tickSubscriptionSymbol)) requestAllTimeframes();
@@ -28965,7 +29045,7 @@ function drawTfCandles(g){
     out += `<text x="${W-padR+4}" y="${(gy+3).toFixed(1)}" fill="#475569" font-size="9" font-family="monospace">${gp.toFixed(dec)}</text>`;
   }
 
-  // ---- Price-action overlays (each computed from THIS timeframe's candles) ----
+  // ---- Price-action overlays (modified S/R is shared across timeframes) ----
   const want = id => { const e = $(id); return e ? e.checked : true; };
   const xAt = i => padL + (i - start) * slot + slot / 2;
   const chartRight = W - padR;
@@ -29067,18 +29147,18 @@ function drawTfCandles(g){
     out += `<rect x="${(cx-bodyW/2).toFixed(1)}" y="${top.toFixed(1)}" width="${bodyW.toFixed(1)}" height="${Math.max(1,bot-top).toFixed(1)}" fill="${col}" opacity="${op}" rx="0.5"/>`;
   });
 
-  // Support / Resistance lines (on top of candles)
+  // Shared multi-timeframe confluence lines (on top of candles).
   if (want("pa-sr")){
-    const { support, resistance } = tfAnalysis(g, arr, 'sr', computeSR);
+    const { support, resistance } = tfModifiedSr() || { support: [], resistance: [] };
     resistance.filter(l => inView(l.price)).forEach(l => {
       const yy = clampY(l.price);
-      out += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${chartRight}" y2="${yy.toFixed(1)}" stroke="var(--accent)" stroke-width="${l.touches>=2?1.3:0.8}" opacity="0.7"/>`;
-      out += `<text x="${padL+2}" y="${(yy-2).toFixed(1)}" fill="var(--accent)" font-size="8" font-family="monospace">R ${l.price.toFixed(dec)}</text>`;
+      out += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${chartRight}" y2="${yy.toFixed(1)}" stroke="#e11d75" stroke-width="0.8"/>`;
+      out += `<text x="${padL+2}" y="${(yy-2).toFixed(1)}" fill="#e11d75" font-size="8" font-family="monospace">R ${l.label} ${l.price.toFixed(dec)}</text>`;
     });
     support.filter(l => inView(l.price)).forEach(l => {
       const yy = clampY(l.price);
-      out += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${chartRight}" y2="${yy.toFixed(1)}" stroke="var(--accent)" stroke-width="${l.touches>=2?1.3:0.8}" opacity="0.7" stroke-dasharray="${l.touches>=2?'0':'4,2'}"/>`;
-      out += `<text x="${padL+2}" y="${(yy+9).toFixed(1)}" fill="var(--accent)" font-size="8" font-family="monospace">S ${l.price.toFixed(dec)}</text>`;
+      out += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${chartRight}" y2="${yy.toFixed(1)}" stroke="#334155" stroke-width="0.8"/>`;
+      out += `<text x="${padL+2}" y="${(yy+9).toFixed(1)}" fill="#94a3b8" font-size="8" font-family="monospace">S ${l.label} ${l.price.toFixed(dec)}</text>`;
     });
   }
 
@@ -34323,6 +34403,7 @@ try {
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>
+<script type="module">import * as S from "./src/analysis/modifiedSr.js?v=1"; window.MFXModifiedSR = S; if (typeof CHART_TIMEFRAMES !== "undefined") { [900, 3600, 14400, 86400].forEach(tfRefreshDerived); CHART_TIMEFRAMES.forEach(tf => drawTfCandles(tf.g)); }</script>
 <script>
 (function(){
   const sel = document.getElementById("evTf"), body = document.getElementById("evBody");
@@ -34346,7 +34427,7 @@ try {
   setInterval(() => { if (body.offsetParent !== null) run(); }, 5000);
 })();
 </script>
-<script type="module">import * as E from "./src/analysis/all.js?v=8"; import * as TSM from "./src/analysis/tradeSignalMarkers.js?v=1"; window.MFXEngine = E; window.MFXTradeSignalMarkers = TSM; if (typeof TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
+<script type="module">import * as E from "./src/analysis/all.js?v=8"; import * as TSM from "./src/analysis/tradeSignalMarkers.js?v=1"; window.MFXEngine = E; window.MFXTradeSignalMarkers = TSM; if (typeof CHART_TIMEFRAMES !== "undefined" && typeof drawTfCandles === "function") CHART_TIMEFRAMES.forEach(tf => drawTfCandles(tf.g));</script>
 <script type="module" src="src/ldpe/under-over-bot.js?v=2"></script>
 <script type="module" src="src/consec/consecAlert.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
