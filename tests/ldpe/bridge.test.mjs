@@ -2,6 +2,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { PredictionDigitBot } from "../../src/ldpe/prediction-digit-bot.js";
 
 const realSetInterval = globalThis.setInterval;
 globalThis.setInterval = (...a) => { const t = realSetInterval(...a); t.unref && t.unref(); return t; };
@@ -211,6 +212,24 @@ test("history with no overlap records a hole and marks pending forecasts unscora
   const r = b.L.backfill("S", [1, 2, 3], [lastEpoch + 500, lastEpoch + 501, lastEpoch + 502], 2);
   assert.equal(r.overlap, false);
   assert.ok(b.L.engine.state("S").forecasts.some(f => f.status === "unscorable"));
+});
+
+test("feed hold pauses the prediction bot without trading replayed history", async () => {
+  const p = await page();
+  const bot = new PredictionDigitBot(p.L.executor);
+  window.PDT = { pauseFeed: symbol => bot.pauseFeed(symbol) };
+  assert.equal(bot.arm({ symbol: "S", stake: 0.5, multiplier: 2, targetProfit: 10, stopLoss: 10, duration: 5 }).ok, true);
+  p.L.beginHold("S");
+  assert.equal(bot.feedPaused, true);
+  const held = p.L.ingest("S", "1000.12", 2, 1700000001);
+  assert.equal(held.held, true);
+  p.L.backfill("S", [1000.12], [1700000001], 2);
+  assert.equal(p.sent.length, 0);
+  const live = p.L.ingest("S", "1000.13", 2, 1700000002);
+  bot.onTick({ symbol: "S", seq: p.L.engine.state("S").seq, epoch: 1700000002, digit: live.digit, forecast: live.forecast });
+  assert.equal(bot.feedPaused, false);
+  assert.equal(p.sent.filter(m => m.proposal).length, 1);
+  bot.stop("Test complete");
 });
 
 test("reconnect: an order in flight is never silently resent", async () => {

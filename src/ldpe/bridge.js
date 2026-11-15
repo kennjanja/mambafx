@@ -165,7 +165,7 @@ const api = {
 
   // Called whenever the page (re)subscribes to a symbol's ticks: hold live ticks until history arrives.
   beginHold(symbol, ms = 6000) {
-    if (window.PDT) window.PDT.interrupt("Tick feed interrupted; settle open orders before restarting.");
+    if (window.PDT) window.PDT.pauseFeed(symbol);
     engine.beginHold(symbol);
     clearTimeout(releaseTimers[symbol]);
     releaseTimers[symbol] = setTimeout(() => { if (engine.isHolding(symbol)) { engine.releaseHold(symbol); api.render(); } }, ms);
@@ -180,7 +180,7 @@ const api = {
     saveState(true); api.render();
     return r;
   },
-  discontinuity(symbol) { if (window.PDT) window.PDT.interrupt("Tick feed interrupted; settle open orders before restarting."); engine.markDiscontinuity(symbol); },
+  discontinuity(symbol) { if (window.PDT) window.PDT.pauseFeed(symbol); engine.markDiscontinuity(symbol); },
 
   // Automatic trading: only through the executor, only on a TRADE decision, only while Auto is armed
   // and the Stop switch is off. Cooldown and stop-after-N are the user's own settings (Auto panel).

@@ -7,6 +7,7 @@ export class PredictionDigitBot {
     this.ex = executor;
     this.onChange = onChange;
     this.armed = false;
+    this.feedPaused = false;
     this.cycle = null;
     this.cycleNumber = 0;
     this.pnl = 0;
@@ -40,6 +41,7 @@ export class PredictionDigitBot {
     this.lastSeq = -1;
     this.lastEpoch = -1;
     this.reason = "Waiting for a current prediction";
+    this.feedPaused = false;
     this.armed = true;
     this.onChange();
     return { ok: true };
@@ -47,8 +49,17 @@ export class PredictionDigitBot {
 
   stop(reason) {
     this.armed = false;
+    this.feedPaused = false;
     this.reason = reason;
     this.ex.cancelPricing(o => this.sessionOrders.has(o.id), "Prediction Digit Trade stopped before purchase");
+    this.onChange();
+  }
+
+  pauseFeed(symbol) {
+    if (!this.armed || symbol !== this.settings.symbol || this.feedPaused) return;
+    this.feedPaused = true;
+    this.reason = "Tick feed interrupted; waiting for a fresh tick and open orders to settle";
+    this.ex.cancelPricing(o => this.sessionOrders.has(o.id), "Tick feed interrupted before purchase");
     this.onChange();
   }
 
@@ -85,6 +96,14 @@ export class PredictionDigitBot {
     if (t.seq <= this.lastSeq || t.epoch <= this.lastEpoch) return;
     this.lastSeq = t.seq;
     this.lastEpoch = t.epoch;
+    if (this.feedPaused) {
+      if (this.hasUnresolved()) {
+        this.reason = "Tick feed restored; waiting for open orders to settle";
+        this.onChange();
+        return;
+      }
+      this.feedPaused = false;
+    }
     if (!this.cycle) {
       const f = t.forecast;
       if (!f || f.reconstructed || f.symbol !== t.symbol || f.madeAtSeq !== t.seq ||
@@ -128,7 +147,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     toggle.checked = !!b?.armed;
     for (const id of ids) if ($(id)) $(id).disabled = !!b?.armed;
     const open = b ? [...b.ex.orders.values()].filter(o => b.owns(o) && LIVE.has(o.state)).length : 0;
-    status.textContent = b ? `${b.armed ? "ARMED" : "OFF"} — ${b.reason}; session P/L ${b.pnl.toFixed(2)}; unresolved/open ${open}.` : "Waiting for LDPE.";
+    status.textContent = b ? `${b.armed ? (b.feedPaused ? "PAUSED" : "ARMED") : "OFF"} — ${b.reason}; session P/L ${b.pnl.toFixed(2)}; unresolved/open ${open}.` : "Waiting for LDPE.";
   };
   try {
     const saved = JSON.parse(localStorage.getItem(storageKey) || "{}");
@@ -154,6 +173,7 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
       const b = getBot();
       if (b && result?.accepted) b.onTick({ symbol, seq: window.LDPE.engine.state(symbol).seq, epoch: Number(epoch), digit: result.digit, forecast: result.forecast });
     },
+    pauseFeed(symbol) { if (bot) bot.pauseFeed(symbol); },
     interrupt(reason) { if (bot?.armed) bot.stop(reason); },
     owns(id) { const b = getBot(); return !!b?.owns(b.ex.byContract.get(String(id)) || {}); },
   };
