@@ -421,6 +421,13 @@ footer{text-align:center;color:var(--muted);font-size:11px;margin-top:22px;line-
 .gc-btn.fall{background:rgba(255,77,94,.14);border-color:var(--down);color:var(--down)}
 .gc-btn.fall:hover{background:rgba(255,77,94,.24)}
 .gc-btn.danger{background:rgba(255,77,94,.1);border-color:var(--down);color:var(--down)}
+.sm-trading-nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:16px}
+.sm-trading h3{margin:18px 0 8px}
+.sm-trading pre{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55}
+.sm-trading-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px;margin:12px 0}
+.sm-trading-form label{display:flex;flex-direction:column;gap:5px}
+.sm-trading-form label.sm-checkbox{flex-direction:row;align-items:center}
+.sm-trading-form input:not([type=checkbox]){width:100%;min-width:0;padding:9px;border:1px solid var(--line);border-radius:8px;background:#131c2e;color:var(--text);font:inherit}
 .gc-acct{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-top:6px}
 .gc-acct .ac-cell{background:#0a0e17;border:1px solid var(--line);border-radius:10px;padding:10px 12px}
 .gc-acct .ac-lab{font-size:9px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:5px}
@@ -29600,6 +29607,23 @@ window.addEventListener("online", gridRetryNow);
 document.addEventListener("visibilitychange", () => { gridHeartbeatReset(); if (!document.hidden) gridRetryNow(); });
 let gridLoggedIn = false;          // session state, from /me/session — no token held client-side
 let gridAccounts = [];             // [{account_id, account_type, currency, ...}]
+let gridBalanceAccountId = null;
+
+// Read-only account information for modules that do not own the trading socket.
+window.MFXAccountStatus = () => ({
+  loggedIn: gridLoggedIn,
+  connected: !!(gridAuthed && gridWs && gridWs.readyState === WebSocket.OPEN),
+  accountId: gridAuthed ? gridLoginId : null,
+  isVirtual: gridAuthed ? gridIsVirtual : null,
+  currency: gridAuthed && gridBalanceAccountId === gridLoginId ? gridCurrency : null,
+  balance: gridAuthed && gridBalanceAccountId === gridLoginId && Number.isFinite(gridBalance) ? gridBalance : null,
+  connectionGeneration: gridConnectionGeneration,
+});
+window.MFXDerivConnection = Object.freeze({
+  socket: () => gridWs,
+  nextRequestId: () => ++gridReqId,
+  account: () => window.MFXAccountStatus(),
+});
 
 
 
@@ -29745,6 +29769,7 @@ async function gridConnect(){
 // Called once WS is open AND authorized — subscribe and update UI
 function gridWsSubscribeAndInit(acctId){
   gridConnecting = false;
+  gridBalanceAccountId = null;
   gridAuthed = true;
   gridRetryN = 0;
   gridConnState("on");
@@ -29861,6 +29886,7 @@ function gridHandleMsg(msg){
     case "balance": {
       const b = msg.balance;
       if (b){
+        gridBalanceAccountId = b.loginid === gridLoginId ? gridLoginId : null;
         gridBalance  = Number(b.balance);
         gridCurrency = b.currency || gridCurrency;
         if (window.MFXDashboardAuto) window.MFXDashboardAuto.noteBalance(gridLoginId, gridBalance);
@@ -34518,7 +34544,7 @@ try {
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/analysis/sosSowPage.js?v=9"></script>
 <script type="module" src="src/ldpe/bridge.js?v=15"></script>
-<script type="module" src="src/super-mathes/browser.js?v=3"></script>
+<script type="module" src="src/super-mathes/browser.js?v=5"></script>
 <script type="module" src="src/ldpe/prediction-digit-bot.js?v=2"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>
