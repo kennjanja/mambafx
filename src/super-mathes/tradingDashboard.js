@@ -90,7 +90,7 @@ export function attachTradingDashboard(service, accountStatus, refreshBalance, r
     <p role="status" data-field="balance-message"></p>
     <h3>Cycle prediction (or latest combined research prediction)</h3><pre data-field="prediction">Waiting for a combined prediction.</pre>
     <h3>Trading settings</h3>
-    <p>Contract type: Digit Matches. The selected digit remains fixed until a confirmed win.</p>
+    <p>Contract type: Digit Matches. The selected digit remains fixed until a confirmed win or the cycle is closed.</p>
     <p>If a purchase response is lost, trading stops without retry or recovery. Starting again can create an additional contract; unconfirmed stake counts against the session stop loss.</p>
     <p>Daily targets reset at midnight in Africa/Nairobi.</p>
     <form class="sm-trading-form" data-form="settings">
