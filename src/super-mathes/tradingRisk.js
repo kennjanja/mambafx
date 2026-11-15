@@ -26,11 +26,13 @@ export function assessTradeRisk({ config, account, session, cycle, feed }) {
   const sessionTarget = money(config.sessionTarget, "session target", { positive: true });
   const dailyTarget = money(config.dailyTarget, "daily target", { positive: true });
   const pnl = money(session.pnl, "session profit and loss");
+  const uncertainExposure = money(session.uncertainExposure ?? 0, "unconfirmed purchase exposure");
   const dailyPnl = money(session.dailyPnl, "daily profit and loss");
   const cyclePnl = money(cycle.pnl, "cycle profit and loss");
   const staked = money(cycle.staked, "cycle amount staked");
   const balance = money(account.balance, "account balance");
-  if (staked < 0 || balance < 0 || !Number.isSafeInteger(cycle.losses) || cycle.losses < 0 || cycle.losses > 1000 ||
+  if (staked < 0 || balance < 0 || uncertainExposure < 0 || !Number.isSafeInteger(pnl - uncertainExposure) ||
+      !Number.isSafeInteger(cycle.losses) || cycle.losses < 0 || cycle.losses > 1000 ||
       !Number.isSafeInteger(cycle.attempts) || cycle.attempts < 0 ||
       cycle.losses > cycle.attempts ||
       !Number.isSafeInteger(config.maxAttempts) || config.maxAttempts < 0 ||
@@ -46,7 +48,7 @@ export function assessTradeRisk({ config, account, session, cycle, feed }) {
       account.isVirtual !== session.isVirtual || account.currency !== session.currency) return refuse("Account unavailable or changed");
   if (feed.continuous !== true || typeof cycle.source !== "string" || !cycle.source || feed.source !== cycle.source) return refuse("Feed continuity unavailable");
   if (cycle.unresolved !== false) return refuse("A purchase or contract is unresolved");
-  if (pnl <= -sessionLoss || cyclePnl <= -cycleLoss) return refuse("Stop loss reached");
+  if (pnl - uncertainExposure <= -sessionLoss || cyclePnl <= -cycleLoss) return refuse("Stop loss reached");
   if (pnl >= sessionTarget || cyclePnl >= cycleTarget || dailyPnl >= dailyTarget) return refuse("Profit target reached");
   if (config.maxAttempts && cycle.attempts >= config.maxAttempts) return refuse("Maximum attempts reached");
 
@@ -61,7 +63,7 @@ export function assessTradeRisk({ config, account, session, cycle, feed }) {
   if (stake > BigInt(maximumStake)) return refuse("Maximum stake exceeded");
   if (stake + BigInt(staked) > BigInt(maximumExposure)) return refuse("Maximum cycle exposure exceeded");
   if (stake > BigInt(balance)) return refuse("Insufficient balance");
-  if (BigInt(pnl) - stake < -BigInt(sessionLoss)) return refuse("Stake could exceed session stop loss");
+  if (BigInt(pnl) - BigInt(uncertainExposure) - stake < -BigInt(sessionLoss)) return refuse("Stake could exceed session stop loss");
   if (BigInt(cyclePnl) - stake < -BigInt(cycleLoss)) return refuse("Stake could exceed cycle stop loss");
   return { allowed: true, stake: Number(stake) };
 }

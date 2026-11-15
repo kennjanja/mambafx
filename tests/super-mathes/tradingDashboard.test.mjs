@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { formatAccount, formatPrediction, tradingConfig } from "../../src/super-mathes/tradingDashboard.js";
+import { formatAccount, formatPrediction, formatTradingHistory, formatTradingState, tradingConfig } from "../../src/super-mathes/tradingDashboard.js";
 
 test("account display distinguishes Demo, Real and disconnected states", () => {
   assert.match(formatAccount({ connected: true, isVirtual: true, accountId: "VRTC1", balance: 10, currency: "USD" }), /VRTC1 \| Demo \| 10 USD/);
@@ -29,4 +29,15 @@ test("trading settings automatically use Nairobi time without requiring account 
     takeProfit: "1", multiplier: "2", maxSteps: "0", martingale: false, durationTicks: "1",
     windowSize: "100", frequencyWeight: "0.5" });
   assert.equal(config.timeZone, "Africa/Nairobi");
+});
+
+test("unconfirmed purchases are shown without inventing a payout or profit", () => {
+  const state = { accountingScale: 8, accountId: "VRTC1", reason: "Stopped",
+    session: { pnl: 0, currency: "USD", uncertainExposure: 100000000 }, cycle: null, order: null,
+    history: [{ phase: "unknown", digit: 3, stake: 100000000 },
+      { cycle: { id: "p1", digit: 3, attempts: 1, staked: 100000000, pnl: 0, uncertainExposure: 100000000 },
+        termination: "purchase outcome unknown; not reconciled" }] };
+  assert.match(formatTradingState({ owned: true, running: false, state }), /Unconfirmed purchase exposure: 1 USD/);
+  assert.match(formatTradingHistory(state), /payout unknown/);
+  assert.match(formatTradingHistory(state), /outcome and payout unknown/);
 });

@@ -1,11 +1,11 @@
-import { ResearchExecution } from "./execution.js?v=2";
+import { ResearchExecution } from "./execution.js?v=3";
 import { openExecutionStore } from "./executionStorage.js?v=2";
 import { createExecutionOwnership } from "./executionOwnership.js?v=1";
 import { createDerivExecution, toMinor } from "./derivExecution.js?v=1";
 import { createDerivRequest, readAccountBalance } from "./derivRequest.js?v=1";
 
 export const ACCOUNTING_SCALE = 8;
-const UNRESOLVED = new Set(["buying", "unknown", "open"]);
+const UNRESOLVED = new Set(["open"]);
 
 export function createTradingRuntime({ connection, research, fetchSession, fetchAccounts, sessionKey,
   ownership = createExecutionOwnership(), openStore = openExecutionStore,
@@ -243,7 +243,8 @@ export function createTradingRuntime({ connection, research, fetchSession, fetch
       controller?.requestStop();
       disposed = true;
       return enqueue(async () => {
-        if (controller) await controller.stop("Page closed; reconcile before restarting");
+        if (controller) await controller.stop(controller.state?.order?.phase === "open" ?
+          "Page closed; reconcile the open contract before restarting" : "Page closed; trading stopped");
         await release();
       });
     },

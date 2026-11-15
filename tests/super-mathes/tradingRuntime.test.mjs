@@ -119,17 +119,24 @@ test("a follower cannot take execution ownership away from the collector", async
   await follower.dispose();
 });
 
-test("an uncertain purchase blocks recovery and is never retried", async () => {
+test("an uncertain purchase stops without retry or reconciliation and allows a manual restart", async () => {
   const h = harness(), first = h.newRuntime();
   h.shared.holdBuy = true;
   await first.start(h.config);
   await assert.rejects(first.pulse(), /unknown/);
+  assert.equal(first.snapshot().running, false);
+  assert.equal(first.snapshot().state.history[0].phase, "unknown");
   await first.dispose();
   const restored = h.newRuntime();
   await restored.pulse();
-  assert.equal(restored.snapshot().state.order.phase, "unknown");
-  await assert.rejects(restored.start(h.config), /reconciliation/);
+  assert.equal(restored.snapshot().state.order, null);
+  assert.equal(restored.snapshot().state.session.uncertainExposure, 100000000);
   assert.equal(h.sent.filter(r => r.buy).length, 1);
+  h.shared.holdBuy = false;
+  await restored.start(h.config);
+  assert.equal(h.sent.filter(r => r.buy).length, 1);
+  await restored.pulse();
+  assert.equal(h.sent.filter(r => r.buy).length, 2);
   await restored.dispose();
 });
 
@@ -275,4 +282,15 @@ test("older unscaled histories and unresolved orders on other accounts block exe
   await assert.rejects(runtime.start(h.config), /incompatible accounting scale/);
   assert.equal(h.sent.filter(r => r.buy).length, 0);
   await runtime.dispose();
+});
+
+test("unconfirmed purchases on another account do not block starting", async () => {
+  for (const phase of ["buying", "unknown"]) {
+    const h = harness(), runtime = h.newRuntime();
+    h.rows.set("CR1", { accountId: "CR1", order: { phase }, accountingScale: 8 });
+    await runtime.start(h.config);
+    assert.equal(runtime.snapshot().running, true);
+    assert.equal(h.sent.filter(r => r.buy).length, 0);
+    await runtime.dispose();
+  }
 });

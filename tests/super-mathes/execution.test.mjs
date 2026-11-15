@@ -66,16 +66,59 @@ test("account types are separated and a changed account cannot buy after proposa
   }
 });
 
-test("ambiguous buys remain unresolved after restart and are never retried", async () => {
+test("unconfirmed purchases stop without retry and remain visible after restart", async () => {
   const h = harness();
-  h.host.buy = async () => { throw new Error("disconnected"); };
+  let attempts = 0;
+  h.host.buy = async () => { attempts++; throw new Error("disconnected"); };
   await h.bot.start(h.config);
   await assert.rejects(h.bot.onTick(), /unknown/);
-  assert.equal(h.bot.state.order.phase, "unknown");
+  assert.equal(h.bot.running, false);
+  assert.equal(h.bot.state.order, null);
+  assert.equal(h.bot.state.history[0].phase, "unknown");
+  assert.equal(h.bot.state.session.uncertainExposure, 100);
+  await h.bot.onTick();
+  assert.equal(attempts, 1);
+  const restored = new ResearchExecution({ host: h.host, store: h.store, research: h.research,
+    now: () => Date.parse("2026-03-08T06:00:00Z") });
+  await restored.restore(h.account.id);
+  assert.equal(restored.state.history[0].phase, "unknown");
+  assert.equal(restored.state.session.uncertainExposure, 100);
+  await restored.start(h.config);
+  assert.equal(attempts, 1);
+  assert.equal(restored.state.session.uncertainExposure, 100);
+});
+
+test("a purchase interrupted during buy is archived once on restore", async () => {
+  const h = harness();
+  let buying;
+  const save = h.store.save;
+  h.store.save = async state => {
+    if (state.order?.phase === "buying") buying = structuredClone(state);
+    await save(state);
+  };
+  h.host.buy = async () => { throw new Error("connection lost"); };
+  await h.bot.start(h.config);
+  await assert.rejects(h.bot.onTick(), /unknown/);
+  await h.store.save(buying);
   const restored = new ResearchExecution({ host: h.host, store: h.store, research: h.research });
   await restored.restore(h.account.id);
-  await assert.rejects(restored.start(h.config), /reconciliation/);
-  assert.equal(restored.state.order.phase, "unknown");
+  assert.equal(restored.state.order, null);
+  assert.equal(restored.state.history.filter(row => row.phase === "unknown").length, 1);
+  assert.equal(restored.state.session.uncertainExposure, 100);
+  await restored.restore(h.account.id);
+  assert.equal(restored.state.history.filter(row => row.phase === "unknown").length, 1);
+  assert.equal(restored.state.session.uncertainExposure, 100);
+});
+
+test("unconfirmed exposure counts against the configured session stop loss", async () => {
+  const h = harness();
+  h.config.sessionLoss = 150;
+  h.host.buy = async () => { throw new Error("connection lost"); };
+  await h.bot.start(h.config);
+  await assert.rejects(h.bot.onTick(), /unknown/);
+  await assert.rejects(h.bot.start(h.config), /session stop loss/);
+  assert.equal(h.bot.state.session.pnl, 0);
+  assert.equal(h.bot.state.session.uncertainExposure, 100);
 });
 
 test("a known open contract is reconciled once after restart", async () => {

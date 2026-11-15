@@ -4,13 +4,11 @@
 
 Super Mathes is an independent research and trading module with source-qualified
 live capture, browser persistence, two research models and five-observation
-records. The trading dashboard and authenticated execution integration are
-implemented in the development worktree but the dashboard has **not** been
-deployed. One $1 USD Demo Digit Matches contract was purchased and settled as
-a loss using development modules loaded into the authenticated browser. The
-record was recovered after a page reload and account reconnection without
-sending another request. The authorization backend update was deployed
-separately. Neither model is independently validated or
+records. The trading dashboard connects the module to authenticated execution.
+One $1 USD Demo Digit Matches contract was purchased and settled as a loss
+using development modules loaded into the authenticated browser. The record
+was recovered after a page reload and account reconnection without sending
+another request. Neither model is independently validated or
 promoted, and no predictive advantage is claimed. Neural/deep-learning models
 and the complete 75-role system are **not implemented**.
 
@@ -41,10 +39,12 @@ A confirmed loss keeps the original digit; a confirmed match closes the cycle.
 An interrupted or changed feed segment stops further purchases using that
 cycle. Once stopped and with no unresolved order, the user may explicitly close
 the cycle, preserving its history. Open contracts are reconciled on the original
-account after reconnect or refresh. An interrupted buy without a confirmed
-contract ID remains unknown and blocks further purchases; statement entries
-cannot safely be attributed solely by time, stake or digit, and the dashboard
-does not yet provide a way to resolve such an ambiguous purchase.
+account after reconnect or refresh. If a purchase response is lost, trading
+stops and the attempt and cycle are recorded as unconfirmed, without retrying
+or attempting to recover the contract. The user may start a new cycle manually;
+the original contract may nevertheless exist, so a later purchase can create
+additional exposure. Unconfirmed stakes count against the session stop loss,
+but are not reported as confirmed profit, loss or payout.
 
 The requested role numbering contains 1–65 and 86–95: those 75 roles are mapped
 below. Positions 66–85 and 96–100 are not created. Existing leadership and
@@ -83,7 +83,7 @@ precision. Timestamps alone cannot prove continuity.
 | Dashboard, live integration, history persistence and import | Dedicated navigation, live status, prediction and report history, IndexedDB settings; historical import is API-only |
 | Machine learning, hidden-state, neural and generator-forensics research | A first-order Markov model only; neural, hidden-state and generator forensics are not implemented |
 | Professional contribution registry | This implementation map only; no runtime professional dashboard or execution tracking |
-| Independent validation and production readiness | No independently supported predictive advantage; one Demo loss was verified, while live loss retry, win progression and ambiguous-purchase resolution remain unverified or incomplete |
+| Independent validation and production readiness | No independently supported predictive advantage; one Demo loss was verified, while live loss retry and win progression were not verified |
 
 `recurrenceProbabilities` accepts conditional hazards, not marginal
 probabilities. The five-draw independent uniform baseline is 40.951%; that

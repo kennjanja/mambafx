@@ -1,5 +1,5 @@
 import { toMajor, toMinor } from "./derivExecution.js?v=1";
-import { ACCOUNTING_SCALE } from "./tradingRuntime.js?v=1";
+import { ACCOUNTING_SCALE } from "./tradingRuntime.js?v=2";
 
 function text(value) {
   return value == null ? "—" : String(value);
@@ -47,7 +47,8 @@ export function formatTradingState(snapshot) {
     `${snapshot.error ? ` | ${snapshot.error}` : ""}\nAccount: ${state.accountId}\n` +
     `Digit: ${text(cycle?.digit)} | Attempts: ${cycle?.attempts ?? 0} | Stake: ${order ? money(order.stake) : "—"}\n` +
     `Contract: ${text(order?.contractId)} | Status: ${text(order?.phase)}\n` +
-    `Confirmed wins: ${wins} | losses: ${losses} | Cycle P/L: ${cycle ? money(cycle.pnl) : "—"} | Session P/L: ${money(state.session.pnl)} ${state.session.currency}`;
+    `Confirmed wins: ${wins} | losses: ${losses} | Cycle P/L: ${cycle ? money(cycle.pnl) : "—"} | Confirmed session P/L: ${money(state.session.pnl)} ${state.session.currency}` +
+    `\nUnconfirmed purchase exposure: ${money(state.session.uncertainExposure ?? 0)} ${state.session.currency}`;
 }
 
 export function formatTradingHistory(state) {
@@ -55,7 +56,8 @@ export function formatTradingHistory(state) {
   if (state.accountingScale !== ACCOUNTING_SCALE) return "Execution history has an incompatible accounting scale.";
   const money = n => toMajor(n, ACCOUNTING_SCALE);
   return state.history.slice().reverse().map(row => {
-    if (row.cycle) return `Cycle ${row.cycle.id} | digit ${row.cycle.digit} | ${row.cycle.attempts} attempts | staked ${money(row.cycle.staked)} | payout ${money(row.cycle.staked + row.cycle.pnl)} | P/L ${money(row.cycle.pnl)} | ${row.termination}`;
+    if (row.cycle) return `Cycle ${row.cycle.id} | digit ${row.cycle.digit} | ${row.cycle.attempts} attempts | attempted stake ${money(row.cycle.staked)} | payout ${row.cycle.uncertainExposure ? "unknown" : money(row.cycle.staked + row.cycle.pnl)} | confirmed P/L ${money(row.cycle.pnl)} | ${row.termination}`;
+    if (row.phase === "unknown") return `Unconfirmed purchase | digit ${row.digit} | attempted stake ${money(row.stake)} | outcome and payout unknown`;
     return `Contract ${row.contractId} | digit ${row.digit} | ${row.result.status} | stake ${money(row.stake)} | payout ${money(row.result.payout)} | P/L ${money(row.result.profit)}`;
   }).join("\n");
 }
@@ -89,6 +91,7 @@ export function attachTradingDashboard(service, accountStatus, refreshBalance, r
     <h3>Cycle prediction (or latest combined research prediction)</h3><pre data-field="prediction">Waiting for a combined prediction.</pre>
     <h3>Trading settings</h3>
     <p>Contract type: Digit Matches. The selected digit remains fixed until a confirmed win.</p>
+    <p>If a purchase response is lost, trading stops without retry or recovery. Starting again can create an additional contract; unconfirmed stake counts against the session stop loss.</p>
     <p>Daily targets reset at midnight in Africa/Nairobi.</p>
     <form class="sm-trading-form" data-form="settings">
       <label>Duration (ticks) <input name="durationTicks" type="number" min="1" max="10" value="1" required></label>

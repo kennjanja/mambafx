@@ -1,4 +1,4 @@
-import { accountDay, assessTradeRisk } from "./tradingRisk.js";
+import { accountDay, assessTradeRisk } from "./tradingRisk.js?v=2";
 
 const CONFIG_KEYS = ["baseStake", "maximumStake", "maximumExposure", "cycleLoss", "sessionLoss", "cycleTarget",
   "sessionTarget", "dailyTarget", "maxAttempts", "martingale", "multiplierNumerator", "multiplierDenominator",
@@ -22,6 +22,26 @@ export class ResearchExecution {
     await this.store.save(structuredClone(this.state));
   }
 
+  archiveUnknown() {
+    const { order, cycle, session, history } = this.state;
+    if (!order || !["buying", "unknown"].includes(order.phase) || !cycle || !session || !Array.isArray(history) ||
+        !Number.isSafeInteger(order.stake) || order.stake <= 0 ||
+        !Number.isSafeInteger(cycle.attempts) || cycle.attempts < 0 ||
+        !Number.isSafeInteger(cycle.staked) || cycle.staked < 0 ||
+        !Number.isSafeInteger(session.uncertainExposure ?? 0) || (session.uncertainExposure ?? 0) < 0) {
+      throw new Error("Unconfirmed purchase record is invalid");
+    }
+    const exposure = (session.uncertainExposure ?? 0) + order.stake;
+    const staked = cycle.staked + order.stake, attempts = cycle.attempts + 1;
+    if (![exposure, staked, attempts].every(Number.isSafeInteger)) throw new Error("Unconfirmed purchase would overflow the ledger");
+    session.uncertainExposure = exposure;
+    history.push({ ...structuredClone(order), phase: "unknown" });
+    history.push({ cycle: { ...structuredClone(cycle), staked, attempts, unresolved: false, uncertainExposure: order.stake },
+      termination: "purchase outcome unknown; not reconciled" });
+    this.state.order = null;
+    this.state.cycle = null;
+  }
+
   async restore(accountId) {
     if (this.host.ownsExecution() !== true) throw new Error("Exclusive execution ownership is required");
     const saved = await this.store.load(accountId);
@@ -31,11 +51,13 @@ export class ResearchExecution {
     if (this.state.order?.phase === "pricing") {
       this.state.order.phase = "cancelled";
       this.state.reason = "Restarted before purchase";
-    } else if (this.state.order?.phase === "buying") {
-      this.state.order.phase = "unknown";
-      this.state.reason = "Purchase outcome unknown after restart";
-    } else {
+    } else if (["buying", "unknown"].includes(this.state.order?.phase)) {
+      this.archiveUnknown();
+      this.state.reason = "Purchase outcome unknown; stopped without retry or reconciliation";
+    } else if (this.state.order?.phase === "open") {
       this.state.reason = "Restored; reconcile before restarting";
+    } else {
+      this.state.reason = "Restored; trading stopped";
     }
     await this.save();
     return structuredClone(this.state);
@@ -194,12 +216,12 @@ export class ResearchExecution {
       try { buy = await this.host.buy(order.proposalId, order.quotedPrice); }
       catch {
         order.phase = "unknown";
-        throw new Error("Purchase outcome unknown; reconcile the account");
+        throw new Error("Purchase outcome unknown; stopped without retry or reconciliation");
       }
       if (!buy || !/^[1-9]\d*$/.test(String(buy.contractId)) || buy.buyPrice !== order.stake ||
           (buy.transactionId !== undefined && !/^[1-9]\d*$/.test(String(buy.transactionId)))) {
         order.phase = "unknown";
-        throw new Error("Purchase response is incomplete; reconcile the account");
+        throw new Error("Purchase response is incomplete; stopped without retry or reconciliation");
       }
       order.contractId = String(buy.contractId);
       if (buy.transactionId !== undefined) order.transactionId = String(buy.transactionId);
@@ -209,6 +231,7 @@ export class ResearchExecution {
       await this.save();
     } catch (error) {
       if (this.state?.order?.phase === "pricing") this.state.order.phase = "cancelled";
+      if (this.state?.order?.phase === "unknown") this.archiveUnknown();
       this.running = false;
       this.generation++;
       if (this.state) { this.state.reason = error.message; await this.save(); }
