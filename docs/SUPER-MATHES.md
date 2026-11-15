@@ -9,6 +9,18 @@ or accesses credentials. Neither model is independently validated or promoted,
 and no predictive advantage is claimed. Neural/deep-learning models and the
 complete 75-role system are **not implemented**.
 
+Work in progress: a configurable linear pool of the frequency and Markov
+models can produce a research prediction when at least 20 observations and
+five transitions from the current digit are available. These minima are
+operational data checks, not proof of statistical reliability. The individual
+distributions, weight, model versions and transition count are frozen with
+the prediction. Tied combined leaders are rejected. The independent evaluator
+scores the combined model only when this data gate and the unique-leader rule
+are satisfied; paired log-loss and Brier differences use the same eligible
+outcomes. No calibration or profitability claim follows from combining models.
+Automated trading, account separation and execution risk controls are not
+implemented in this work-in-progress version.
+
 The requested role numbering contains 1–65 and 86–95: those 75 roles are mapped
 below. Positions 66–85 and 96–100 are not created. Existing leadership and
 validation personnel remain responsible for supervision; no additional staff

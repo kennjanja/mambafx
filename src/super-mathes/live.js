@@ -1,8 +1,8 @@
-import { createResearchPrediction } from "./recurrence.js";
-import { openResearchStore } from "./storage.js?v=2";
-import { frequencyDistribution, rankDistribution, transitionDistribution } from "./models.js";
+import { createResearchPrediction } from "./recurrence.js?v=3";
+import { openResearchStore } from "./storage.js?v=3";
+import { combinedPrediction, frequencyDistribution, rankDistribution, transitionDistribution } from "./models.js?v=3";
 import { walkForward } from "./validation.js";
-import { independentValidation } from "./independentValidation.js?v=2";
+import { independentValidation } from "./independentValidation.js?v=3";
 
 export function sourceId(endpoint, symbol, decimals) {
   if (typeof endpoint !== "string" || !endpoint || typeof symbol !== "string" || !symbol ||
@@ -152,9 +152,9 @@ export function createLiveResearch({ openStore = openResearchStore, report = err
         return store.createPrediction({ ...frozen, hazards: frozen.recurrence.hazards }, expectedSequence, createdAt);
       });
     },
-    createModelPrediction(windowSize = 1000, model = "frequency") {
+    createModelPrediction(windowSize = 1000, model = "frequency", frequencyWeight = 0.5) {
       if (!Number.isInteger(windowSize) || windowSize < 20 || windowSize > 10000) throw new Error("Window must be between 20 and 10000");
-      if (!["frequency", "markov"].includes(model)) throw new Error("Invalid research model");
+      if (!["frequency", "markov", "combined"].includes(model)) throw new Error("Invalid research model");
       return enqueue(async store => {
         try { await stopStale(store); } catch (error) { fatalError(error); throw error; }
         const source = activeSource, token = arrival;
@@ -163,15 +163,18 @@ export function createLiveResearch({ openStore = openResearchStore, report = err
         const rows = await store.list("observations", source, windowSize);
         const digits = rows.filter(row => row.segment === state.segment && row.sequence <= state.lastSeq).reverse().map(row => row.digit);
         if (digits.length < 20) throw new Error("At least 20 consecutive observations are required");
-        const probabilities = model === "frequency" ? frequencyDistribution(digits) : transitionDistribution(digits);
+        const evidence = model === "combined" ? combinedPrediction(digits, { frequencyWeight }) : undefined;
+        const probabilities = evidence ? evidence.probabilities : model === "frequency" ? frequencyDistribution(digits) : transitionDistribution(digits);
         const ranking = rankDistribution(probabilities);
         if (ranking[0].probability === ranking[1].probability) throw new Error("Top digits are tied; no digit selected");
         if (arrival !== token || activeSource !== source) throw new Error("Feed advanced while preparing prediction; try again");
         const selectedDigit = ranking[0].digit;
         const input = {
           id: crypto.randomUUID(), source, timestamp: state.lastEpoch, selectedDigit, probabilities,
-          hazards: Array(5).fill(probabilities[selectedDigit]), model: model === "frequency" ? "smoothed-frequency" : "smoothed-first-order-markov",
+          hazards: Array(5).fill(probabilities[selectedDigit]),
+          model: model === "frequency" ? "smoothed-frequency" : model === "markov" ? "smoothed-first-order-markov" : "combined-frequency-markov",
           assumptions: `Research only; ${digits.length} consecutive observations, alpha=1; constant independent-draw hazard assumed, not established.`,
+          ...(evidence ? { evidence } : {}),
         };
         return store.createPrediction(input, state.lastSeq, Date.now());
       });
@@ -192,7 +195,7 @@ export function createLiveResearch({ openStore = openResearchStore, report = err
         return report;
       });
     },
-    async validateIndependent(source, warmup = 500, windowSize = 1000) {
+    async validateIndependent(source, warmup = 500, windowSize = 1000, frequencyWeight = 0.5) {
       if (typeof source !== "string" || !source) throw new Error("Choose a source to validate");
       const snapshot = await enqueue(async store => {
         const state = await store.getSource(source);
@@ -203,7 +206,7 @@ export function createLiveResearch({ openStore = openResearchStore, report = err
           rows: rows.filter(row => row.segment === state.segment && row.sequence <= state.lastSeq).reverse(),
         };
       });
-      const result = await runValidation(snapshot.rows, { warmup, windowSize });
+      const result = await runValidation(snapshot.rows, { warmup, windowSize, frequencyWeight });
       const record = {
         id: crypto.randomUUID(), kind: "independent-validation", source, createdAt: now(),
         segment: snapshot.state.segment, throughSequence: snapshot.state.lastSeq,
@@ -231,7 +234,8 @@ export function createLiveResearch({ openStore = openResearchStore, report = err
     },
     getSetting(key) { return enqueue(store => store.setting(key)); },
     setSetting(key, value) {
-      if (!(key === "model" && ["frequency", "markov"].includes(value)) &&
+      if (!(key === "model" && ["frequency", "markov", "combined"].includes(value)) &&
+          !(key === "frequencyWeight" && Number.isFinite(value) && value > 0 && value < 1) &&
           !(["windowSize", "warmup"].includes(key) && Number.isInteger(value) && value >= 1 && value <= 10000)) throw new Error("Invalid research setting");
       return enqueue(store => store.setting(key, value));
     },

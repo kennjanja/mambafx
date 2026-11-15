@@ -14,7 +14,7 @@ export function recurrenceProbabilities(hazards) {
   return { hazards: [...hazards], within, exact, notWithinFive: survival };
 }
 
-export function createResearchPrediction({ id, source, timestamp, probabilities, selectedDigit, hazards, model, assumptions }) {
+export function createResearchPrediction({ id, source, timestamp, probabilities, selectedDigit, hazards, model, assumptions, evidence }) {
   if (typeof id !== "string" || !id || typeof source !== "string" || !source ||
       !Number.isSafeInteger(timestamp) || timestamp < 0 || !Number.isInteger(selectedDigit) ||
       selectedDigit < 0 || selectedDigit > 9 || !Array.isArray(probabilities) ||
@@ -26,13 +26,30 @@ export function createResearchPrediction({ id, source, timestamp, probabilities,
     throw new Error("Immediate hazard must match the selected digit probability");
   }
   const recurrence = recurrenceProbabilities(hazards);
+  let frozenEvidence;
+  if (evidence !== undefined) {
+    const { frequency, markov, frequencyWeight, minimumTransitions, transitions, observations, frequencyLeader, markovLeader, versions } = evidence;
+    if (![frequency, markov].every(v => Array.isArray(v) && v.length === 10 && validVector(v) && v.every(p => p <= 1)) ||
+        !Number.isFinite(frequencyWeight) || frequencyWeight <= 0 || frequencyWeight >= 1 ||
+        !Number.isInteger(minimumTransitions) || minimumTransitions < 1 || !Number.isInteger(transitions) ||
+        transitions < minimumTransitions || !Number.isInteger(observations) || observations < 20 ||
+        ![frequencyLeader, markovLeader].every(d => d === null || Number.isInteger(d) && d >= 0 && d <= 9) ||
+        !versions || !["frequency", "markov", "combination"].every(k => typeof versions[k] === "string" && versions[k])) {
+      throw new Error("Invalid combined model evidence");
+    }
+    if (probabilities.some((p, i) => Math.abs(p - (frequencyWeight * frequency[i] + (1 - frequencyWeight) * markov[i])) > 1e-12)) {
+      throw new Error("Combined distribution does not match model evidence");
+    }
+    frozenEvidence = Object.freeze({ frequency: Object.freeze([...frequency]), markov: Object.freeze([...markov]), frequencyWeight,
+      minimumTransitions, transitions, observations, frequencyLeader, markovLeader, versions: Object.freeze({ ...versions }) });
+  }
   const prediction = Object.freeze({
     id, source, timestamp, selectedDigit, probabilities: Object.freeze([...probabilities]),
     recurrence: Object.freeze({
       hazards: Object.freeze(recurrence.hazards), within: Object.freeze(recurrence.within),
       exact: Object.freeze(recurrence.exact), notWithinFive: recurrence.notWithinFive,
     }),
-    model, assumptions,
+    model, assumptions, ...(frozenEvidence ? { evidence: frozenEvidence } : {}),
   });
   return Object.freeze({ prediction, observations: Object.freeze([]), appearancePosition: null, status: "Pending Immediate Outcome" });
 }

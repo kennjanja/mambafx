@@ -1,4 +1,4 @@
-import { rankDistribution } from "./models.js";
+import { rankDistribution } from "./models.js?v=3";
 
 function independentReport(report) {
   const result = report.result, p = result.protocol;
@@ -17,7 +17,9 @@ function independentReport(report) {
     lines.push(`\n${name}: ${["top1", "top2", "top3", "logLoss", "brier"].map(k => `${k} ${fmt(model.immediate[k])}`).join("; ")}`);
     lines.push(`Paired gain vs uniform (positive is lower loss): log ${fmt(model.immediate.uniformLogLossGain)}; Brier ${fmt(model.immediate.uniformBrierGain)}`);
     lines.push(`Paired gain vs frequency: log ${fmt(model.immediate.frequencyLogLossGain)}; Brier ${fmt(model.immediate.frequencyBrierGain)}`);
-    lines.push(`Periods (top-1 / log loss / Brier): ${model.periods.map(x => `${x.top1 === null ? "n/a" : x.top1.toFixed(4)} / ${x.logLoss.toFixed(4)} / ${x.brier.toFixed(4)}`).join("; ")}`);
+    if (model.immediate.markovLogLossGain) lines.push(`Paired gain vs Markov: log ${fmt(model.immediate.markovLogLossGain)}; Brier ${fmt(model.immediate.markovBrierGain)}`);
+    const f = x => x === null ? "n/a" : x.toFixed(4);
+    lines.push(`Periods (top-1 / log loss / Brier): ${model.periods.map(x => `${f(x.top1)} / ${f(x.logLoss)} / ${f(x.brier)}`).join("; ")}`);
     lines.push("Recurrence (non-overlapping windows; observed [CI], model / uniform / frequency expected):");
     for (const [key, m] of Object.entries(model.recurrence.model)) {
       const uniform = model.recurrence.uniform[key], frequency = model.recurrence.frequency[key];
@@ -40,6 +42,7 @@ export function attachDashboard(service) {
   const message = text => { el("message").textContent = text; };
   const windowSize = () => Number(el("window").value);
   const warmup = () => Number(el("warmup").value);
+  const frequencyWeight = () => Number(el("weight").value);
 
   async function render() {
     if (busy || !document.getElementById("page-supermathes").classList.contains("active")) return;
@@ -75,7 +78,8 @@ export function attachDashboard(service) {
         const p = latest.prediction, r = p.recurrence;
         el("prediction").textContent = `${p.model} | selected ${p.selectedDigit} | ${latest.status}\n` +
           rankDistribution(p.probabilities).map(x => `${x.digit}: ${percent(x.probability)}`).join("   ") +
-          `\nOrigin sequence ${latest.originSequence}; ${p.assumptions}`;
+          `\nOrigin sequence ${latest.originSequence}; ${p.assumptions}` +
+          (p.evidence ? `\nFrequency leader ${p.evidence.frequencyLeader ?? "tied"}; Markov leader ${p.evidence.markovLeader ?? "tied"}; agreement ${p.evidence.frequencyLeader === null || p.evidence.markovLeader === null ? "unavailable" : p.evidence.frequencyLeader === p.evidence.markovLeader ? "yes" : "no"}; frequency weight ${p.evidence.frequencyWeight}; Markov transitions ${p.evidence.transitions}; calibrated confidence unavailable\nFrequency: ${p.evidence.frequency.map(percent).join(" ")}\nMarkov: ${p.evidence.markov.map(percent).join(" ")}` : "");
         const immediate = latest.observations.length ? (latest.observations[0].digit === p.selectedDigit ? "hit" : "miss") : "pending";
         el("recurrence").textContent = `Original digit: ${p.selectedDigit}; immediate: ${immediate}; first appearance: ${latest.appearancePosition ?? "none yet"}\n` +
           `Outcomes: ${latest.observations.map((o, i) => `${i + 1}:${o.digit}`).join("  ") || "pending"}\n` +
@@ -104,19 +108,25 @@ export function attachDashboard(service) {
   el("save").addEventListener("click", () => run(async () => {
     const w = windowSize(), n = warmup();
     if (!Number.isInteger(w) || w < 20 || w > 10000 || !Number.isInteger(n) || n < 1 || n >= w) throw new Error("Require 20–10000 observations and a warmup smaller than the window");
+    if (!Number.isFinite(frequencyWeight()) || frequencyWeight() <= 0 || frequencyWeight() >= 1) throw new Error("Both combined model weights must be positive");
     await service.setSetting("windowSize", w);
     await service.setSetting("warmup", n);
     await service.setSetting("model", el("model").value);
+    await service.setSetting("frequencyWeight", frequencyWeight());
   }, "Research settings saved."));
-  el("predict").addEventListener("click", () => run(() => service.createModelPrediction(windowSize(), el("model").value), "Research prediction recorded."));
-  el("benchmark").addEventListener("click", () => run(() => service.benchmark(windowSize(), warmup(), el("model").value), "Benchmark saved."));
+  el("predict").addEventListener("click", () => run(() => service.createModelPrediction(windowSize(), el("model").value, frequencyWeight()), "Research prediction recorded."));
+  el("benchmark").addEventListener("click", () => run(() => {
+    if (el("model").value === "combined") throw new Error("Use independent validation for the combined model");
+    return service.benchmark(windowSize(), warmup(), el("model").value);
+  }, "Benchmark saved."));
   el("independent").addEventListener("click", () => run(
-    () => service.validateIndependent(el("source").value || service.status.activeSource, Number(el("validation-warmup").value), windowSize()),
+    () => service.validateIndependent(el("source").value || service.status.activeSource, Number(el("validation-warmup").value), windowSize(), frequencyWeight()),
     "Independent validation report saved."));
-  Promise.all([service.getSetting("windowSize"), service.getSetting("warmup"), service.getSetting("model")]).then(([w, n, model]) => {
+  Promise.all([service.getSetting("windowSize"), service.getSetting("warmup"), service.getSetting("model"), service.getSetting("frequencyWeight")]).then(([w, n, model, weight]) => {
     if (w) el("window").value = w.value;
     if (n) el("warmup").value = n.value;
     if (model) el("model").value = model.value;
+    if (weight) el("weight").value = weight.value;
   }).catch(error => message(`Research error: ${error.message}`));
   setInterval(render, 1500);
 }

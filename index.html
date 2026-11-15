@@ -1454,7 +1454,8 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       <div class="gc-sub">Analysis only. These models and recurrence assumptions are unvalidated and do not imply a trading advantage.</div>
       <p id="sm-status" role="status">Starting research storage…</p>
       <label>History source <select id="sm-source"><option value="">Current live source</option></select></label>
-      <label>Research model <select id="sm-model"><option value="frequency">Smoothed frequency</option><option value="markov">First-order Markov</option></select></label>
+      <label>Research model <select id="sm-model"><option value="frequency">Smoothed frequency</option><option value="markov">First-order Markov</option><option value="combined">Combined research models</option></select></label>
+      <label>Combined frequency weight <input id="sm-weight" type="number" min="0.01" max="0.99" step="0.01" value="0.5"></label>
       <label>Observation window <input id="sm-window" type="number" min="20" max="10000" value="1000"></label>
       <label>Benchmark warmup <input id="sm-warmup" type="number" min="1" max="9999" value="100"></label>
       <label>Validation warmup <input id="sm-validation-warmup" type="number" min="500" max="10000" value="500"></label>
@@ -34517,7 +34518,7 @@ try {
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/analysis/sosSowPage.js?v=9"></script>
 <script type="module" src="src/ldpe/bridge.js?v=15"></script>
-<script type="module" src="src/super-mathes/browser.js?v=2"></script>
+<script type="module" src="src/super-mathes/browser.js?v=3"></script>
 <script type="module" src="src/ldpe/prediction-digit-bot.js?v=2"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>

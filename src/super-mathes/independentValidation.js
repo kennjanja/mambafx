@@ -1,11 +1,11 @@
 import { brier, logLoss } from "./math.js";
-import { rankDistribution, UNIFORM } from "./models.js";
+import { rankDistribution, UNIFORM } from "./models.js?v=3";
 
 const BLOCK = 100;
 const PERIODS = 3;
 const MIN_BLOCKS = 30;
 const REPLICATES = 500;
-const MODELS = ["frequency", "markov"];
+const MODELS = ["frequency", "markov", "combined"];
 
 function metric() { return { n: 0, observed: 0, predicted: 0 }; }
 function add(target, actual, predicted) {
@@ -77,15 +77,16 @@ function checkObservations(observations) {
 
 // Fixed protocol: chronological rolling prefixes, three test periods, and
 // non-overlapping 100-observation bootstrap blocks. No model selection occurs.
-export function independentValidation(observations, { warmup = 500, windowSize = 1000 } = {}) {
+export function independentValidation(observations, { warmup = 500, windowSize = 1000, frequencyWeight = 0.5 } = {}) {
   checkObservations(observations);
   if (!Number.isInteger(warmup) || warmup < 500) throw new Error("Independent validation requires at least 500 training observations");
   if (!Number.isInteger(windowSize) || windowSize < 20 || windowSize > 10000) throw new Error("Invalid model window");
+  if (!Number.isFinite(frequencyWeight) || frequencyWeight <= 0 || frequencyWeight >= 1) throw new Error("Both model weights must be positive");
   const available = Math.max(0, observations.length - warmup);
   const periodLength = Math.floor(available / PERIODS / BLOCK) * BLOCK;
   const totalBlocks = PERIODS * periodLength / BLOCK;
   const protocol = {
-    warmup, windowSize, periods: PERIODS, periodLength, blockSize: BLOCK, blocks: totalBlocks,
+    warmup, windowSize, frequencyWeight, minimumTransitions: 5, periods: PERIODS, periodLength, blockSize: BLOCK, blocks: totalBlocks,
     availableTestObservations: available, evaluatedObservations: periodLength * PERIODS,
     discardedTail: available - periodLength * PERIODS, bootstrapReplicates: REPLICATES,
     confidenceMethod: "Stratified 100-observation block bootstrap; assumes blocks are sufficiently weakly dependent.",
@@ -105,7 +106,7 @@ export function independentValidation(observations, { warmup = 500, windowSize =
   const periodCalibration = Object.fromEntries([...MODELS, "uniform"].map(model => [model,
     Array.from({ length: PERIODS }, () => Array.from({ length: 10 }, () => ({ n: 0, probability: 0, observed: 0 })))]));
   const immediate = Object.fromEntries(MODELS.map(model => [model, ["top1", "top2", "top3", "logLoss", "brier",
-    "uniformLogLossGain", "frequencyLogLossGain", "uniformBrierGain", "frequencyBrierGain"]]));
+    "uniformLogLossGain", "frequencyLogLossGain", "markovLogLossGain", "uniformBrierGain", "frequencyBrierGain", "markovBrierGain"]]));
   const recurrenceKeys = [
     ...[2, 3, 4, 5].map(n => `within${n}`),
     ...[1, 2, 3, 4, 5].map(n => `exact${n}`),
@@ -118,6 +119,10 @@ export function independentValidation(observations, { warmup = 500, windowSize =
     const frequency = counts.map(c => c / (Math.min(i, windowSize) + 10));
     const row = transitions[digits[i - 1]], rowTotal = row.reduce((a, b) => a + b, 0);
     const vectors = { frequency, markov: row.map(c => c / rowTotal), uniform: UNIFORM };
+    if (rowTotal - 10 >= 5) {
+      const combined = frequency.map((p, d) => frequencyWeight * p + (1 - frequencyWeight) * vectors.markov[d]);
+      if (uniqueTop(combined) !== null) vectors.combined = combined;
+    }
     const actual = digits[i];
     distributionDifference += vectors.markov.reduce((sum, p, d) => sum + Math.abs(p - frequency[d]), 0) / 2;
     distributionCount++;
@@ -132,8 +137,10 @@ export function independentValidation(observations, { warmup = 500, windowSize =
       if (model !== "uniform") {
         addMetric(block, `${model}:uniformLogLossGain`, logLoss(UNIFORM, actual) - loss);
         addMetric(block, `${model}:frequencyLogLossGain`, logLoss(frequency, actual) - loss);
+        addMetric(block, `${model}:markovLogLossGain`, logLoss(vectors.markov, actual) - loss);
         addMetric(block, `${model}:uniformBrierGain`, brier(UNIFORM, actual) - score);
         addMetric(block, `${model}:frequencyBrierGain`, brier(frequency, actual) - score);
+        addMetric(block, `${model}:markovBrierGain`, brier(vectors.markov, actual) - score);
       }
       vector.forEach((p, digit) => {
         const bin = calibration[model][Math.min(9, Math.floor(p * 10))];
@@ -144,6 +151,7 @@ export function independentValidation(observations, { warmup = 500, windowSize =
     }
     if ((i - warmup) % 5 === 0) {
       for (const model of MODELS) {
+        if (!vectors[model]) continue;
         const selected = uniqueTop(vectors[model]);
         if (selected === null) continue;
         const outcomes = digits.slice(i, i + 5), hit = outcomes.indexOf(selected) + 1;
