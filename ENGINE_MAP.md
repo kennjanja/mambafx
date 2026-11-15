@@ -146,7 +146,7 @@ Pattern-match based contract firing. Matches recent tick sequences against store
 Multi-filter bot: requires MACD histogram flip, DI bias alignment, BB%B threshold, ADX minimum, and historical pattern flip before firing. Supports Martingale progression.
 
 ### Rise/Fall Autobot (`rfaPageInit`)
-ADX + pattern-based Rise/Fall contract automation with cooldown logic.
+Scans active volatility indices using rolling 50-tick Rise/Fall percentages and closed 1-minute market-control bias. Trades one market cycle at a time with per-cycle profit and consecutive-loss limits, session-wide net profit/loss limits, and Martingale after losses.
 
 ### ADX Bot (`adxPageInit`)
 Fires when ADX > threshold and +DI is rising. Configurable stake and cooldown.
