@@ -11,6 +11,7 @@ function harness(saved = null, overrides = {}) {
   for (const id of ['rfdStatus', 'rfdSummary', 'rfdToggle']) elements[id] = {textContent:''};
   const memory = new Map(saved ? [['mfx.dashboard-auto.session.v1', saved]] : []);
   const sent = [], sockets = [], pending = {}, recovery = new Set();
+  let now = 10000;
   class Socket {
     constructor() { this.readyState = 1; sockets.push(this); }
     send(data) { sent.push(JSON.parse(data)); }
@@ -20,7 +21,7 @@ function harness(saved = null, overrides = {}) {
     window: {}, document: {getElementById: id => elements[id] || null},
     navigator: {locks: {request: (key, options, callback) => Promise.resolve(callback({name:key}))}},
     localStorage: {getItem: key => memory.get(key) || null, setItem: (key, value) => memory.set(key, value)},
-    WebSocket: Socket, Date: {now: () => 10000 * 1000}, console, confirm: () => true,
+    WebSocket: Socket, Date: {now: () => now * 1000}, console, confirm: () => true,
     setTimeout: (fn, delay) => { if (delay < 10000) fn(); return 1; }, clearTimeout(){},
     setInterval: () => 1, clearInterval(){},
     gridAuthed: true, gridLoginId: 'DEMO', gridIsVirtual: true, gridBalance: 1000, gridCurrency: 'USD',
@@ -58,7 +59,7 @@ function harness(saved = null, overrides = {}) {
     pending[b.req_id]({contract_id:id, buy_price:p.amount}, null);
     return b;
   }
-  return {ctx, bot, state, sent, pending, recovery, elements, memory, feed, message, prime, tick, start, proposal, buy};
+  return {ctx, bot, state, sent, pending, recovery, elements, memory, feed, message, prime, tick, start, proposal, buy, setTime(value){now = value;}};
 }
 
 test('one-tick orders use the strict dashboard signal, martingale and market rotation', async () => {
@@ -73,6 +74,8 @@ test('one-tick orders use the strict dashboard signal, martingale and market rot
   h.buy();
   assert.equal(h.bot.handleContract({contract_id:123,is_sold:1,profit:-1}), true);
   h.tick('R_10', 160);
+  assert.equal(h.sent.filter(x => x.proposal).length, 1);
+  h.tick('R_10', 161);
   assert.equal(h.proposal().amount, 2);
   h.buy(124);
   h.bot.handleContract({contract_id:124,is_sold:1,profit:-2});
@@ -101,12 +104,76 @@ test('market profit switches market and a winning trade resets martingale', asyn
   await h.start(); h.prime(); h.buy();
   h.bot.handleContract({contract_id:123,is_sold:1,profit:-0.5});
   h.tick('R_10', 160);
+  h.tick('R_10', 161);
   assert.equal(h.proposal().amount, 2);
   h.buy(124);
   h.bot.handleContract({contract_id:124,is_sold:1,profit:1.6});
   assert.equal(h.state().active, null);
   assert.equal(h.state().nextStake, 1);
   assert.match(h.elements.rfdStatus.textContent, /Market take profit reached.*1.10/);
+});
+
+test('skips one tick then continues in the original direction even if the signal reverses', async () => {
+  const h = harness(null, {rfdMarketTP:'4', rfdMarketSL:'8', rfdOverallSL:'20'});
+  await h.start(); h.prime('R_10', true); h.buy();
+  let price = -160;
+  for (let i = 0; i < 100; i++) h.tick('R_10', ++price);
+  h.bot.handleContract({contract_id:123,is_sold:1,profit:-1});
+  assert.equal(h.sent.filter(x => x.proposal).length, 1);
+  h.tick('R_10', ++price);
+  assert.equal(h.sent.filter(x => x.proposal).length, 1);
+  h.tick('R_10', ++price);
+  assert.equal(h.sent.filter(x => x.proposal).length, 2);
+  assert.equal(h.proposal().contract_type, 'PUT');
+  assert.equal(h.proposal().amount, 2);
+  h.buy(124);
+  h.bot.handleContract({contract_id:124,is_sold:1,profit:1});
+  h.tick('R_10', ++price);
+  assert.equal(h.sent.filter(x => x.proposal).length, 2);
+  h.tick('R_10', ++price);
+  assert.equal(h.sent.filter(x => x.proposal).length, 3);
+  assert.equal(h.proposal().contract_type, 'PUT');
+  assert.equal(h.proposal().amount, 1);
+});
+
+test('does not count stale ticks towards the one-tick delay', async () => {
+  const h = harness();
+  await h.start(); h.prime(); h.buy();
+  h.setTime(10020);
+  h.bot.handleContract({contract_id:123,is_sold:1,profit:-1});
+  assert.equal(h.sent.filter(x => x.proposal).length, 1);
+  h.tick('R_10', 99, 10000);
+  assert.equal(h.state().skipTicks, 1);
+  h.tick('R_10', 100, 10020);
+  assert.equal(h.sent.filter(x => x.proposal).length, 1);
+  h.tick('R_10', 101, 10020);
+  assert.equal(h.sent.filter(x => x.proposal).length, 2);
+  assert.equal(h.proposal().contract_type, 'CALL');
+  assert.equal(h.proposal().amount, 2);
+});
+
+test('recovered settlement while stopped never starts another trade', async () => {
+  const h = harness();
+  await h.start(); h.prime(); h.buy();
+  await h.bot.toggle();
+  h.bot.handleContract({contract_id:123,is_sold:1,profit:-1});
+  assert.equal(h.sent.filter(x => x.proposal).length, 1);
+  assert.equal(h.state().direction, 'RISE');
+});
+
+test('preserves the locked direction and remaining tick delay after restart', async () => {
+  const h = harness();
+  await h.start(); h.prime(); h.buy();
+  h.bot.handleContract({contract_id:123,is_sold:1,profit:-1});
+  assert.equal(h.state().skipTicks, 1);
+  const reloaded = harness(JSON.stringify(h.state()));
+  await reloaded.start();
+  reloaded.tick('R_10', 100);
+  assert.equal(reloaded.state().skipTicks, 0);
+  assert.equal(reloaded.sent.filter(x => x.proposal).length, 0);
+  reloaded.tick('R_10', 99);
+  assert.equal(reloaded.proposal().contract_type, 'CALL');
+  assert.equal(reloaded.proposal().amount, 2);
 });
 
 test('disconnected pending buy is persisted as unknown and blocks restart', async () => {

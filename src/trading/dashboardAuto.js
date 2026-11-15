@@ -6,7 +6,7 @@
   const WINDOW = 100;
   const $ = id => document.getElementById(id);
   const finite = value => Number.isFinite(value);
-  const empty = () => ({account: null, config: null, total: 0, marketPnl: 0, active: null, lastMarket: null, nextStake: null, trade: null, wins: 0, losses: 0});
+  const empty = () => ({account: null, config: null, total: 0, marketPnl: 0, active: null, direction: null, skipTicks: 0, lastMarket: null, nextStake: null, trade: null, wins: 0, losses: 0});
   let state = empty(), running = false, feed = null, feedReady = false, data = {}, status = 'Stopped.';
   let releaseLock = null, lockHeld = false, lockRequested = false, requestTimer = null, feedPing = null, recoveryRequest = null, balanceAccount = null;
   let storageError = null;
@@ -20,6 +20,9 @@
             !finite(saved.wins) || !finite(saved.losses) || !('trade' in saved) ||
             (saved.trade && (!saved.config || !['proposal', 'buy_pending', 'unknown', 'open'].includes(saved.trade.phase)))) throw new Error('Invalid saved session');
         state = saved;
+        if (!state.direction) state.direction = state.trade && state.trade.phase !== 'proposal' ? state.trade.direction : null;
+        if (state.skipTicks == null) state.skipTicks = 0;
+        if (state.skipTicks !== 0 && state.skipTicks !== 1) throw new Error('Invalid tick delay');
         if (state.trade && state.trade.phase === 'proposal') state.trade = null;
         if (state.trade && state.trade.phase === 'buy_pending') state.trade.phase = 'unknown';
         status = state.trade ? 'Stopped — interrupted trade requires reconciliation.' : 'Stopped — previous session restored.';
@@ -33,7 +36,7 @@
   function render() {
     const text = $( 'rfdStatus'), summary = $('rfdSummary'), button = $('rfdToggle');
     if (text) text.textContent = status;
-    if (summary) summary.textContent = 'Account: ' + (state.account || 'not connected') + ' | Market: ' + (state.active || 'scanning') + ' | Market P/L: ' + state.marketPnl.toFixed(2) + ' | Overall P/L: ' + state.total.toFixed(2) + ' | Wins: ' + state.wins + ' | Losses: ' + state.losses + (state.trade ? ' | Trade: ' + state.trade.phase : '');
+    if (summary) summary.textContent = 'Account: ' + (state.account || 'not connected') + ' | Market: ' + (state.active || 'scanning') + ' | Direction: ' + (state.direction || '—') + ' | Market P/L: ' + state.marketPnl.toFixed(2) + ' | Overall P/L: ' + state.total.toFixed(2) + ' | Wins: ' + state.wins + ' | Losses: ' + state.losses + (state.trade ? ' | Trade: ' + state.trade.phase : '');
     if (button) button.textContent = running ? 'Stop dashboard bot' : 'Start dashboard bot';
   }
   function release() {
@@ -117,6 +120,11 @@
     const d = data[symbol];
     return !!d && signal(d.ticks, d.candles, Date.now() / 1000) === direction;
   }
+  function freshTick(symbol) {
+    const ticks = data[symbol] && data[symbol].ticks;
+    const last = ticks && ticks[ticks.length - 1];
+    return !!last && finite(last.time) && Math.abs(Date.now() / 1000 - last.time) <= 10;
+  }
   function openFeed() {
     data = Object.fromEntries(MARKETS.map(s => [s, {ticks: [], candles: []}]));
     let socket;
@@ -169,6 +177,14 @@
         if (prev && (tick.time < prev.time || tick.time - prev.time > 10)) d.ticks = [];
         d.ticks.push(tick);
         if (d.ticks.length > 500) d.ticks.shift();
+        if (running && !state.trade && state.active === sym && state.direction && state.skipTicks > 0) {
+          if (!freshTick(sym)) return;
+          state.skipTicks--;
+          if (!save()) { stop(status); return; }
+          status = 'Skipped one tick on ' + sym + '; waiting for the next tick to continue ' + state.direction + '.';
+          render();
+          return;
+        }
         evaluate(sym);
       }
     };
@@ -176,17 +192,19 @@
     socket.onerror = () => { if (feed === socket) stop('Stopped — market feed connection error.'); };
   }
   function evaluate(symbol) {
-    if (!running || !feedReady || state.trade || (state.active && state.active !== symbol) || (!state.active && state.lastMarket === symbol)) return;
+    if (!running || !feedReady || state.trade || state.skipTicks > 0 || (state.active && state.active !== symbol) || (!state.active && state.lastMarket === symbol)) return;
     if (!gridAuthed || !gridWs || gridWs.readyState !== 1 || gridLoginId !== state.account) { stop('Stopped — Trading Grid connection or account changed.'); return; }
     const hit = limit();
     if (hit) { stop(hit); return; }
-    const direction = signal(data[symbol].ticks, data[symbol].candles, Date.now() / 1000);
+    const initial = !state.direction;
+    const direction = state.direction || signal(data[symbol].ticks, data[symbol].candles, Date.now() / 1000);
     if (!direction) return;
+    if (!freshTick(symbol)) return;
     if (!state.active) { state.active = symbol; state.marketPnl = 0; state.nextStake = state.config.stake; }
     const stake = Math.round(state.nextStake * 100) / 100;
     if (!finite(stake) || stake < 0.35 || balanceAccount !== state.account || !finite(gridBalance) || stake > gridBalance) { stop('Stopped — next stake exceeds available balance or balance is unavailable.'); return; }
     const id = ++gridReqId;
-    state.trade = {phase: 'proposal', symbol, direction, stake, request: id};
+    state.trade = {phase: 'proposal', symbol, direction, stake, request: id, initial};
     if (!save()) return;
     status = 'Requesting ' + direction + ' proposal for ' + symbol;
     render();
@@ -197,17 +215,18 @@
       if (error || !proposal || !proposal.id || !finite(Number(proposal.ask_price)) || Number(proposal.ask_price) <= 0) {
         state.trade = null; save(); stop('Stopped — proposal rejected: ' + (error && (error.message || error.code) || 'invalid proposal')); return;
       }
-      if (!running || !feedReady || gridWs !== socket || !gridAuthed || gridLoginId !== state.account || limit() || !validSignal(symbol, direction)) {
+      if (!running || !feedReady || gridWs !== socket || !gridAuthed || gridLoginId !== state.account || limit() || !freshTick(symbol) || (initial && !validSignal(symbol, direction))) {
         state.trade = null; save(); stop('Stopped — trade cancelled before buy because signal or connection changed.'); return;
       }
       if (balanceAccount !== state.account || !finite(gridBalance) || Number(proposal.ask_price) > gridBalance) { state.trade = null; save(); stop('Stopped — proposal price exceeds available balance or balance is unavailable.'); return; }
       const buyId = ++gridReqId;
+      state.direction = direction;
       state.trade.phase = 'buy_pending'; state.trade.request = buyId;
       if (!save()) return;
       gridPending[buyId] = (buy, buyError) => {
         if (!state.trade || state.trade.request !== buyId || !['buy_pending', 'unknown'].includes(state.trade.phase)) return;
         clearTimeout(requestTimer);
-        if (buyError) { state.trade = null; save(); stop('Stopped — buy rejected: ' + (buyError.message || buyError.code)); return; }
+        if (buyError) { if (initial) state.direction = null; state.trade = null; save(); stop('Stopped — buy rejected: ' + (buyError.message || buyError.code)); return; }
         if (!buy || buy.contract_id == null) { state.trade.phase = 'unknown'; save(); stop('Stopped — buy outcome unknown; reconcile with Deriv before reset.'); return; }
         state.trade.phase = 'open'; state.trade.contractId = String(buy.contract_id);
         if (finite(Number(buy.buy_price))) state.trade.stake = Number(buy.buy_price);
@@ -241,8 +260,11 @@
     if (state.marketPnl >= state.config.marketTP - 1e-9 || state.marketPnl <= -state.config.marketSL + 1e-9) {
       const reason = state.marketPnl >= state.config.marketTP - 1e-9 ? 'Market take profit' : 'Market stop loss';
       status = reason + ' reached on ' + state.active + ': ' + state.marketPnl.toFixed(2) + '; scanning another market.';
-      state.lastMarket = state.active; state.active = null; state.marketPnl = 0; state.nextStake = state.config.stake;
-    } else status = 'Settled ' + trade.symbol + ': ' + pnl.toFixed(2) + '; waiting for next signal.';
+      state.lastMarket = state.active; state.active = null; state.direction = null; state.skipTicks = 0; state.marketPnl = 0; state.nextStake = state.config.stake;
+    } else {
+      state.skipTicks = 1;
+      status = 'Settled ' + trade.symbol + ': ' + pnl.toFixed(2) + '; skipping one tick before continuing ' + state.direction + '.';
+    }
     if (!save()) { stop(status); return true; }
     if (typeof acctOnTrade === 'function') acctOnTrade(state.account, Math.max(0, trade.stake + pnl));
     if (overall) stop(overall);
