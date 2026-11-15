@@ -1,7 +1,7 @@
 import { SequenceLedger } from "./data.js";
 import { createResearchPrediction, markUnscorable, observePrediction } from "./recurrence.js";
 
-const STORES = ["sources", "observations", "predictions", "reports", "settings"];
+const STORES = ["sources", "observations", "predictions", "reports", "settings", "intervals"];
 const pending = row => row.status !== "Unscorable" && row.observations.length < 5;
 
 function request(req) {
@@ -56,21 +56,42 @@ async function invalidatePending(tx, state, reason) {
   state.connected = false;
 }
 
+async function discontinue(tx, state, reason, at = Date.now()) {
+  if (!state.connected && !state.pending.length) return;
+  await invalidatePending(tx, state, reason);
+  if (!state.openInterval) {
+    const interval = {
+      id: crypto.randomUUID(), source: state.source, reason,
+      afterSequence: state.lastSeq, afterEpoch: state.lastEpoch,
+      startedAt: state.lastReceivedAt ?? at, detectedAt: at,
+      endedAt: null, resumedEpoch: null, resumedSequence: null,
+    };
+    tx.objectStore("intervals").add(interval);
+    state.openInterval = interval.id;
+  }
+}
+
 export async function openResearchStore({ indexedDB = globalThis.indexedDB, name = "super-mathes-v1" } = {}) {
   if (!indexedDB) throw new Error("IndexedDB is unavailable");
-  const open = indexedDB.open(name, 1);
+  const open = indexedDB.open(name, 2);
   open.onupgradeneeded = event => {
     const db = event.target.result;
-    db.createObjectStore("sources", { keyPath: "source" });
-    const observations = db.createObjectStore("observations", { keyPath: ["source", "epoch"] });
-    observations.createIndex("source", "source");
-    const predictions = db.createObjectStore("predictions", { keyPath: "id" });
-    predictions.createIndex("source", "source");
-    predictions.createIndex("history", ["source", "createdAt", "id"]);
-    const reports = db.createObjectStore("reports", { keyPath: "id" });
-    reports.createIndex("source", "source");
-    reports.createIndex("history", ["source", "createdAt", "id"]);
-    db.createObjectStore("settings", { keyPath: "key" });
+    if (event.oldVersion < 1) {
+      db.createObjectStore("sources", { keyPath: "source" });
+      const observations = db.createObjectStore("observations", { keyPath: ["source", "epoch"] });
+      observations.createIndex("source", "source");
+      const predictions = db.createObjectStore("predictions", { keyPath: "id" });
+      predictions.createIndex("source", "source");
+      predictions.createIndex("history", ["source", "createdAt", "id"]);
+      const reports = db.createObjectStore("reports", { keyPath: "id" });
+      reports.createIndex("source", "source");
+      reports.createIndex("history", ["source", "createdAt", "id"]);
+      db.createObjectStore("settings", { keyPath: "key" });
+    }
+    if (event.oldVersion < 2) {
+      const intervals = db.createObjectStore("intervals", { keyPath: "id" });
+      intervals.createIndex("history", ["source", "detectedAt", "id"]);
+    }
   };
   const db = await request(open);
   db.onversionchange = () => db.close();
@@ -82,6 +103,8 @@ export class ResearchStore {
   close() { this.db.close(); }
 
   append(input, { discontinuity = false, historical = false } = {}) {
+    if (input.receivedAt !== undefined && (!Number.isSafeInteger(input.receivedAt) || input.receivedAt < 0)) throw new Error("Invalid receipt timestamp");
+    if (input.providerSequence !== undefined && (!Number.isSafeInteger(input.providerSequence) || input.providerSequence < 0)) throw new Error("Invalid provider sequence");
     if (typeof input.rawQuote !== "string" || !/^-?\d+(?:\.\d+)?$/.test(input.rawQuote)) throw new Error("Original quote is required");
     const [whole, fraction = ""] = input.rawQuote.split(".");
     if (!Number.isInteger(input.decimals) || input.decimals < 0 || input.decimals > 20 || fraction.length > input.decimals ||
@@ -95,9 +118,10 @@ export class ResearchStore {
         request(sources.get(validated.source)),
       ]);
       if (existing) {
-        if (existing.quote !== validated.quote || existing.decimals !== validated.decimals || existing.rawQuote !== input.rawQuote) throw new Error("Conflicting observation at the same timestamp");
+        if (existing.quote !== validated.quote || existing.decimals !== validated.decimals || existing.rawQuote !== input.rawQuote ||
+            existing.providerSequence !== input.providerSequence) throw new Error("Conflicting observation at the same timestamp");
         if (stored && stored.connected) {
-          await invalidatePending(tx, stored, "Ambiguous repeated timestamp");
+          await discontinue(tx, stored, "Ambiguous repeated timestamp", input.receivedAt);
           sources.put(stored);
         }
         return { duplicate: true, observation: existing };
@@ -106,12 +130,28 @@ export class ResearchStore {
       if (state.decimals !== undefined && state.decimals !== validated.decimals) throw new Error("Source precision changed");
       if (validated.epoch <= state.lastEpoch) throw new Error("Out-of-order observation");
       if (historical && state.connected) throw new Error("Historical imports cannot modify a live source");
-      if (discontinuity) await invalidatePending(tx, state, "Feed gap detected");
+      let reason = discontinuity ? "Feed gap detected" : null;
+      if (state.connected && state.providerSequence !== undefined && input.providerSequence === undefined) reason = "Provider sequence unavailable";
+      if (state.connected && state.providerSequence === undefined && input.providerSequence !== undefined) reason = "Provider sequencing changed";
+      if (state.providerSequence !== undefined && input.providerSequence !== undefined) {
+        if (input.providerSequence <= state.providerSequence) throw new Error("Out-of-order provider sequence");
+        if (state.connected && input.providerSequence !== state.providerSequence + 1) reason = "Provider sequence gap";
+      }
+      if (reason) await discontinue(tx, state, reason, input.receivedAt);
       const predictions = tx.objectStore("predictions");
       const rows = await Promise.all(state.pending.map(id => request(predictions.get(id))));
       const next = [];
       const segment = state.connected || historical && state.lastSeq ? state.segment : (state.segment || 0) + 1;
       const observation = { ...validated, rawQuote: input.rawQuote, sequence: state.lastSeq + 1, segment };
+      if (input.providerSequence !== undefined) observation.providerSequence = input.providerSequence;
+      if (!historical) observation.receivedAt = input.receivedAt ?? Date.now();
+      if (!historical && state.openInterval) {
+        const intervals = tx.objectStore("intervals");
+        const interval = await request(intervals.get(state.openInterval));
+        if (!interval || interval.endedAt !== null) throw new Error("Corrupt uncertain interval");
+        intervals.put({ ...interval, endedAt: observation.receivedAt, resumedEpoch: observation.epoch, resumedSequence: observation.sequence });
+        state.openInterval = null;
+      }
       for (const row of rows) {
         if (!row || row.source !== state.source || !pending(row)) throw new Error("Corrupt pending prediction index");
         if (observation.sequence !== row.originSequence + row.observations.length + 1) throw new Error("Non-consecutive prediction observation");
@@ -120,7 +160,7 @@ export class ResearchStore {
         if (pending(updated)) next.push(row.id);
       }
       observations.add(observation);
-      sources.put({ ...state, decimals: validated.decimals, lastSeq: observation.sequence, lastEpoch: observation.epoch, segment, pending: next, connected: !historical });
+      sources.put({ ...state, decimals: validated.decimals, lastSeq: observation.sequence, lastEpoch: observation.epoch, lastReceivedAt: observation.receivedAt ?? null, providerSequence: input.providerSequence, segment, pending: next, connected: !historical });
       return { duplicate: false, observation };
     });
   }
@@ -150,7 +190,7 @@ export class ResearchStore {
     return transaction(this.db, "readwrite", async tx => {
       const sources = tx.objectStore("sources"), state = await request(sources.get(source));
       if (!state) return;
-      await invalidatePending(tx, state, reason);
+      await discontinue(tx, state, reason);
       sources.put(state);
     });
   }
@@ -160,7 +200,7 @@ export class ResearchStore {
     return transaction(this.db, "readwrite", async tx => {
       const sources = tx.objectStore("sources"), states = await request(sources.getAll());
       for (const state of states) {
-        await invalidatePending(tx, state, reason);
+        await discontinue(tx, state, reason);
         sources.put(state);
       }
     });
@@ -183,7 +223,7 @@ export class ResearchStore {
   }
 
   list(store, source, limit = 100) {
-    if (!["observations", "predictions", "reports"].includes(store) || typeof source !== "string" || !source ||
+    if (!["observations", "predictions", "reports", "intervals"].includes(store) || typeof source !== "string" || !source ||
         !Number.isInteger(limit) || limit < 1 || limit > 10000) throw new Error("Invalid history query");
     return transaction(this.db, "readonly", tx => new Promise((resolve, reject) => {
       const index = store === "observations" ? "source" : "history";

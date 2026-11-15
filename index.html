@@ -1457,9 +1457,11 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       <label>Research model <select id="sm-model"><option value="frequency">Smoothed frequency</option><option value="markov">First-order Markov</option></select></label>
       <label>Observation window <input id="sm-window" type="number" min="20" max="10000" value="1000"></label>
       <label>Benchmark warmup <input id="sm-warmup" type="number" min="1" max="9999" value="100"></label>
+      <label>Validation warmup <input id="sm-validation-warmup" type="number" min="500" max="10000" value="500"></label>
       <button id="sm-save" type="button" class="gc-btn">Save settings</button>
       <button id="sm-predict" type="button" class="gc-btn">Record prediction on live feed</button>
       <button id="sm-benchmark" type="button" class="gc-btn">Run chronological benchmark</button>
+      <button id="sm-independent" type="button" class="gc-btn">Run independent validation</button>
       <p id="sm-message" role="status"></p>
       <h3>Live observations and source quality</h3><pre id="sm-feed">Waiting for public ticks.</pre>
       <h3>Latest prediction and ranked distribution</h3><pre id="sm-prediction">No recorded prediction.</pre>
@@ -4453,6 +4455,7 @@ let _activeSymbolsReqId = 900001;
 
 let _endpointIdx = 0;
 let _connectTimeout = null;
+let _publicPing = null;
 
 function connect(){
   setConn("connecting");
@@ -4478,6 +4481,17 @@ function connect(){
   ws.onopen = () => {
     _opened = true;
     if (_connectTimeout){ clearTimeout(_connectTimeout); _connectTimeout = null; }
+    if (_publicPing) clearInterval(_publicPing);
+    const connectedSocket = ws;
+    _publicPing = setInterval(() => {
+      if (connectedSocket.readyState !== WebSocket.OPEN) return;
+      try { connectedSocket.send(JSON.stringify({ ping: 1 })); }
+      catch(error) {
+        console.warn("[deriv ws] keepalive failed", error);
+        if (window.SuperMathes) window.SuperMathes.interrupt("Public feed keepalive failed").catch(() => {});
+        connectedSocket.close();
+      }
+    }, 30000);
     setConn("live");
     console.log("[deriv ws] connected via", url);
     if (_isNewPublicEndpoint(url)){
@@ -4574,6 +4588,7 @@ function connect(){
   ws.onerror = () => { if (window.SuperMathes) window.SuperMathes.interrupt("Public feed error").catch(() => {}); console.warn("[deriv ws] error on", url); setConn("dead"); };
   ws.onclose = () => {
     if (_connectTimeout){ clearTimeout(_connectTimeout); _connectTimeout = null; }
+    if (_publicPing){ clearInterval(_publicPing); _publicPing = null; }
     console.log("[deriv ws] closed:", url);
     if (window.SuperMathes) window.SuperMathes.interrupt("Public feed disconnected").catch(() => {});
     if (window.PDT) window.PDT.pauseFeed(SYMBOL);
@@ -26564,6 +26579,7 @@ window.mfxEnsureVolatility = function(list){
 window.mfxSwitchMarket = function(code){ if (!MARKETS[code] || code === SYMBOL) return; const sel = $("marketSel"); if (sel) sel.value = code; switchMarket(code); };
 function switchMarket(code){
   if (window.SuperMathes) window.SuperMathes.interrupt("Market switched").catch(() => {});
+  if (_publicPing){ clearInterval(_publicPing); _publicPing = null; }
   SYMBOL = code;
   $("titleMarket").textContent = MARKETS[code];
   resetState();
@@ -34501,7 +34517,7 @@ try {
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/analysis/sosSowPage.js?v=9"></script>
 <script type="module" src="src/ldpe/bridge.js?v=15"></script>
-<script type="module" src="src/super-mathes/browser.js?v=1"></script>
+<script type="module" src="src/super-mathes/browser.js?v=2"></script>
 <script type="module" src="src/ldpe/prediction-digit-bot.js?v=2"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>

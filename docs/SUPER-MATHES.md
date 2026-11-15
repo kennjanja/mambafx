@@ -42,7 +42,7 @@ precision. Timestamps alone cannot prove continuity.
 | Smoothed frequency distribution, entropy and first-order mutual information | Implemented as diagnostics; no predictive significance or multiple-testing claim |
 | Immediate prediction selection and aggregation | User-selected smoothed-frequency or first-order Markov research model; explicit prediction creation, no selection when the top digits tie, no automatic promotion |
 | Recurrence | Frozen digit, distribution and five conditional hazards; exact, cumulative and survival probabilities; tracks all five observations even after an early hit. Hazards are supplied or use an explicitly stated constant independent-draw assumption, not a fitted recurrence model |
-| Historical and walk-forward evaluation | Expanding-window frequency or Markov versus uniform with top-1/2/3, log loss and Brier; no independent holdout, statistical promotion, calibration or recurrence evaluation |
+| Historical and walk-forward evaluation | Pre-specified chronological holdout with rolling updates, disjoint recurrence windows, calibration, paired baseline comparisons and block-bootstrap uncertainty; no automatic promotion or independently audited evidence of advantage |
 | Dashboard, live integration, history persistence and import | Dedicated navigation, live status, prediction and report history, IndexedDB settings; historical import is API-only |
 | Machine learning, hidden-state, neural and generator-forensics research | A first-order Markov model only; neural, hidden-state and generator forensics are not implemented |
 | Professional contribution registry | This implementation map only; no runtime professional dashboard or execution tracking |
@@ -70,9 +70,11 @@ sources even when they are not currently live.
 
 `window.SuperMathes` exposes `status`, `listSources()`, `getSource(source)`,
 `listObservations(source, limit)`, `listPredictions(source, limit)`,
-`listReports(source, limit)`, `getPrediction(id)`,
+`listReports(source, limit)`, `listIntervals(source, limit)`, `getPrediction(id)`,
 `createModelPrediction(windowSize, model)` and `benchmark(windowSize, warmup,
-model)`. Model is `"frequency"` or `"markov"`. Advanced callers can use
+model)`. `validateIndependent(source, warmup, windowSize)` saves a separate validation
+report; warmup must be at least 500. Model is `"frequency"` or `"markov"`.
+Advanced callers can use
 `createPrediction(input, expectedSequence)` with an explicit unique ID, source,
 last-observation timestamp, ten probabilities, selected digit, five conditional
 hazards, model and assumptions. The method freezes inputs synchronously and
@@ -92,17 +94,83 @@ repetition is stored only once and invalidates incomplete predictions because
 the feed does not supply a distinct per-tick ID.
 
 Observation and affected prediction updates share one IndexedDB transaction.
-On restart, disconnect, market/source change, invalid input or detected gap,
+On collector change, disconnect, stale feed, market/source change, invalid input or detected gap,
 incomplete five-observation records become **Unscorable**, retaining any
-already observed outcomes. Completed records are preserved. Gap detection is
+already observed outcomes. Completed records are preserved. Uncertain intervals
+are persisted with the last sequence and epoch, detection time, reason, and
+the first subsequent observation when collection resumes. The 15-second
+staleness threshold is a safety cutoff, not proof of a missed tick. Gap detection is
 heuristic (more than three times the median after 20 intervals): Deriv's public
 tick feed supplies no per-tick sequence number, so silent losses cannot always
-be detected or proven absent. Recovery does not assume LDPE backfill proves
-continuity. Opening another tab conservatively invalidates unfinished records
-on startup and duplicate cross-tab ticks can do the same; concurrent collectors
-are not coordinated. Browser storage can be evicted, cleared or blocked; it is
-not a server backup. Database errors are reported and acquisition stops if
-interruption state cannot be saved.
+be detected or proven absent. An adapter that supplies a verified monotonic
+`providerSequence` can detect skipped or regressing sequence numbers; the
+shared Deriv tick adapter does not invent or assume such a number. No missing
+digits are fabricated. Recovery does not assume historical overlap proves continuity.
+
+Exactly one same-origin collector holds a browser Web Lock; other tabs ignore
+their tick stream and read the shared IndexedDB records. BroadcastChannel
+provides advisory collector status, not ownership. Predictions and exploratory
+benchmarks are created in the collector tab; other tabs can read shared history
+and run validation. When the lock holder closes or crashes, the next holder
+marks incomplete records unscorable before accepting ticks. Web Locks and
+BroadcastChannel are required: unsupported browsers fail closed. A suspended
+tab retaining a lock can delay takeover; heartbeat loss is displayed, never
+used to create a second collector. Tabs running older cached code should be
+closed or reloaded; they do not participate in this coordination protocol.
+IndexedDB schema version 2 adds intervals without replacing existing stores.
+Browser storage can be evicted, cleared or blocked; it is not a server backup.
+Database errors are reported and acquisition stops if interruption state cannot
+be saved.
+
+## Independent validation protocol
+
+The independent-validation button evaluates the latest single source segment,
+using at most 10,000 observations. The first 500 or more observations are
+training only. The remaining data is divided into three equal chronological
+test periods, each rounded down to complete 100-observation blocks; any tail is
+excluded. Models use the selected trailing observation window and update only
+after each outcome, matching the operational research models. The evaluator reports the
+frequency and first-order Markov models against uniform and the historical
+frequency baseline, with top-1/2/3, multiclass log loss and Brier, descriptive
+calibration bins, period-level results, and paired score differences.
+Calibration bin counts are digit-probability pairs (up to ten per outcome),
+not independent observations; no confidence interval is inferred from those
+pair counts.
+Top-1 evaluation and operational prediction creation both exclude tied model
+leaders. Top-2/3 and the uniform baseline report the expected score under
+random tie-breaking rather than inventing a selected digit; their sample sizes
+can therefore differ from top-1.
+
+Recurrence uses forecasts at non-overlapping five-observation windows and
+excludes tied leaders. It reports cumulative, first-appearance exact,
+conditional-after-misses and no-appearance rates, alongside the model,
+uniform and historical-frequency assumptions. Each model's future hazards
+are held constant as an explicit independent-draw approximation, not a fitted
+recurrence model. Uniform probabilities include 0.40951 within five and
+0.59049 for no appearance.
+
+Confidence intervals use 500 fixed-seed, period-stratified block-bootstrap
+replicates with non-overlapping 100-observation blocks. At least 30 blocks
+(3,000 test observations, in addition to the training prefix) are required
+for intervals; smaller samples are marked **Insufficient Evidence**. This
+method assumes dependence is weak across blocks, an assumption not guaranteed
+for arbitrary market data. Periods share earlier rolling training history;
+the intervals are not an independent experiment, multiple-testing correction,
+or proof of statistical significance. Model total variation is descriptive,
+not proof that model information is independent. No automatic model selection,
+promotion or superiority claim is made.
+
+### Neural research assessment
+
+No neural model is justified by the current evidence and none is operational.
+A future hypothesis could test whether a fixed-length prefix of prior digits
+adds out-of-sample information beyond both existing models. Its input would be
+only that prefix; its output a normalized ten-digit distribution, with
+independently specified recurrence hazards if studied. A future study would
+require fixed seeds and code, chronological training and separate holdout,
+purged overlapping windows, calibration and paired comparisons against both
+simple baselines. It must remain outside operational prediction until those
+results are independently reviewed.
 
 ## Professional responsibility map
 

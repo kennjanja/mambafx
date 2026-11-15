@@ -1,7 +1,8 @@
 import { createResearchPrediction } from "./recurrence.js";
-import { openResearchStore } from "./storage.js";
+import { openResearchStore } from "./storage.js?v=2";
 import { frequencyDistribution, rankDistribution, transitionDistribution } from "./models.js";
 import { walkForward } from "./validation.js";
+import { independentValidation } from "./independentValidation.js?v=2";
 
 export function sourceId(endpoint, symbol, decimals) {
   if (typeof endpoint !== "string" || !endpoint || typeof symbol !== "string" || !symbol ||
@@ -9,20 +10,25 @@ export function sourceId(endpoint, symbol, decimals) {
   return JSON.stringify(["deriv-public", endpoint, symbol, decimals]);
 }
 
-export function normalizeLiveTick({ endpoint, symbol, epoch, rawQuote, decimals }) {
+export function normalizeLiveTick({ endpoint, symbol, epoch, rawQuote, decimals, providerSequence }) {
   const source = sourceId(endpoint, symbol, decimals);
   if (!Number.isSafeInteger(epoch) || epoch < 0 || typeof rawQuote !== "string" ||
       !/^-?\d+(?:\.\d+)?$/.test(rawQuote)) throw new Error("Invalid live timestamp or original quote");
   const [whole, fraction = ""] = rawQuote.split(".");
   if (fraction.length > decimals) throw new Error("Live quote exceeds source precision");
-  return { source, epoch, rawQuote, decimals, quote: whole + (decimals ? "." + fraction.padEnd(decimals, "0") : "") };
+  if (providerSequence !== undefined && (!Number.isSafeInteger(providerSequence) || providerSequence < 0)) throw new Error("Invalid provider sequence");
+  return { source, epoch, rawQuote, decimals, quote: whole + (decimals ? "." + fraction.padEnd(decimals, "0") : ""),
+    ...(providerSequence === undefined ? {} : { providerSequence }) };
 }
 
-export function createLiveResearch({ openStore = openResearchStore, report = error => console.error("[super-mathes]", error) } = {}) {
+export function createLiveResearch({ openStore = openResearchStore, report = error => console.error("[super-mathes]", error),
+  autoRecover = true, now = Date.now, staleMs = 15000,
+  runValidation = async (rows, options) => independentValidation(rows, options) } = {}) {
+  if (!Number.isSafeInteger(staleMs) || staleMs < 1000) throw new Error("Invalid stale-feed threshold");
   const status = { state: "starting", lastError: null, activeSource: null };
-  let activeSource = null, lastEpoch = null, intervals = [], fatal = null, arrival = 0;
+  let activeSource = null, lastEpoch = null, intervals = [], fatal = null, arrival = 0, lastArrivalAt = null;
   const ready = openStore().then(async store => {
-    await store.interruptAll("Application restarted; continuity is unknown");
+    if (autoRecover) await store.interruptAll("Application restarted; continuity is unknown");
     status.state = "ready";
     return store;
   }).catch(error => {
@@ -51,11 +57,34 @@ export function createLiveResearch({ openStore = openResearchStore, report = err
     fail(error);
   }
   function reset() { activeSource = null; status.activeSource = null; lastEpoch = null; intervals = []; }
+  async function stopStale(store) {
+    if (activeSource && lastArrivalAt !== null && now() - lastArrivalAt >= staleMs) {
+      await store.interrupt(activeSource, "Feed stale; continuity unknown");
+      status.lastError = "Feed stale; continuity unknown";
+      reset();
+      return true;
+    }
+    return false;
+  }
 
   return {
     status,
+    recover() {
+      return enqueue(async store => {
+        await store.interruptAll("Collector changed; continuity is unknown");
+        reset();
+      });
+    },
+    checkStale() {
+      return enqueue(async store => {
+        try { return await stopStale(store); }
+        catch (error) { fatalError(error); throw error; }
+      });
+    },
     ingest(input) {
       arrival++;
+      const receivedAt = now(), previousArrival = lastArrivalAt;
+      lastArrivalAt = receivedAt;
       let tick, invalid;
       try { tick = normalizeLiveTick(input); } catch (error) { invalid = error; }
       return enqueue(async store => {
@@ -75,18 +104,19 @@ export function createLiveResearch({ openStore = openResearchStore, report = err
           activeSource = tick.source;
           status.activeSource = tick.source;
           let discontinuity = false;
+          if (previousArrival !== null && (receivedAt < previousArrival || receivedAt - previousArrival >= staleMs)) discontinuity = true;
           if (lastEpoch !== null && tick.epoch > lastEpoch) {
             const gap = tick.epoch - lastEpoch;
             if (intervals.length >= 20) {
               const sorted = [...intervals].sort((a, b) => a - b);
               const mid = Math.floor(sorted.length / 2);
               const median = sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
-              discontinuity = gap > median * 3;
+              discontinuity = discontinuity || gap > median * 3;
             }
             intervals.push(gap);
             if (intervals.length > 200) intervals.shift();
           }
-          const result = await store.append(tick, { discontinuity });
+          const result = await store.append({ ...tick, receivedAt }, { discontinuity });
           if (result.duplicate) {
             reset();
             fail(new Error("Repeated timestamp; continuity cannot be proven"));
@@ -116,7 +146,8 @@ export function createLiveResearch({ openStore = openResearchStore, report = err
     createPrediction(input, expectedSequence) {
       const frozen = createResearchPrediction(input).prediction;
       const createdAt = Date.now();
-      return enqueue(store => {
+      return enqueue(async store => {
+        try { await stopStale(store); } catch (error) { fatalError(error); throw error; }
         if (activeSource !== frozen.source) throw new Error("Prediction source is not the active feed");
         return store.createPrediction({ ...frozen, hazards: frozen.recurrence.hazards }, expectedSequence, createdAt);
       });
@@ -125,6 +156,7 @@ export function createLiveResearch({ openStore = openResearchStore, report = err
       if (!Number.isInteger(windowSize) || windowSize < 20 || windowSize > 10000) throw new Error("Window must be between 20 and 10000");
       if (!["frequency", "markov"].includes(model)) throw new Error("Invalid research model");
       return enqueue(async store => {
+        try { await stopStale(store); } catch (error) { fatalError(error); throw error; }
         const source = activeSource, token = arrival;
         if (!source) throw new Error("No active feed");
         const state = await store.getSource(source);
@@ -160,6 +192,26 @@ export function createLiveResearch({ openStore = openResearchStore, report = err
         return report;
       });
     },
+    async validateIndependent(source, warmup = 500, windowSize = 1000) {
+      if (typeof source !== "string" || !source) throw new Error("Choose a source to validate");
+      const snapshot = await enqueue(async store => {
+        const state = await store.getSource(source);
+        if (!state) throw new Error("Source not found");
+        const rows = await store.list("observations", source, 10000);
+        return {
+          state,
+          rows: rows.filter(row => row.segment === state.segment && row.sequence <= state.lastSeq).reverse(),
+        };
+      });
+      const result = await runValidation(snapshot.rows, { warmup, windowSize });
+      const record = {
+        id: crypto.randomUUID(), kind: "independent-validation", source, createdAt: now(),
+        segment: snapshot.state.segment, throughSequence: snapshot.state.lastSeq,
+        fromSequence: snapshot.rows[0]?.sequence ?? null, sampleSize: snapshot.rows.length, result,
+      };
+      await enqueue(store => store.saveReport(record));
+      return record;
+    },
     importHistorical(name, inputs) {
       if (typeof name !== "string" || !name.trim() || !Array.isArray(inputs) || !inputs.length || inputs.length > 10000) {
         throw new Error("Historical import requires a source name and 1-10000 observations");
@@ -189,5 +241,6 @@ export function createLiveResearch({ openStore = openResearchStore, report = err
     listObservations(source, limit) { return enqueue(store => store.list("observations", source, limit)); },
     listPredictions(source, limit) { return enqueue(store => store.list("predictions", source, limit)); },
     listReports(source, limit) { return enqueue(store => store.list("reports", source, limit)); },
+    listIntervals(source, limit) { return enqueue(store => store.list("intervals", source, limit)); },
   };
 }
