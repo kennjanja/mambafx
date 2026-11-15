@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { independentValidation } from "../../src/super-mathes/independentValidation.js";
-import { frequencyDistribution, transitionDistribution } from "../../src/super-mathes/models.js";
+import { combinedPrediction, frequencyDistribution, transitionDistribution } from "../../src/super-mathes/models.js";
 import { logLoss } from "../../src/super-mathes/math.js";
 
 function observations(digits) {
@@ -67,4 +67,30 @@ test("evaluation scores the same rolling windows as the operational models", () 
     for (let i = 500; i < 800; i++) sum += logLoss(predict(digits.slice(i - 100, i)), digits[i]);
     assert.ok(Math.abs(result.models[model].immediate.logLoss.observed - sum / 300) < 1e-12);
   }
+});
+
+test("combined validation uses only eligible rolling prefixes and pairs baselines on those outcomes", () => {
+  const digits = Array.from({ length: 800 }, (_, i) => (i * i + Math.floor(i / 19)) % 10);
+  const result = independentValidation(observations(digits), { warmup: 500, windowSize: 100, frequencyWeight: 0.3 });
+  let count = 0, loss = 0, gain = 0;
+  for (let i = 500; i < 800; i++) {
+    let prediction;
+    try { prediction = combinedPrediction(digits.slice(i - 100, i), { frequencyWeight: 0.3 }); }
+    catch (error) {
+      if (!/Insufficient transitions|tied/.test(error.message)) throw error;
+      continue;
+    }
+    count++;
+    loss += logLoss(prediction.probabilities, digits[i]);
+    gain += logLoss(prediction.markov, digits[i]) - logLoss(prediction.probabilities, digits[i]);
+  }
+  const metrics = result.models.combined.immediate;
+  assert.ok(count > 0);
+  assert.equal(metrics.logLoss.n, count);
+  assert.ok(Math.abs(metrics.logLoss.observed - loss / count) < 1e-12);
+  assert.ok(Math.abs(metrics.markovLogLossGain.observed - gain / count) < 1e-12);
+  const changed = [...digits.slice(0, 700), ...Array(100).fill(9)];
+  assert.deepEqual(result.models.combined.periods.slice(0, 2), independentValidation(observations(changed), {
+    warmup: 500, windowSize: 100, frequencyWeight: 0.3,
+  }).models.combined.periods.slice(0, 2));
 });

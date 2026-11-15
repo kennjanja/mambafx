@@ -1,5 +1,5 @@
 import { SequenceLedger } from "./data.js";
-import { createResearchPrediction, markUnscorable, observePrediction } from "./recurrence.js";
+import { createResearchPrediction, markUnscorable, observePrediction } from "./recurrence.js?v=3";
 
 const STORES = ["sources", "observations", "predictions", "reports", "settings", "intervals"];
 const pending = row => row.status !== "Unscorable" && row.observations.length < 5;

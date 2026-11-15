@@ -1,10 +1,10 @@
-import { createLiveResearch } from "./live.js?v=2";
-import { attachDashboard } from "./dashboard.js?v=2";
+import { createLiveResearch } from "./live.js?v=3";
+import { attachDashboard } from "./dashboard.js?v=3";
 import { coordinateResearch } from "./coordination.js?v=2";
 
 function runValidation(observations, options) {
   return new Promise((resolve, reject) => {
-    const worker = new Worker(new URL("./validationWorker.js?v=2", import.meta.url), { type: "module" });
+    const worker = new Worker(new URL("./validationWorker.js?v=3", import.meta.url), { type: "module" });
     worker.onmessage = event => {
       worker.terminate();
       if (event.data.error) reject(new Error(event.data.error));
