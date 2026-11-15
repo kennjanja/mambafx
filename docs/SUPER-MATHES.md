@@ -20,6 +20,12 @@ are satisfied; paired log-loss and Brier differences use the same eligible
 outcomes. No calibration or profitability claim follows from combining models.
 Automated trading, account separation and execution risk controls are not
 implemented in this work-in-progress version.
+An isolated, currently unused risk-checking module accepts confirmed ledger
+values in integer currency minor units and can derive the calendar day in an
+explicit account time zone. It is not a trading controller: account identity,
+currency precision, confirmed-loss counts, outstanding contracts and daily
+ledger values must be established by the future authenticated execution
+integration before these checks can protect any trade.
 
 The requested role numbering contains 1–65 and 86–95: those 75 roles are mapped
 below. Positions 66–85 and 96–100 are not created. Existing leadership and
