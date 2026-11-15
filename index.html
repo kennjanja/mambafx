@@ -2724,36 +2724,36 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     <div class="grid-side">
       <div class="grid-card">
         <h3 style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">📊 Rise/Fall Autobot</h3>
-        <div class="gc-sub" style="margin-bottom:10px">Scans every Volatility Index simultaneously, determines who controls each market, and trades Rise/Fall only at a significant zone with confirming rejection and candle-body signals. Uses the Trading Grid connection — connect there first.</div>
-        <button id="rfaReversalBtn" class="gc-btn" onclick="rfaToggleReversal()" style="width:100%;margin-bottom:10px">▶ Start Reversal Auto</button>
+        <div class="gc-sub" style="margin-bottom:10px">Scans the available volatility markets using 50 ticks and the closed 1-minute trend. Uses the Trading Grid connection — connect there first.</div>
+        <button id="rfaReversalBtn" class="gc-btn" onclick="rfaToggleReversal()" style="width:100%;margin-bottom:10px">▶ Start Rise/Fall Auto</button>
         <button id="rfaResetBtn" class="gc-btn" onclick="rfaResetTradesAndProfit()" style="width:100%;margin-bottom:10px" title="Clear trades, P/L, cycles and martingale">↺ Reset trades &amp; profit</button>
         <div id="rfaScanStatus" class="gc-sub" style="margin-bottom:12px">Not scanning.</div>
         <div class="grid-card" style="margin-bottom:12px;padding:10px">
-          <div style="font-weight:700;margin-bottom:6px">Reversal Auto — selected market: <span id="rfaReversalMarket">—</span></div>
-          <div class="gc-sub">Status: <span id="rfaReversalStatus">Stopped</span> · Pattern: <span id="rfaReversalPattern">—</span> · Direction: <span id="rfaReversalDirection">—</span></div>
+          <div style="font-weight:700;margin-bottom:6px">Rise/Fall Auto — selected market: <span id="rfaReversalMarket">—</span></div>
+          <div class="gc-sub">Status: <span id="rfaReversalStatus">Stopped</span> · Signal: <span id="rfaReversalPattern">—</span> · Direction: <span id="rfaReversalDirection">—</span></div>
           <div class="gc-sub">Cycle: <span id="rfaReversalCycle">1</span> (<span id="rfaReversalCycleStatus">Waiting for the Next Cycle</span>) · Base stake: <span id="rfaReversalBaseStake">1.00</span> · Current stake: <span id="rfaReversalStake">1.00</span></div>
           <div class="gc-sub">Consecutive losses: <span id="rfaReversalLosses">0</span> · Trades: <span id="rfaReversalTrades">0</span> · Wins: <span id="rfaReversalWins">0</span> · Losses: <span id="rfaReversalLost">0</span> · Net P/L: <span id="rfaReversalProfit">0.00</span></div>
         </div>
 
-        <label for="rfaStake">Stake (USD)</label>
+        <label for="rfaStake">Stake (account currency)</label>
         <input type="number" id="rfaStake" value="1.00" min="0.35" step="0.01" style="width:100%;margin-bottom:8px">
 
         <label for="rfaMult">Martingale Multiplier (×, 1.0 – 10.0; applied after each loss)</label>
         <input type="number" id="rfaMult" value="2.0" min="1" max="10" step="0.1" style="width:100%;margin-bottom:8px">
 
-        <label for="rfaMaxLevel">Max Martingale Level (0 = safety cap of 5 losses)</label>
-        <input type="number" id="rfaMaxLevel" value="0" min="0" step="1" style="width:100%;margin-bottom:8px">
+        <label for="rfaMaxLevel">Maximum consecutive losses per market cycle</label>
+        <input type="number" id="rfaMaxLevel" value="5" min="1" step="1" style="width:100%;margin-bottom:8px">
 
-        <label for="rfaTargetProfit">Target Profit (USD, blank = off; stops the bot when session profit reaches it)</label>
-        <input type="number" id="rfaTargetProfit" min="0" step="0.01" style="width:100%;margin-bottom:8px">
+        <label for="rfaMarketTarget">Profit target per market cycle (account currency)</label>
+        <input type="number" id="rfaMarketTarget" min="0.01" step="0.01" style="width:100%;margin-bottom:8px">
 
-        <label for="rfaStopLoss">Stop Loss (USD, blank = off)</label>
-        <input type="number" id="rfaStopLoss" min="0" step="0.01" style="width:100%;margin-bottom:8px">
+        <label for="rfaTargetProfit">Overall net profit target (account currency)</label>
+        <input type="number" id="rfaTargetProfit" min="0.01" step="0.01" style="width:100%;margin-bottom:8px">
 
-        <label for="rfaMaxBulk">Max Bulk Trades (markets trading at the same time)</label>
-        <input type="number" id="rfaMaxBulk" value="3" min="1" step="1" style="width:100%;margin-bottom:8px">
+        <label for="rfaStopLoss">Overall net loss limit (account currency)</label>
+        <input type="number" id="rfaStopLoss" min="0.01" step="0.01" style="width:100%;margin-bottom:8px">
 
-        <div class="gc-sub" style="margin-top:6px">Reversal Auto scans every volatility market on live tick prices at once (unchanged-price ticks are ignored). Any market that makes five consecutive directional moves is reversed immediately, up to Max Bulk Trades at the same time; Target Profit or Stop Loss on the session total stops new trades. Each market runs its own independent cycle and martingale, with one unresolved contract per market. After a confirmed loss it keeps trading the same direction with the multiplied stake until a confirmed win ends the cycle; the stake then resets and it scans for a new 5R/5F pattern.</div>
+        <div class="gc-sub" style="margin-top:6px">Rise or Fall must exceed 56% and increase versus the previous 50-tick window, with a matching closed 1-minute trend. One market trades at a time using 1-tick contracts; each trade waits for settlement and a fresh trigger. A completed market waits until another market completes a cycle. Martingale can rapidly increase losses; profit and loss limits are checked after settlement and may be exceeded.</div>
       </div>
 
       <div class="grid-card">
@@ -2764,12 +2764,19 @@ table.an-table tbody tr:last-child td{border-bottom:none}
           <div class="em-card"><div class="em-lab">Win Rate</div><div id="rfaStatWinRate" class="em-val">—</div></div>
           <div class="em-card"><div class="em-lab">Profit</div><div id="rfaStatProfit" class="em-val">0.00</div></div>
           <div class="em-card"><div class="em-lab">ROI</div><div id="rfaStatROI" class="em-val">—</div></div>
-          <div class="em-card"><div class="em-lab">Active Markets</div><div id="rfaStatActiveCount" class="em-val acc">0 / 3</div></div>
+          <div class="em-card"><div class="em-lab">Active Markets</div><div id="rfaStatActiveCount" class="em-val acc">0 / 1</div></div>
         </div>
       </div>
     </div>
 
     <div class="grid-main">
+      <div class="grid-card">
+        <h3 style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Market scanner</h3>
+        <table class="sig-table">
+          <thead><tr><th class="l">Market</th><th>Rise</th><th>Fall</th><th>1-minute trend</th><th>Trigger</th></tr></thead>
+          <tbody id="rfaScannerBody"><tr><td colspan="5" class="sig-empty">Waiting for market data…</td></tr></tbody>
+        </table>
+      </div>
       <div class="grid-card">
         <h3 style="font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);margin-bottom:10px">Trade Log</h3>
         <table class="sig-table">
@@ -27256,14 +27263,18 @@ function rfaMakeDmiTracker(){
   };
 }
 
-const RFA_MARKETS = Object.keys(MARKETS);
+const RFA_MARKETS = [];
+const RFA_LABELS = {};
 let rfaMarketState = {};
-RFA_MARKETS.forEach(sym => { rfaMarketState[sym] = { candles: [], dmiFn: rfaMakeDmiTracker(), confidence: null, lastUpdated: null }; });
+function rfaMarketLabel(sym){ return RFA_LABELS[sym] || MARKETS[sym] || sym; }
 
 let rfaWs = null;
 let rfaReqId = 500000; // a high, distinct range so these req_ids never collide with gridWs's own counter
 let rfaConnected = false;
 let rfaReconnectTimer = null;
+let rfaUniverseReqId = null;
+let rfaUniverseReady = false;
+let rfaFeedRequests = {};
 
 function rfaConnect(){
   if (rfaWs && (rfaWs.readyState === 0 || rfaWs.readyState === 1)) return; // already connecting/open
@@ -27271,27 +27282,29 @@ function rfaConnect(){
   catch(e){ rfaScheduleReconnect(); return; }
   rfaWs.onopen = () => {
     rfaConnected = true;
-    gridSet('rfaScanStatus', 'Scanning ' + RFA_MARKETS.length + ' markets…');
+    rfaUniverseReady = false;
+    rfaFeedRequests = {};
+    gridSet('rfaScanStatus', 'Discovering active volatility markets…');
     // Staggered, not fired all at once — the same lesson learned building
     // the MTF Dashboard's 10-panel subscriptions: firing many concurrent
     // ticks_history+subscribe requests on one connection risks some being
     // silently rate-limited.
-    Object.values(rfaReversal.markets).forEach(m => m.detector.reset()); // a feed gap must not complete a 5-move run
-    RFA_MARKETS.forEach((sym, i) => {
-      setTimeout(() => {
-        if (rfaWs && rfaWs.readyState === 1) {
-          rfaWs.send(JSON.stringify({ ticks_history: sym, style: 'candles', granularity: 60, count: 60, end: 'latest', subscribe: 1, req_id: ++rfaReqId }));
-          rfaWs.send(JSON.stringify({ ticks: sym, subscribe: 1, req_id: ++rfaReqId }));
-        }
-      }, i * 150);
-    });
+    Object.values(rfaMarketState).forEach(st => { st.sample = null; st.sampleResult = null; st.candles = []; st.trend = null; st.signal = null; st.tickEpoch = null; });
+    rfaUniverseReqId = ++rfaReqId;
+    rfaWs.send(JSON.stringify({ active_symbols: 'brief', req_id: rfaUniverseReqId }));
   };
   rfaWs.onmessage = ev => {
     let msg; try { msg = JSON.parse(ev.data); } catch(_) { return; }
     rfaHandleMsg(msg);
   };
   rfaWs.onerror = () => {};
-  rfaWs.onclose = () => { rfaConnected = false; rfaScheduleReconnect(); };
+  rfaWs.onclose = () => {
+    rfaConnected = false;
+    rfaUniverseReady = false;
+    Object.values(rfaMarketState).forEach(st => { st.sample = null; st.sampleResult = null; st.candles = []; st.trend = null; st.signal = null; st.tickEpoch = null; });
+    rfaRenderAll();
+    rfaScheduleReconnect();
+  };
 }
 function rfaScheduleReconnect(){
   if (rfaReconnectTimer) clearTimeout(rfaReconnectTimer);
@@ -27304,9 +27317,50 @@ function rfaDisconnect(){
 }
 
 function rfaHandleMsg(msg){
-  if (msg.error) return;
+  if (msg.error){
+    if (msg.req_id === rfaUniverseReqId) {
+      rfaUniverseReady = false;
+      rfaStopWithError('Market discovery failed: ' + (msg.error.message || msg.error.code || 'unknown error'));
+    } else if (rfaFeedRequests[msg.req_id]){
+      const request = rfaFeedRequests[msg.req_id], st = rfaMarketState[request.symbol];
+      if (st) { st.sample = null; st.sampleResult = null; st.signal = null; st.candles = []; st.trend = null; }
+      gridSet('rfaScanStatus', rfaMarketLabel(request.symbol) + ': ' + request.kind + ' feed failed — ' + (msg.error.message || msg.error.code || 'unknown error'));
+      console.warn('[rfa] market feed failed', request.symbol, request.kind, msg.error);
+      rfaRenderAll();
+    }
+    return;
+  }
+  if (msg.msg_type === 'active_symbols' && msg.req_id === rfaUniverseReqId){
+    let markets;
+    try { markets = window.MFXRiseFallSignal.discoverVolatilityMarkets(msg.active_symbols); }
+    catch(e){ rfaStopWithError('Market discovery failed: ' + e.message); return; }
+    if (!markets.length){ rfaStopWithError('No active volatility markets discovered'); return; }
+    RFA_MARKETS.length = 0;
+    markets.forEach(({ symbol, name }) => {
+      RFA_MARKETS.push(symbol);
+      RFA_LABELS[symbol] = name.replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'})[c]);
+      if (!rfaMarketState[symbol]) rfaMarketState[symbol] = { candles: [], dmiFn: rfaMakeDmiTracker(), confidence: null, lastUpdated: null };
+    });
+    rfaUniverseReady = true;
+    if (rfaReversal.activeSymbol && !RFA_MARKETS.includes(rfaReversal.activeSymbol))
+      rfaStopWithError('Active market is no longer available after reconnect');
+    else gridSet('rfaScanStatus', 'Scanning ' + RFA_MARKETS.length + ' active volatility markets…');
+    const connection = rfaWs;
+    RFA_MARKETS.forEach((sym, i) => {
+      setTimeout(() => {
+        if (rfaWs !== connection || !rfaWs || rfaWs.readyState !== 1) return;
+        const candleReq = ++rfaReqId, tickReq = ++rfaReqId;
+        rfaFeedRequests[candleReq] = { symbol: sym, kind: 'candle' };
+        rfaFeedRequests[tickReq] = { symbol: sym, kind: 'tick' };
+        rfaWs.send(JSON.stringify({ ticks_history: sym, style: 'candles', granularity: 60, count: 60, end: 'latest', subscribe: 1, req_id: candleReq }));
+        rfaWs.send(JSON.stringify({ ticks: sym, subscribe: 1, req_id: tickReq }));
+      }, i * 150);
+    });
+    rfaRenderAll();
+    return;
+  }
   if (msg.msg_type === 'tick' && msg.tick){
-    try { rfaOnTick(msg.tick.symbol, Number(msg.tick.quote)); } catch(e){ console.warn('[rfa reversal] tick failed', e); }
+    try { rfaOnTick(msg.tick.symbol, Number(msg.tick.quote), Number(msg.tick.epoch)); } catch(e){ console.warn('[rfa] tick failed', e); }
     return;
   }
   if (msg.msg_type === 'candles' && msg.echo_req && msg.echo_req.ticks_history){
@@ -27364,14 +27418,14 @@ let rfaStats = { won: 0, lost: 0, profit: 0, sessionStartBalance: null };
 let rfaReversal = {
   running: false, status: "Stopped", cycleNumber: 0,
   pattern: "—", direction: "—", trades: 0, wins: 0, losses: 0, profit: 0,
-  accountId: null, markets: {},
+  accountId: null, markets: {}, activeSymbol: null, lastCompletedSymbol: null,
 };
 
 /** One independent cycle/martingale state per market, created on first use. */
 function rfaReversalMarket(sym){
   if (!rfaReversal.markets[sym]){
     rfaReversal.markets[sym] = {
-      symbol: sym, detector: window.MFXReversalAutoState.createReversalDetector(),
+      symbol: sym,
       slot: { mult: makeMultiplier(() => $("rfaStake"), () => parseFloat(($("rfaMult") || {}).value)), martingaleLevel: 0, currentStake: null, marketProfit: 0, tradeInFlight: false, waitingTicks: 0 },
       continueSignal: null, cycleId: null, consecutiveLosses: 0, cycleStatus: "Waiting for the Next Cycle",
       awaitingNextCycle: false, lossLimitReached: false, pattern: "—", direction: "—",
@@ -27385,7 +27439,7 @@ function rfaResetTradesAndProfit(){
   rfaTrades = [];
   rfaStats = { won: 0, lost: 0, profit: 0, sessionStartBalance: gridBalance };
   const running = rfaReversal.running;
-  Object.assign(rfaReversal, { cycleNumber: 0, pattern: "—", direction: "—", trades: 0, wins: 0, losses: 0, profit: 0, markets: {} });
+  Object.assign(rfaReversal, { cycleNumber: 0, pattern: "—", direction: "—", trades: 0, wins: 0, losses: 0, profit: 0, markets: {}, activeSymbol: null, lastCompletedSymbol: null });
   rfaReversal.running = running;
   rfaReversalSyncStatus();
   rfaRenderAll();
@@ -27416,6 +27470,13 @@ function rfaReversalMaxLosses(){
   const configured = rfaMaxMartingaleLevel();
   return Number.isFinite(configured) ? configured : 5;
 }
+function rfaMarketTarget(){ const el = $("rfaMarketTarget"); const v = el ? Number(el.value) : NaN; return Number.isFinite(v) && v > 0 ? v : null; }
+function rfaSettingsValid(){
+  const stake = Number(($("rfaStake") || {}).value), mult = Number(($("rfaMult") || {}).value);
+  const losses = Number(($("rfaMaxLevel") || {}).value);
+  return Number.isFinite(stake) && stake >= 0.35 && Number.isFinite(mult) && mult >= 1 && mult <= 10 &&
+    Number.isInteger(losses) && losses > 0 && !!rfaMarketTarget() && !!rfaTargetProfit() && !!rfaStopLoss();
+}
 function rfaMaxBulk(){ const el = $("rfaMaxBulk"); const v = el ? parseInt(el.value, 10) : 3; return Number.isFinite(v) && v > 0 ? v : 3; }
 function rfaStopLoss(){ const el = $("rfaStopLoss"); const v = el ? parseFloat(el.value) : NaN; return Number.isFinite(v) && v > 0 ? v : null; }
 function rfaTargetProfit(){ const el = $("rfaTargetProfit"); const v = el ? parseFloat(el.value) : NaN; return Number.isFinite(v) && v > 0 ? v : null; }
@@ -27445,10 +27506,17 @@ function rfaPickTopMarkets(n, excludeSymbols){
 /** Stop Loss remains the one hard, session-wide safety stop, checked against TOTAL profit across every concurrent market. */
 function rfaRiskLimitReached(){
   const sl = rfaStopLoss();
-  if (sl != null && rfaStats.profit <= -sl) return 'Stop loss reached (' + rfaStats.profit.toFixed(2) + ')';
+  if (sl != null && rfaStats.profit <= -sl + 1e-9) return 'Stop loss reached (' + rfaStats.profit.toFixed(2) + ')';
   const tp = rfaTargetProfit();
-  if (tp != null && rfaStats.profit >= tp) return 'Target profit reached (+' + rfaStats.profit.toFixed(2) + ')';
+  if (tp != null && rfaStats.profit >= tp - 1e-9) return 'Target profit reached (+' + rfaStats.profit.toFixed(2) + ')';
   return null;
+}
+function rfaStopWithError(message){
+  rfaReversal.running = false;
+  rfaReversalSyncStatus();
+  rfaReversal.status = 'Stopped — ' + message;
+  gridSet('rfaScanStatus', rfaReversal.status);
+  rfaRenderAll();
 }
 
 /** Step 9-14 — the central decision loop: continue every already-active market independently, then fill any open concurrent slots with fresh qualifying markets. */
@@ -27497,14 +27565,16 @@ function rfaValidateProposal(p){
 
 function rfaExecuteTrade(symbol, direction, confidenceInfo, reversalMeta){
   if (typeof gridWs === 'undefined' || !gridWs || gridWs.readyState !== 1 || !gridAuthed){
-    gridSet('rfaScanStatus', 'Connect on Trading Grid first.'); return;
+    if (reversalMeta) rfaStopWithError('Trading Grid disconnected');
+    else gridSet('rfaScanStatus', 'Connect on Trading Grid first.');
+    return;
   }
   const slot = reversalMeta ? rfaReversalMarket(symbol).slot : rfaGetSlot(symbol);
   const stake = Math.max(0.35, slot.currentStake != null ? slot.currentStake : slot.mult.getNext('martingale'));
   if (reversalMeta){
     const committed = Object.values(rfaOpenContracts).reduce((a, r) => a + (r.mode === 'reversal' ? Number(r.stake) || 0 : 0), 0);
     if (!Number.isFinite(gridBalance) || stake + committed > gridBalance){
-      gridSet('rfaScanStatus', (MARKETS[symbol] || symbol) + ': skipped — stake exceeds available balance.');
+      rfaStopWithError('Stake exceeds available balance or balance is unavailable');
       return false;
     }
   }
@@ -27520,7 +27590,11 @@ function rfaExecuteTrade(symbol, direction, confidenceInfo, reversalMeta){
     underlying_symbol:symbol,
   };
   const validation = rfaValidateProposal(proposalMsg);
-  if (!validation.ok){ gridSet('rfaScanStatus', 'Proposal rejected before sending: ' + validation.errors.join('; ')); return; }
+  if (!validation.ok){
+    if (reversalMeta) rfaStopWithError('Invalid proposal: ' + validation.errors.join('; '));
+    else gridSet('rfaScanStatus', 'Proposal rejected before sending: ' + validation.errors.join('; '));
+    return;
+  }
 
   if (window.__mfxDebug) window.__mfxDebug.recordSignal({
     engine: 'RiseFallAutobot', signal: contractType, confidence: confidenceInfo ? confidenceInfo.confidence : null,
@@ -27536,14 +27610,26 @@ function rfaExecuteTrade(symbol, direction, confidenceInfo, reversalMeta){
   rfaTrades.unshift(row);
 
   gridPending[reqId] = (proposal, err) => {
-    if (err){ row.status = 'rejected: ' + (err.message || err.code || 'error'); slot.tradeInFlight = false; if (reversalMeta) rfaReversalSyncStatus(); rfaRenderAll(); return; }
-    if (!proposal || !proposal.id || proposal.ask_price == null){ row.status = 'rejected: no price'; slot.tradeInFlight = false; if (reversalMeta) rfaReversalSyncStatus(); rfaRenderAll(); return; }
-    if (reversalMeta && !rfaReversal.running){
+    if (err){ row.status = 'rejected: ' + (err.message || err.code || 'error'); slot.tradeInFlight = false; if (reversalMeta) rfaStopWithError(row.status); rfaRenderAll(); return; }
+    if (!proposal || !proposal.id || !Number.isFinite(Number(proposal.ask_price)) || Number(proposal.ask_price) <= 0){ row.status = 'rejected: no valid price'; slot.tradeInFlight = false; if (reversalMeta) rfaStopWithError(row.status); rfaRenderAll(); return; }
+    if (reversalMeta && (!rfaReversal.running || !rfaConnected || !gridAuthed || gridLoginId !== rfaReversal.accountId || !rfaSettingsValid() || rfaRiskLimitReached())){
       row.status = 'cancelled before buy';
       slot.tradeInFlight = false;
-      rfaReversalSyncStatus();
+      rfaStopWithError('Trade cancelled before buy because connection, account or risk state changed');
       rfaRenderAll();
       return;
+    }
+    if (reversalMeta){
+      const st = rfaMarketState[symbol], now = Date.now() / 1000;
+      const stillValid = st && Number.isFinite(st.tickEpoch) && Math.abs(now - st.tickEpoch) <= 10 &&
+        window.MFXRiseFallSignal.riseFallDirection(st.sampleResult, rfaClosedTrend(st, now)) === direction;
+      if (!stillValid){
+        row.status = 'cancelled — trigger no longer valid';
+        slot.tradeInFlight = false;
+        gridSet('rfaScanStatus', 'Waiting for a fresh trigger on ' + rfaMarketLabel(symbol));
+        rfaRenderAll();
+        return;
+      }
     }
     const buyReqId = ++gridReqId;
     row.status = 'open'; rfaRenderAll();
@@ -27552,8 +27638,8 @@ function rfaExecuteTrade(symbol, direction, confidenceInfo, reversalMeta){
         if (buyErr) console.warn('[rfa reversal] buy response conflicted with recovered contract update', row.id, buyErr);
         return;
       }
-      if (buyErr){ row.buySubmitted = false; row.status = 'buy failed: ' + (buyErr.message || buyErr.code || 'error'); slot.tradeInFlight = false; if (reversalMeta) rfaReversalSyncStatus(); rfaRenderAll(); return; }
-      if (buy){
+      if (buyErr){ row.buySubmitted = false; row.status = 'buy failed: ' + (buyErr.message || buyErr.code || 'error'); slot.tradeInFlight = false; if (reversalMeta) rfaStopWithError(row.status); rfaRenderAll(); return; }
+      if (buy && buy.contract_id != null){
         row.id = String(buy.contract_id);
         row.buyPrice = buy.buy_price;
         row.status = 'open';
@@ -27563,15 +27649,18 @@ function rfaExecuteTrade(symbol, direction, confidenceInfo, reversalMeta){
           rfaReversalSyncStatus();
         }
         rfaRenderAll();
+      } else if (reversalMeta) {
+        row.status = 'buy outcome unknown — awaiting account reconciliation';
+        rfaStopWithError(row.status);
       }
     };
     row.buySubmitted = true;
     row.status = 'buy pending confirmation';
     try { gridWs.send(JSON.stringify({ buy: proposal.id, price: proposal.ask_price, req_id: buyReqId })); }
-      catch (e){ row.buySubmitted = false; row.status = 'buy failed: ' + (e.message || 'connection error'); slot.tradeInFlight = false; if (reversalMeta) rfaReversalSyncStatus(); rfaRenderAll(); }
+      catch (e){ row.buySubmitted = false; row.status = 'buy failed: ' + (e.message || 'connection error'); slot.tradeInFlight = false; if (reversalMeta) rfaStopWithError(row.status); rfaRenderAll(); }
   };
   try { gridWs.send(JSON.stringify(proposalMsg)); }
-  catch (e){ row.status = 'proposal failed: ' + (e.message || 'connection error'); slot.tradeInFlight = false; if (reversalMeta) rfaReversalSyncStatus(); rfaRenderAll(); }
+  catch (e){ row.status = 'proposal failed: ' + (e.message || 'connection error'); slot.tradeInFlight = false; if (reversalMeta) rfaStopWithError(row.status); rfaRenderAll(); }
   rfaRenderAll();
 }
 
@@ -27600,24 +27689,30 @@ function rfaSettleContract(id, won){
     rfaReversal.profit += tradePnl;
     if (won){
       rfaReversal.wins++;
-      window.MFXReversalAutoState.applyReversalSettlement(mkt, true);
-      mkt.continueSignal = null;
-      mkt.cycleId = null;
-      mkt.detector.resetRun();
+      mkt.consecutiveLosses = 0;
       slot.martingaleLevel = 0;
-      slot.currentStake = null;
     } else {
       rfaReversal.losses++;
-      window.MFXReversalAutoState.applyReversalSettlement(mkt, false);
+      mkt.consecutiveLosses++;
       slot.martingaleLevel++;
-      slot.currentStake = null;
-      // Cycle stays open: keep trading this market's direction (multiplied stake) until a confirmed win.
-      mkt.continueSignal = { pattern: mkt.pattern, direction: mkt.direction };
-      if (mkt.consecutiveLosses >= rfaReversalMaxLosses()){
-        mkt.continueSignal = null;
-        mkt.lossLimitReached = true;
-        mkt.cycleStatus = 'Locked — maximum consecutive losses reached';
-      }
+    }
+    slot.currentStake = null;
+    const limitHit = rfaRiskLimitReached();
+    if (limitHit) {
+      rfaReversal.running = false;
+      gridSet('rfaScanStatus', 'Stopped — ' + limitHit);
+    }
+    const marketTarget = rfaMarketTarget();
+    if (!rfaSettingsValid()) {
+      rfaReversal.running = false;
+      gridSet('rfaScanStatus', 'Stopped — invalid risk settings');
+    }
+    const reachedMarketTarget = marketTarget && slot.marketProfit >= marketTarget - 1e-9;
+    if (reachedMarketTarget || mkt.consecutiveLosses >= rfaReversalMaxLosses()){
+      mkt.cycleStatus = reachedMarketTarget ? 'Market target reached' : 'Consecutive loss limit reached';
+      mkt.cycleId = null;
+      rfaReversal.activeSymbol = null;
+      rfaReversal.lastCompletedSymbol = row.symbol;
     }
     rfaReversalSyncStatus();
     rfaRenderAll();
@@ -27667,8 +27762,8 @@ function rfaToggleReversal(){
     rfaRenderAll();
     return;
   }
-  if (!window.MFXReversalAutoState){
-    rfaReversal.status = 'Unavailable — reversal state module did not load';
+  if (!window.MFXRiseFallSignal){
+    rfaReversal.status = 'Unavailable — signal module did not load';
     rfaRenderAll();
     return;
   }
@@ -27677,29 +27772,85 @@ function rfaToggleReversal(){
     rfaRenderAll();
     return;
   }
+  if (!rfaConnected || !rfaUniverseReady){
+    rfaReversal.status = 'Wait for volatility market discovery and the public feed';
+    rfaConnect();
+    rfaRenderAll();
+    return;
+  }
+  if (rfaReversal.activeSymbol && !RFA_MARKETS.includes(rfaReversal.activeSymbol)){
+    rfaReversal.status = 'Active market is unavailable — reset the session to start again';
+    rfaRenderAll();
+    return;
+  }
+  if (!rfaSettingsValid()){
+    rfaReversal.status = 'Set valid stake, multiplier, market target, overall target, loss limit and consecutive-loss limit';
+    rfaRenderAll();
+    return;
+  }
+  if (rfaReversalAnyInFlight()){
+    rfaReversal.status = 'Wait for the open trade to settle before starting';
+    rfaRenderAll();
+    return;
+  }
+  const existingLimit = rfaRiskLimitReached();
+  if (existingLimit){
+    rfaReversal.status = 'Reset the session before restarting — ' + existingLimit;
+    rfaRenderAll();
+    return;
+  }
+  rfaArmed = false;
   rfaConnect();
-  RFA_MARKETS.forEach(sym => { const m = rfaReversalMarket(sym); m.detector.reset(); });
   rfaReversal.accountId = gridLoginId;
   rfaReversal.running = true;
   rfaReversal.status = 'Running';
   rfaStats.sessionStartBalance = gridBalance;
-  gridSet('rfaScanStatus', 'Scanning ' + RFA_MARKETS.length + ' volatility markets for 5R / 5F…');
+  gridSet('rfaScanStatus', 'Scanning ' + RFA_MARKETS.length + ' volatility markets for the 50-tick trend trigger…');
   rfaRenderAll();
 }
 
-/** Live tick from the public feed for any scanned market. Each market runs its own cycle; qualifying markets trade in bulk. */
-function rfaOnTick(sym, price){
-  if (!rfaReversal.running || !window.MFXReversalAutoState) return;
-  const mkt = rfaReversalMarket(sym);
-  const slot = mkt.slot;
-  const fresh = mkt.continueSignal ? null : mkt.detector.observe(price);
-  if (mkt.lossLimitReached) return;
-  const signal = mkt.continueSignal || fresh;
-  if (!signal) return;
-  if (slot.tradeInFlight) return;
-  const openNow = Object.values(rfaReversal.markets).filter(m => m.slot.tradeInFlight).length;
-  if (openNow >= rfaMaxBulk()) return;
+function rfaClosedTrend(st, epoch){
+  if (!Number.isFinite(epoch)) return null;
+  const candles = st.candles.filter(c => c.epoch + 60 <= epoch);
+  if (candles.length < 20 || epoch - (candles[candles.length - 1].epoch + 60) > 120) return null;
+  const closes = candles.map(c => c.close);
+  const tracker = rfaMakeDmiTracker();
+  let dmi = null;
+  closes.forEach(close => { dmi = tracker(close); });
+  const m = macd(closes);
+  return rfaMarketControl(candles, {
+    ema5: emaLast(closes, 5), ema10: emaLast(closes, 10), ema20: emaLast(closes, 20),
+    macd: m ? m.macd : null, macdSig: m ? m.signal : null,
+    pdi: dmi ? dmi.pdi : null, ndi: dmi ? dmi.ndi : null, adx: dmi ? dmi.adx : null,
+  }).bias;
+}
 
+/** Every market is sampled continuously; only the selected market may trade. */
+function rfaOnTick(sym, price, epoch){
+  const st = rfaMarketState[sym];
+  if (!st || !window.MFXRiseFallSignal || !Number.isFinite(price) || !Number.isFinite(epoch)) return;
+  if (Math.abs(Date.now() / 1000 - epoch) > 10){
+    st.sample = null; st.sampleResult = null; st.signal = null; st.trend = null; st.tickEpoch = null;
+    if (rfaReversal.running && rfaReversal.activeSymbol === sym)
+      gridSet('rfaScanStatus', 'Waiting for fresh ticks on ' + rfaMarketLabel(sym));
+    return;
+  }
+  if (st.tickEpoch != null && (epoch < st.tickEpoch || epoch - st.tickEpoch > 10)){
+    st.sample = null;
+    st.sampleResult = null;
+  }
+  st.tickEpoch = epoch;
+  if (!st.sample) st.sample = window.MFXRiseFallSignal.createRiseFallSample();
+  st.sampleResult = st.sample.observe(price);
+  st.trend = rfaClosedTrend(st, epoch);
+  st.signal = window.MFXRiseFallSignal.riseFallDirection(st.sampleResult, st.trend);
+  if (!rfaReversal.running || !rfaConnected) { rfaRenderAll(); return; }
+  const direction = st.signal;
+  rfaRenderAll();
+  if (!direction) return;
+  if (rfaReversalAnyInFlight()) return;
+  if (rfaReversal.activeSymbol && rfaReversal.activeSymbol !== sym) return;
+  if (!rfaReversal.activeSymbol && rfaReversal.lastCompletedSymbol === sym) return;
   const limitHit = rfaRiskLimitReached();
   if (limitHit){
     rfaReversal.running = false;
@@ -27715,11 +27866,24 @@ function rfaOnTick(sym, price){
     rfaRenderAll();
     return;
   }
-  if (!mkt.continueSignal){
-    // A new qualifying pattern: start a new cycle for this market at the base stake.
-    mkt.pattern = signal.pattern; mkt.direction = signal.direction;
-    if (mkt.cycleId == null) mkt.cycleId = ++rfaReversal.cycleNumber;
+  if (!rfaSettingsValid()){
+    rfaReversal.running = false;
+    rfaReversal.status = 'Stopped — invalid risk settings';
+    rfaRenderAll();
+    return;
   }
+  const mkt = rfaReversalMarket(sym);
+  if (!rfaReversal.activeSymbol){
+    rfaReversal.activeSymbol = sym;
+    mkt.slot.mult.reset();
+    mkt.slot.marketProfit = 0;
+    mkt.slot.currentStake = null;
+    mkt.slot.martingaleLevel = 0;
+    mkt.consecutiveLosses = 0;
+    mkt.cycleId = ++rfaReversal.cycleNumber;
+  }
+  mkt.pattern = direction === 'RISE' ? st.sampleResult.risePercent.toFixed(1) + '% rise' : st.sampleResult.fallPercent.toFixed(1) + '% fall';
+  mkt.direction = direction;
   mkt.cycleStatus = 'Active';
   rfaReversal.pattern = mkt.pattern;
   rfaReversal.direction = mkt.direction;
@@ -27728,6 +27892,16 @@ function rfaOnTick(sym, price){
 }
 
 function rfaRenderAll(){
+  const scanner = $('rfaScannerBody');
+  if (scanner){
+    scanner.innerHTML = RFA_MARKETS.map(sym => {
+      const st = rfaMarketState[sym], s = st.sampleResult;
+      const rise = s ? s.risePercent.toFixed(1) + '%' + (s.riseIncreasing ? ' ↑' : '') : '—';
+      const fall = s ? s.fallPercent.toFixed(1) + '%' + (s.fallIncreasing ? ' ↑' : '') : '—';
+      const state = rfaReversal.activeSymbol === sym ? 'Active' : rfaReversal.lastCompletedSymbol === sym ? 'Waiting for another cycle' : st.signal || '—';
+      return `<tr><td class="l">${rfaMarketLabel(sym)}</td><td>${rise}</td><td>${fall}</td><td>${st.trend || '—'}</td><td>${state}</td></tr>`;
+    }).join('');
+  }
   // Market ranking table — every scanned market, sorted by confidence.
   const rankBody = $("rfaRankBody");
   if (rankBody){
@@ -27744,7 +27918,7 @@ function rfaRenderAll(){
         const dirTxt = c.direction || '—';
         const dirCls = c.direction === 'RISE' ? 'cell-pos' : c.direction === 'FALL' ? 'cell-neg' : 'cell-mut';
         return `<tr${isActive ? ' style="background:rgba(86,182,255,0.08)"' : ''}>
-          <td class="l">${MARKETS[sym]||sym}${isActive ? ' 🔒' : ''}</td>
+          <td class="l">${rfaMarketLabel(sym)}${isActive ? ' 🔒' : ''}</td>
           <td class="${dirCls}" style="font-weight:700">${dirTxt}</td>
           <td>${(c.confidence*100).toFixed(0)}%</td>
           <td class="cell-mut">${c.marketControl ? c.marketControl.bias : '—'}</td>
@@ -27765,7 +27939,7 @@ function rfaRenderAll(){
         const slot = rfaActiveMarkets[sym];
         const target = rfaTargetProfit();
         return `<tr>
-          <td class="l">${MARKETS[sym]||sym}</td>
+          <td class="l">${rfaMarketLabel(sym)}</td>
           <td>${slot.martingaleLevel}</td>
           <td>${slot.currentStake != null ? slot.currentStake.toFixed(2) : '—'}</td>
           <td class="${slot.marketProfit>=0?'cell-pos':'cell-neg'}">${(slot.marketProfit>=0?'+':'')+slot.marketProfit.toFixed(2)}${target!=null ? ' / '+target.toFixed(2) : ''}</td>
@@ -27781,18 +27955,18 @@ function rfaRenderAll(){
   setTxt('rfaStatWinRate', resolved ? ((rfaStats.won/resolved)*100).toFixed(1)+'%' : '—');
   setTxt('rfaStatProfit', (rfaStats.profit>=0?'+':'')+rfaStats.profit.toFixed(2));
   setTxt('rfaStatROI', rfaStats.sessionStartBalance ? ((rfaStats.profit/rfaStats.sessionStartBalance)*100).toFixed(2)+'%' : '—');
-  setTxt('rfaStatActiveCount', Object.keys(rfaActiveMarkets).length + ' / ' + rfaMaxConcurrentMarkets());
+  setTxt('rfaStatActiveCount', (rfaReversal.activeSymbol ? 1 : 0) + ' / 1');
   const rMkts = Object.values(rfaReversal.markets);
   const activeCycles = rMkts.filter(m => m.cycleId != null);
   const maxLoss = rMkts.reduce((a, m) => Math.max(a, m.consecutiveLosses || 0), 0);
   const baseStake = Math.max(0.35, Number($('rfaStake') && $('rfaStake').value) || 1);
   const stakes = rMkts.filter(m => m.slot.currentStake != null).map(m => m.slot.currentStake);
-  setTxt('rfaReversalMarket', 'All volatility markets (' + RFA_MARKETS.length + ')' + (activeCycles.length ? ' — ' + activeCycles.length + ' active cycle(s): ' + activeCycles.map(m => MARKETS[m.symbol] || m.symbol).join(', ') : ''));
+  setTxt('rfaReversalMarket', rfaReversal.activeSymbol ? rfaMarketLabel(rfaReversal.activeSymbol) : 'Scanning ' + RFA_MARKETS.length + ' markets');
   setTxt('rfaReversalStatus', rfaReversal.status);
   setTxt('rfaReversalPattern', rfaReversal.pattern);
   setTxt('rfaReversalDirection', rfaReversal.direction);
   setTxt('rfaReversalCycle', rfaReversal.cycleNumber || 1);
-  setTxt('rfaReversalCycleStatus', activeCycles.length ? 'Active' : 'Waiting for the Next Cycle');
+  setTxt('rfaReversalCycleStatus', activeCycles.length ? activeCycles[0].cycleStatus + ' · market P/L ' + activeCycles[0].slot.marketProfit.toFixed(2) : 'Waiting for the next cycle');
   setTxt('rfaReversalBaseStake', baseStake.toFixed(2));
   setTxt('rfaReversalStake', (stakes.length ? Math.max.apply(null, stakes) : baseStake).toFixed(2));
   setTxt('rfaReversalLosses', maxLoss);
@@ -27800,7 +27974,7 @@ function rfaRenderAll(){
   setTxt('rfaReversalWins', rfaReversal.wins);
   setTxt('rfaReversalLost', rfaReversal.losses);
   setTxt('rfaReversalProfit', (rfaReversal.profit >= 0 ? '+' : '') + rfaReversal.profit.toFixed(2));  const reversalBtn = $('rfaReversalBtn');
-  if (reversalBtn){ reversalBtn.textContent = rfaReversal.running ? '⏹ Stop Reversal Auto' : '▶ Start Reversal Auto'; reversalBtn.classList.toggle('active', rfaReversal.running); }
+  if (reversalBtn){ reversalBtn.textContent = rfaReversal.running ? '⏹ Stop Rise/Fall Auto' : '▶ Start Rise/Fall Auto'; reversalBtn.classList.toggle('active', rfaReversal.running); }
 
   // Trade log
   const body = $("rfaTradeBody");
@@ -27814,7 +27988,7 @@ function rfaRenderAll(){
         const sCls = t.status==='won' ? 'cell-pos' : t.status==='lost' ? 'cell-neg' : /reject|failed|unknown|interrupted|cancelled/.test(t.status) ? 'cell-warn' : 'cell-mut';
         return `<tr>
           <td class="l">${fmtTime(t.time)}</td>
-          <td class="l">${t.mode === 'reversal' ? (MARKETS[t.symbol]||t.symbol) + ' ' + t.pattern : (MARKETS[t.symbol]||t.symbol)}</td>
+          <td class="l">${t.mode === 'reversal' ? rfaMarketLabel(t.symbol) + ' ' + t.pattern : rfaMarketLabel(t.symbol)}</td>
           <td class="${dirCls}" style="font-weight:700">${t.dir}</td>
           <td>${t.stake!=null?Number(t.stake).toFixed(2):'—'}</td>
           <td>${t.confidence!=null?(t.confidence*100).toFixed(0)+'%':'—'}</td>
@@ -34070,7 +34244,7 @@ try {
 <script type="module" src="src/consec/consecAlert.js?v=1"></script>
 <script type="module" src="src/trading/fiveTickSignalEngine.js"></script>
 <script type="module" src="src/trading/multiplierHelpers.js"></script>
-<script type="module" src="src/trading/reversalAutoState.mjs"></script>
+<script type="module" src="src/trading/riseFallSignal.mjs"></script>
 <script type="module" src="src/trading/gridSetHelper.js"></script>
 <script type="module" src="src/trading/gridStatusUi.js"></script>
 <script type="module" src="src/trading/gridSessionAuth.js?v=14"></script>

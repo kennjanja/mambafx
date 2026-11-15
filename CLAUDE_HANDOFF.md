@@ -226,7 +226,7 @@ All bots are independent systems sharing only the WebSocket feed and the Trading
 |-----|--------------|-----------|-------|
 | Prediction Bot | `pbPageInit()` | `pbOnTick()` | Pattern-match based |
 | Only Ups/Downs | `ouPageInit()` | `ouOnTick()` | Multi-filter |
-| Rise/Fall Autobot | `rfaPageInit()` | `rfaOnTick()` | ADX+pattern |
+| Rise/Fall Autobot | `rfaPageInit()` | `rfaOnTick()` | 50-tick momentum + closed 1-minute market control; single-market cycles |
 | ADX Bot | `adxPageInit()` | `adxOnTick()` | ADX threshold |
 | Aggression Bot | `aggPageInit()` | `aggOnTick()` | High-frequency |
 | Mamba FX Bot | `mfxInit()` | via grid connection | Floating panel |
