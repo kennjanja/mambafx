@@ -26,6 +26,11 @@ explicit account time zone. It is not a trading controller: account identity,
 currency precision, confirmed-loss counts, outstanding contracts and daily
 ledger values must be established by the future authenticated execution
 integration before these checks can protect any trade.
+An isolated execution prototype and separate browser storage also exist, with
+mocked lifecycle tests. They are not wired to the authenticated Deriv socket,
+cross-tab execution ownership or the dashboard, and must not be used for
+trading until those integrations and recovery paths are implemented and
+verified.
 
 The requested role numbering contains 1–65 and 86–95: those 75 roles are mapped
 below. Positions 66–85 and 96–100 are not created. Existing leadership and
