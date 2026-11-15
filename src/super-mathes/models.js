@@ -1,4 +1,4 @@
-import { entropyBits, mutualInformation, validVector } from "../ldpe/engine.js";
+import { entropyBits, mutualInformation, validVector } from "./math.js";
 
 export const UNIFORM = Object.freeze(Array(10).fill(0.1));
 
@@ -8,6 +8,15 @@ export function frequencyDistribution(digits, alpha = 1) {
   const counts = Array(10).fill(alpha);
   for (const digit of digits) counts[digit]++;
   return counts.map(count => count / (digits.length + 10 * alpha));
+}
+
+export function transitionDistribution(digits, alpha = 1) {
+  frequencyDistribution(digits, alpha);
+  if (!digits.length) return [...UNIFORM];
+  const counts = Array(10).fill(alpha), current = digits.at(-1);
+  for (let i = 1; i < digits.length; i++) if (digits[i - 1] === current) counts[digits[i]]++;
+  const total = counts.reduce((a, b) => a + b, 0);
+  return counts.map(count => count / total);
 }
 
 export function sequenceDiagnostics(digits) {

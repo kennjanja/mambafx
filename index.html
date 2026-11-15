@@ -735,6 +735,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     <button id="navOuBot" onclick="showPage('oubot')">⬆⬇ Consecutive Tick Bot</button>
     <button id="navTracker" onclick="showPage('tracker')">🔢 Digit Tracker</button>
     <button id="navDigits" onclick="showPage('digits')">🎲 LDPE</button>
+    <button id="navSuperMathes" onclick="showPage('supermathes')">🔬 Super Mathes</button>
     <button id="navDiag" onclick="showPage('diag')">🩺 API Diagnostics</button>
     <button id="navCharts" onclick="showPage('charts')">📈 Indicator Charts</button>
     <button id="navAdxBot" onclick="showPage('adxbot')">📐 ADX Bot</button>
@@ -1446,6 +1447,27 @@ table.an-table tbody tr:last-child td{border-bottom:none}
       Synthetic indices produce last digits that are statistically uniform over large samples — deviations from 10% per digit are expected noise, not a persistent pattern. This tracker shows the real-time distribution for awareness, not for prediction.
     </footer>
   </div><!-- /page-tracker -->
+
+  <div id="page-supermathes" class="page">
+    <section class="gc-card">
+      <h2>Super Mathes — independent digit research</h2>
+      <div class="gc-sub">Analysis only. These models and recurrence assumptions are unvalidated and do not imply a trading advantage.</div>
+      <p id="sm-status" role="status">Starting research storage…</p>
+      <label>History source <select id="sm-source"><option value="">Current live source</option></select></label>
+      <label>Research model <select id="sm-model"><option value="frequency">Smoothed frequency</option><option value="markov">First-order Markov</option></select></label>
+      <label>Observation window <input id="sm-window" type="number" min="20" max="10000" value="1000"></label>
+      <label>Benchmark warmup <input id="sm-warmup" type="number" min="1" max="9999" value="100"></label>
+      <button id="sm-save" type="button" class="gc-btn">Save settings</button>
+      <button id="sm-predict" type="button" class="gc-btn">Record prediction on live feed</button>
+      <button id="sm-benchmark" type="button" class="gc-btn">Run chronological benchmark</button>
+      <p id="sm-message" role="status"></p>
+      <h3>Live observations and source quality</h3><pre id="sm-feed">Waiting for public ticks.</pre>
+      <h3>Latest prediction and ranked distribution</h3><pre id="sm-prediction">No recorded prediction.</pre>
+      <h3>Five-observation recurrence</h3><pre id="sm-recurrence">No recorded prediction.</pre>
+      <h3>Prediction history</h3><pre id="sm-history">No prediction history.</pre>
+      <h3>Model performance and research validation</h3><pre id="sm-reports">No benchmark has been run.</pre>
+    </section>
+  </div>
 
   <!-- ============ PAGE 6: DIGITS / MATCHES BOT ============ -->
   <div id="page-digits" class="page">
@@ -4472,8 +4494,12 @@ function connect(){
     }
   };
   ws.onmessage = ev => {
-    let msg; try { msg = JSON.parse(ev.data); } catch(_) { return; }
+    let msg; try { msg = JSON.parse(ev.data); } catch(_) {
+      if (window.SuperMathes) window.SuperMathes.interrupt("Invalid public feed message").catch(() => {});
+      return;
+    }
     if (msg.error){
+      if (window.SuperMathes) window.SuperMathes.interrupt("Public feed error").catch(() => {});
       // a symbol-level error shouldn't kill the whole connection
       setConn("live");
       console.warn("Deriv API error:", msg.error.message, "(endpoint:", url, ")");
@@ -4527,13 +4553,29 @@ function connect(){
       // JSON.parse drops trailing zeros; keep the raw quote literal for exact last-digit extraction
       const _rq = /"quote"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*[,}]/.exec(ev.data);
       window.__rawQuote = _rq ? _rq[1] : null;
+      if (window.SuperMathes){
+        const tickObject = /"tick"\s*:\s*\{([^{}]*)\}/.exec(ev.data);
+        const original = tickObject && /"quote"\s*:\s*(-?[0-9]+(?:\.[0-9]+)?)\s*[,}]/.exec(tickObject[1] + "}");
+        let precision = null;
+        if (Number.isInteger(pip)) precision = pip;
+        else if (pip > 0 && pip < 1){
+          const n = Math.round(-Math.log10(pip));
+          if (Math.abs(Math.pow(10, -n) - pip) < pip * 1e-10) precision = n;
+        }
+        window.SuperMathes.ingest({
+          endpoint: new URL(url).origin, symbol: msg.tick.symbol, epoch: msg.tick.epoch,
+          rawQuote: original && Number(original[1]) === msg.tick.quote ? original[1] : null,
+          decimals: precision,
+        }).catch(() => {});
+      }
       handleTick(Number(msg.tick.quote), epoch);
     }
   };
-  ws.onerror = () => { console.warn("[deriv ws] error on", url); setConn("dead"); };
+  ws.onerror = () => { if (window.SuperMathes) window.SuperMathes.interrupt("Public feed error").catch(() => {}); console.warn("[deriv ws] error on", url); setConn("dead"); };
   ws.onclose = () => {
     if (_connectTimeout){ clearTimeout(_connectTimeout); _connectTimeout = null; }
     console.log("[deriv ws] closed:", url);
+    if (window.SuperMathes) window.SuperMathes.interrupt("Public feed disconnected").catch(() => {});
     if (window.PDT) window.PDT.pauseFeed(SYMBOL);
     if (!_opened) _endpointIdx++;   // never opened — rotate to the next endpoint
     setConn("dead");
@@ -26521,6 +26563,7 @@ window.mfxEnsureVolatility = function(list){
 };
 window.mfxSwitchMarket = function(code){ if (!MARKETS[code] || code === SYMBOL) return; const sel = $("marketSel"); if (sel) sel.value = code; switchMarket(code); };
 function switchMarket(code){
+  if (window.SuperMathes) window.SuperMathes.interrupt("Market switched").catch(() => {});
   SYMBOL = code;
   $("titleMarket").textContent = MARKETS[code];
   resetState();
@@ -26899,8 +26942,8 @@ function startTfTimers(){
 }
 
 function showPage(which){
-  const pages = { risefalldashboard:"page-risefalldashboard", accounts:"page-accounts", live:"page-live", candles:"page-candles", engine:"page-engine", grid:"page-grid", analysis:"page-analysis", features:"page-features", predbot:"page-predbot", oubot:"page-oubot", tracker:"page-tracker", digits:"page-digits", diag:"page-diag", charts:"page-charts", adxbot:"page-adxbot", aggression:"page-aggression", mtf:"page-mtf", njanja:"page-njanja", rfabot:"page-rfabot", tradesignal:"page-tradesignal", predhistory:"page-predhistory", beastmode:"page-beastmode", sossow:"page-sossow", bazu:"page-bazu", msdexplorer:"page-msdexplorer", msdfeatures:"page-msdfeatures", msdevents:"page-msdevents", msdinspector:"page-msdinspector", msddistribution:"page-msddistribution", msdcorrelation:"page-msdcorrelation", msdsearch:"page-msdsearch", msdexperiment:"page-msdexperiment", msdknowledge:"page-msdknowledge", msdvalidation:"page-msdvalidation", msdworkbench:"page-msdworkbench", msdphase8:"page-msdphase8", msdphase9:"page-msdphase9", msdphase11:"page-msdphase11", msdphase11validation:"page-msdphase11validation" };
-  const navs  = { risefalldashboard:"navRiseFallDashboard", accounts:"navAccounts", live:"navLive",  candles:"navCandles", engine:"navEngine", grid:"navGrid", analysis:"navAnalysis", features:"navFeatures", predbot:"navPredBot", oubot:"navOuBot", tracker:"navTracker", digits:"navDigits", diag:"navDiag", charts:"navCharts", adxbot:"navAdxBot", aggression:"navAggression", mtf:"navMtf", njanja:"navNjanja", rfabot:"navRfaBot", tradesignal:"navTradeSignal", predhistory:"navPredHistory", beastmode:"navBeastMode", sossow:"navSosSow", bazu:"navBazu", msdexplorer:"navMsdExplorer", msdfeatures:"navMsdFeatures", msdevents:"navMsdEvents", msdinspector:"navMsdInspector", msddistribution:"navMsdDistribution", msdcorrelation:"navMsdCorrelation", msdsearch:"navMsdSearch", msdexperiment:"navMsdExperiment", msdknowledge:"navMsdKnowledge", msdvalidation:"navMsdValidation", msdworkbench:"navMsdWorkbench", msdphase8:"navMsdPhase8", msdphase9:"navMsdPhase9", msdphase11:"navMsdPhase11", msdphase11validation:"navMsdPhase11Validation" };
+  const pages = { supermathes:"page-supermathes", risefalldashboard:"page-risefalldashboard", accounts:"page-accounts", live:"page-live", candles:"page-candles", engine:"page-engine", grid:"page-grid", analysis:"page-analysis", features:"page-features", predbot:"page-predbot", oubot:"page-oubot", tracker:"page-tracker", digits:"page-digits", diag:"page-diag", charts:"page-charts", adxbot:"page-adxbot", aggression:"page-aggression", mtf:"page-mtf", njanja:"page-njanja", rfabot:"page-rfabot", tradesignal:"page-tradesignal", predhistory:"page-predhistory", beastmode:"page-beastmode", sossow:"page-sossow", bazu:"page-bazu", msdexplorer:"page-msdexplorer", msdfeatures:"page-msdfeatures", msdevents:"page-msdevents", msdinspector:"page-msdinspector", msddistribution:"page-msddistribution", msdcorrelation:"page-msdcorrelation", msdsearch:"page-msdsearch", msdexperiment:"page-msdexperiment", msdknowledge:"page-msdknowledge", msdvalidation:"page-msdvalidation", msdworkbench:"page-msdworkbench", msdphase8:"page-msdphase8", msdphase9:"page-msdphase9", msdphase11:"page-msdphase11", msdphase11validation:"page-msdphase11validation" };
+  const navs  = { supermathes:"navSuperMathes", risefalldashboard:"navRiseFallDashboard", accounts:"navAccounts", live:"navLive",  candles:"navCandles", engine:"navEngine", grid:"navGrid", analysis:"navAnalysis", features:"navFeatures", predbot:"navPredBot", oubot:"navOuBot", tracker:"navTracker", digits:"navDigits", diag:"navDiag", charts:"navCharts", adxbot:"navAdxBot", aggression:"navAggression", mtf:"navMtf", njanja:"navNjanja", rfabot:"navRfaBot", tradesignal:"navTradeSignal", predhistory:"navPredHistory", beastmode:"navBeastMode", sossow:"navSosSow", bazu:"navBazu", msdexplorer:"navMsdExplorer", msdfeatures:"navMsdFeatures", msdevents:"navMsdEvents", msdinspector:"navMsdInspector", msddistribution:"navMsdDistribution", msdcorrelation:"navMsdCorrelation", msdsearch:"navMsdSearch", msdexperiment:"navMsdExperiment", msdknowledge:"navMsdKnowledge", msdvalidation:"navMsdValidation", msdworkbench:"navMsdWorkbench", msdphase8:"navMsdPhase8", msdphase9:"navMsdPhase9", msdphase11:"navMsdPhase11", msdphase11validation:"navMsdPhase11Validation" };
   window.__mfxCurrentPage = which;
   Object.keys(pages).forEach(k => {
     document.getElementById(pages[k]).classList.toggle("active", k===which);
@@ -34458,6 +34501,7 @@ try {
 <script type="module" src="src/analysis/beastModePage.js?v=1"></script>
 <script type="module" src="src/analysis/sosSowPage.js?v=9"></script>
 <script type="module" src="src/ldpe/bridge.js?v=15"></script>
+<script type="module" src="src/super-mathes/browser.js?v=1"></script>
 <script type="module" src="src/ldpe/prediction-digit-bot.js?v=2"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>

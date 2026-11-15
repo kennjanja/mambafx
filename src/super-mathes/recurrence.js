@@ -1,4 +1,4 @@
-import { validVector } from "../ldpe/engine.js";
+import { validVector } from "./math.js";
 
 // The supplied hazards are frozen before outcomes: h[n] is P(hit at n+1 | all earlier misses).
 export function recurrenceProbabilities(hazards) {
@@ -38,7 +38,7 @@ export function createResearchPrediction({ id, source, timestamp, probabilities,
 }
 
 export function observePrediction(record, observation) {
-  if (record.appearancePosition !== null || record.observations.length >= 5 || record.status === "Unscorable") {
+  if (record.observations.length >= 5 || record.status === "Unscorable") {
     throw new Error("Prediction is already finalized");
   }
   if (observation.source !== record.prediction.source || !Number.isSafeInteger(observation.epoch) ||
@@ -46,15 +46,18 @@ export function observePrediction(record, observation) {
       !Number.isInteger(observation.digit) || observation.digit < 0 || observation.digit > 9) {
     throw new Error("Invalid, duplicate, or out-of-order prediction observation");
   }
-  const observations = Object.freeze([...record.observations, Object.freeze({ source: observation.source, epoch: observation.epoch, digit: observation.digit })]);
+  const observationRecord = { source: observation.source, epoch: observation.epoch, digit: observation.digit };
+  if (observation.sequence !== undefined) observationRecord.sequence = observation.sequence;
+  const observations = Object.freeze([...record.observations, Object.freeze(observationRecord)]);
   const position = observations.length;
   const hit = observation.digit === record.prediction.selectedDigit;
-  const status = hit ? (position === 1 ? "Immediate Hit" : `Appeared Within ${position} Observations`) :
+  const firstAppearance = record.appearancePosition ?? (hit ? position : null);
+  const status = firstAppearance !== null ? (firstAppearance === 1 ? "Immediate Hit" : `Appeared Within ${firstAppearance} Observations`) :
     (position === 1 ? "Immediate Miss" : position === 5 ? "Not Appeared Within 5 Observations" : "Recurrence Tracking");
-  return Object.freeze({ prediction: record.prediction, observations, appearancePosition: hit ? position : null, status });
+  return Object.freeze({ prediction: record.prediction, observations, appearancePosition: firstAppearance, status });
 }
 
 export function markUnscorable(record) {
-  if (record.appearancePosition !== null || record.observations.length >= 5) throw new Error("Prediction is already finalized");
+  if (record.observations.length >= 5 || record.status === "Unscorable") throw new Error("Prediction is already finalized");
   return Object.freeze({ ...record, status: "Unscorable" });
 }
