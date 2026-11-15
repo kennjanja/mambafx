@@ -26601,12 +26601,13 @@ let tfRequestSequence = 5000;
 const tfUnavailable = new Set();
 let tfRedrawTimer = null;
 let tfSrCache = null;
+const tfSrContextCache = {};
 let tfSrConnected = false;
 
 function tfRefreshDerived(source) {
   if (!window.MFXModifiedSR) return;
   CHART_TIMEFRAMES.filter(tf => tf.source === source).forEach(tf => {
-    tfData[tf.g] = window.MFXModifiedSR.aggregateCandles(tfData[source], source, tf.kind, Date.now() / 1000).slice(-TF_COUNT);
+    tfData[tf.g] = window.MFXModifiedSR.aggregateCandles(tfData[source], source, tf.kind, Date.now() / 1000, { includeForming: true }).slice(-TF_COUNT);
     const st = $("tf-status-" + tf.g);
     if (st) st.textContent = tfUnavailable.has(source) ? "unavailable" : tfData[tf.g].length ? "live" : "insufficient history";
   });
@@ -26626,15 +26627,36 @@ function tfModifiedSr() {
     return null;
   }
   const now = Date.now() / 1000;
-  const key = CHART_TIMEFRAMES.map(tf => {
-    const arr = tfData[tf.g] || [];
-    const last = arr[arr.length - 1], prev = arr[arr.length - 2];
-    return [tf.g, arr.length, arr[0]?.epoch, last?.epoch, tf.g === 30 || tf.g === 60 ? last?.close : '', prev?.epoch, prev?.high, prev?.low, prev?.close,
-      last && window.MFXModifiedSR.periodEnd(last.epoch, tf.kind || tf.g) <= now].join(':');
-  }).join('|');
+  const closedByFrame = Object.fromEntries(CHART_TIMEFRAMES.map(tf => [
+    tf.g,
+    (tfData[tf.g] || []).filter(c => window.MFXModifiedSR.periodEnd(c.epoch, tf.kind || tf.g) <= now),
+  ]));
+  const key = JSON.stringify([SYMBOL, window.MFXEngine ? 1 : 0, closedByFrame]);
   if (tfSrCache && tfSrCache.key === key) return tfSrCache.value;
-  const current = (tfData[30] || []).at(-1) || (tfData[60] || []).at(-1);
-  const value = window.MFXModifiedSR.computeModifiedSr(tfData, now, current?.close);
+  const current = closedByFrame[30]?.at(-1) || closedByFrame[60]?.at(-1);
+  let value = window.MFXModifiedSR.computeModifiedSr(tfData, now, current?.close);
+  if (window.MFXEngine && (value.support.length || value.resistance.length)) {
+    const frames = new Set([...value.support, ...value.resistance].flatMap(line => line.evidence.map(e => e.timeframe)));
+    const analyses = {};
+    for (const g of frames) {
+      const closed = closedByFrame[g].slice(-TF_COUNT);
+      if (closed.length >= 5) {
+        const contextKey = SYMBOL + "|" + JSON.stringify(closed);
+        if (!tfSrContextCache[g] || tfSrContextCache[g].key !== contextKey) {
+          tfSrContextCache[g] = {
+            key: contextKey,
+            value: {
+              engine: window.MFXEngine.analyzeAll(closed),
+              levels: window.MFXEngine.analyzeLv(closed),
+              patterns: window.MFXEngine.analyzePat(closed),
+            },
+          };
+        }
+        analyses[g] = tfSrContextCache[g].value;
+      }
+    }
+    value = window.MFXModifiedSR.attachZoneContext(value, analyses);
+  }
   const status = $("tfSrStatus");
   if (status) status.textContent = value.missing.length
     ? "Modified S/R: insufficient history for " + value.missing.map(g => CHART_TIMEFRAMES.find(tf => tf.g === g)?.label || g).join(", ") + "; affected groups and Sure cannot be confirmed."
@@ -29150,14 +29172,27 @@ function drawTfCandles(g){
   // Shared multi-timeframe confluence lines (on top of candles).
   if (want("pa-sr")){
     const { support, resistance } = tfModifiedSr() || { support: [], resistance: [] };
+    const describe = l => {
+      const frames = l.evidence.map(e => CHART_TIMEFRAMES.find(tf => tf.g === e.timeframe)?.label || e.timeframe).join(", ");
+      const details = (l.context || []).map(z => `${z.kind} (${CHART_TIMEFRAMES.find(tf => tf.g === z.timeframe)?.label || z.timeframe}, ${z.status}, confirmed ${new Date(z.confirmedAt * 1000).toISOString()})`);
+      return `Confirmed pivot timeframes: ${frames}. Nearby detector context (not independent proof): ${details.join("; ") || "none"}. Rank tuple: ${l.rank?.timeframeCoverage || 0} confirmed timeframe pivots, most recent evidence confirmation ${l.rank?.latestEvidenceAt ? new Date(l.rank.latestEvidenceAt * 1000).toISOString() : "n/a"}. Descriptive ordering, not reversal probability.`;
+    };
     resistance.filter(l => inView(l.price)).forEach(l => {
       const yy = clampY(l.price);
-      out += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${chartRight}" y2="${yy.toFixed(1)}" stroke="#e11d75" stroke-width="0.8"/>`;
+      if (l.high > l.low) {
+        const top = clampY(l.high), bottom = clampY(l.low);
+        out += `<rect x="${padL}" y="${top.toFixed(1)}" width="${(chartRight-padL).toFixed(1)}" height="${Math.max(1,bottom-top).toFixed(1)}" fill="rgba(225,29,117,0.05)" stroke="rgba(225,29,117,0.2)" stroke-width="0.4"/>`;
+      }
+      out += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${chartRight}" y2="${yy.toFixed(1)}" stroke="#e11d75" stroke-width="0.8"><title>${describe(l)}</title></line>`;
       out += `<text x="${padL+2}" y="${(yy-2).toFixed(1)}" fill="#e11d75" font-size="8" font-family="monospace">R ${l.label} ${l.price.toFixed(dec)}</text>`;
     });
     support.filter(l => inView(l.price)).forEach(l => {
       const yy = clampY(l.price);
-      out += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${chartRight}" y2="${yy.toFixed(1)}" stroke="#86efac" stroke-width="0.8"/>`;
+      if (l.high > l.low) {
+        const top = clampY(l.high), bottom = clampY(l.low);
+        out += `<rect x="${padL}" y="${top.toFixed(1)}" width="${(chartRight-padL).toFixed(1)}" height="${Math.max(1,bottom-top).toFixed(1)}" fill="rgba(134,239,172,0.06)" stroke="rgba(134,239,172,0.22)" stroke-width="0.4"/>`;
+      }
+      out += `<line x1="${padL}" y1="${yy.toFixed(1)}" x2="${chartRight}" y2="${yy.toFixed(1)}" stroke="#86efac" stroke-width="0.8"><title>${describe(l)}</title></line>`;
       out += `<text x="${padL+2}" y="${(yy+9).toFixed(1)}" fill="#86efac" font-size="8" font-family="monospace">S ${l.label} ${l.price.toFixed(dec)}</text>`;
     });
   }
@@ -34403,7 +34438,7 @@ try {
 <script type="module" src="src/ldpe/bridge.js?v=13"></script>
 <script type="module" src="src/ldpe/gap-research.js?v=5"></script>
 <script type="module">import * as O from "./src/analysis/overlays.js?v=1"; window.MFXOverlays = O;</script>
-<script type="module">import * as S from "./src/analysis/modifiedSr.js?v=1"; window.MFXModifiedSR = S; if (typeof CHART_TIMEFRAMES !== "undefined") { [900, 3600, 14400, 86400].forEach(tfRefreshDerived); CHART_TIMEFRAMES.forEach(tf => drawTfCandles(tf.g)); }</script>
+<script type="module">import * as S from "./src/analysis/modifiedSr.js?v=3"; window.MFXModifiedSR = S; if (typeof CHART_TIMEFRAMES !== "undefined") { [900, 3600, 14400, 86400].forEach(tfRefreshDerived); CHART_TIMEFRAMES.forEach(tf => drawTfCandles(tf.g)); }</script>
 <script>
 (function(){
   const sel = document.getElementById("evTf"), body = document.getElementById("evBody");

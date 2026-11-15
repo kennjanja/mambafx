@@ -143,6 +143,24 @@ The optional modified S/R overlay (`src/analysis/modifiedSr.js`) finds confirmed
 
 The 45m, 2h, 8h, weekly and monthly candles are aggregated from 15m, 1h, 4h and daily history. Weeks begin Monday UTC and months follow the UTC calendar. Incomplete historical buckets are discarded; forming candles are excluded from confluence. A group remains unconfirmed when required history or its ATR is unavailable, and a disconnected feed suppresses the overlay. Levels are recalculated as new candles arrive rather than permanently stored.
 
+Each confluence has a stable, data-derived ID, bounds spanning its selected pivots, source timeframes, pivot times and candle-close confirmation times. The current chart shows a translucent band over those bounds and retains the light-green support and magenta-red resistance lines. Its descriptive rank tuple reports timeframe coverage and latest confirmation; it is not a calibrated score or reversal probability. Hover details reuse the shared structure, liquidity, OB/FVG, supply/demand, trendline, chart-pattern and candle-pattern analyses on the last 500 closed candles of contributing timeframes. Context records retain source, bounds, lifecycle and confirmation time; duplicate event IDs are collapsed. Liquidity pools are explicitly references, not S/R confirmation. A sweep, a candle pattern, or a nearby zone does not independently create an S/R level.
+
+The analysis cache keys the exact closed-candle data and market symbol, so forming-candle ticks do not alter the snapshot and corrected historical bars invalidate it. Forming candles are excluded from confluence and context. This remains a latest-state MTF pivot-confluence overlay, not a persisted zone ledger or historical per-bar rendering. Historical lifecycle remains available through the existing per-timeframe zone overlays; quantitative strength scoring, independently validated cross-family weighting, role-reversal history, and some pattern/ICT families are not implemented here.
+
+| Requirement | Outcome in Modified S/R |
+|---|---|
+| Confirmed pivots, all 15 frames, four confluence groups and Sure classification | Implemented and tested. Only confirmed pivots contribute; each multi-frame group requires every constituent frame. |
+| Price clustering, duplicate prevention, pivot provenance and timestamps | Implemented and tested: bounded smallest-frame ATR clustering, stable data-derived IDs, one pivot per frame, source bounds and candle-close confirmation times. Context event IDs are deduplicated. |
+| No-lookahead, closed-candle analysis, historical replay and truncation invariance | Implemented and tested for aggregation and confluence snapshots. The dashboard excludes forming candles from both the confluence and detector contexts. |
+| Structure/BOS/CHoCH/MSS, liquidity pools and confirmed sweeps | Shared engine results appear as contextual evidence; liquidity pools remain references, not S/R confirmation. |
+| OB, breaker, FVG/IFVG, BPR, rejection zones, mitigation and retesting | Shared confirmed non-terminal zone state is attached as context. MTF S/R does not own or replay these zones' historical state transitions. |
+| Supply/demand, trendlines, chart patterns, candle rejection, ICT references and proxies | Reuses available `analyzeLv`/`analyzePat` and shared engine results as context; none independently creates an MTF S/R level. The integration does not add missing detector families. |
+| Zone strength ranking | Implemented only as a descriptive tuple (timeframe coverage, latest directional confirmation). Calibrated strength and cross-family weighting are not implemented because detector correlations and available data do not establish validated weights. |
+| MTF mitigation, rejection, break, role reversal, invalidation and expiration history | Not implemented as an MTF confluence ledger. Existing per-timeframe overlays continue to display their own detector lifecycle; the current snapshot path has no per-bar MTF zone event stream from which to reconstruct these transitions without retroactive inference. |
+| Historical MTF rendering, persistence and lifecycle identity | Not implemented: there is no durable MTF confluence ledger. Pivot confluences are recomputed snapshots, and detector results are cached in memory by exact closed-candle input; corrected history invalidates that cache rather than rewriting a persisted zone record. |
+| Chart coordinates and timestamps | Price bounds render in chart price coordinates; pivot origins and closed-candle confirmations are retained and shown in hover details. |
+| Complete pattern/ICT inventory, true volume/order-flow and session signals | Not implemented by this integration. Missing detectors remain absent; true traded-volume and session-specific feeds are unavailable, so those signals cannot be asserted. |
+
 ## 5. Bot Engines (`index.html` inline)
 
 ### Prediction Bot (`pbPageInit`)
