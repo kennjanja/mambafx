@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Deriv Rise/Fall Dashboard</title>
+<style>
+:root{--bg:#0b111c;--panel:#111a2a;--line:#1f2b40;--tx:#d7e0ee;--mut:#7d8ba3;--r:#18d58b;--f:#f0465a;--acc:#4da3ff}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--tx);font:14px/1.4 Consolas,"SF Mono",Menlo,monospace}
+header{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;padding:14px 20px;border-bottom:1px solid var(--line)}
+h1{font-size:16px;margin:0;letter-spacing:.5px}
+.ctl{display:flex;gap:10px;align-items:center;color:var(--mut)}
+select{background:var(--panel);color:var(--tx);border:1px solid var(--line);padding:5px 8px;border-radius:6px;font:inherit}
+.dot{width:9px;height:9px;border-radius:50%;background:#888;display:inline-block;margin-right:6px}
+.dot.on{background:var(--r);box-shadow:0 0 8px var(--r)}
+main{display:grid;grid-template-columns:minmax(440px,540px) 1fr;gap:16px;padding:16px 20px}
+@media(max-width:900px){main{grid-template-columns:1fr}}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:14px}
+.panel h2{font-size:12px;color:var(--mut);margin:0 0 10px;text-transform:uppercase;letter-spacing:1px;font-weight:600}
+table{width:100%;border-collapse:collapse}
+th{color:var(--mut);font-weight:500;text-align:right;font-size:11px;padding:4px 6px}
+th:first-child,td:first-child{text-align:left}
+td{padding:7px 6px;text-align:right;border-top:1px solid var(--line)}
+tr.grp td{color:var(--acc);font-size:11px;text-transform:uppercase;letter-spacing:1px;text-align:left;border-top:1px solid var(--line);padding-top:12px}
+tr.row{cursor:pointer}tr.row:hover{background:#16233a}
+tr.sel{background:#1a2b47}
+.R{color:var(--r)}.F{color:var(--f)}.M{color:var(--mut)}
+.mini{display:flex;height:6px;border-radius:3px;overflow:hidden;margin-top:4px;background:var(--line)}
+.mini i{display:block;height:100%}
+.big{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.card{border-radius:10px;padding:16px;text-align:center;border:1px solid var(--line);background:#0e1626}
+.card .l{font-size:26px;font-weight:700}
+.card .p{font-size:30px;font-weight:700;margin-top:2px}
+.card .c{color:var(--mut);font-size:12px}
+.bar{position:relative;display:flex;height:22px;border-radius:6px;overflow:hidden;margin:14px 0 4px;background:var(--line)}
+.bar i{display:block;height:100%;transition:width .2s}
+.bar:after{content:"";position:absolute;left:50%;top:-3px;bottom:-3px;width:2px;background:#fff8}
+.meta{display:flex;flex-wrap:wrap;gap:18px;color:var(--mut);font-size:12px}
+.meta b{color:var(--tx)}
+.stream{display:flex;flex-wrap:wrap;gap:4px}
+.chip{width:30px;height:30px;border-radius:5px;display:flex;align-items:center;justify-content:center;font-size:14px;border:1px solid}
+.chip.R{border-color:var(--r);background:#18d58b18}
+.chip.F{border-color:var(--f);background:#f0465a18}
+.chip.M{border-color:var(--mut)}
+.grid2{display:grid;gap:16px}
+svg{width:100%;height:90px;display:block}
+.note{color:var(--mut);font-size:11px;margin-top:6px}
+.chg{font-size:12px;margin-top:4px;color:var(--mut)}
+.up{color:var(--acc)}.dn{color:#f5a623}
+.dl{font-size:10px;margin-left:3px}
+.tb{display:inline-block;padding:1px 6px;border-radius:4px;font-size:11px;font-weight:700;border:1px solid}
+.tb.U{color:var(--r);border-color:var(--r);background:#18d58b18}
+.tb.D{color:var(--f);border-color:var(--f);background:#f0465a18}
+.tb.S{color:var(--mut);border-color:var(--mut)}
+.tb.tbig{font-size:22px;padding:4px 14px;border-radius:8px}
+</style>
+</head>
+<body>
+<header>
+  <h1>DERIV · RISE / FALL TRACKER · ALL MARKETS <span style="color:var(--mut);font-size:11px;font-weight:400">· build: candles view</span></h1>
+  <div class="ctl">
+    <span><span id="dot" class="dot"></span><span id="status">connecting…</span></span>
+    <label>Sample window
+      <select id="win">
+        <option>50</option><option>100</option><option selected>250</option>
+        <option>500</option><option>1000</option><option>5000</option>
+      </select>
+    </label>
+  </div>
+</header>
+<main>
+  <section class="panel">
+    <h2>Markets (Rise % / Fall %)</h2>
+    <table>
+      <thead><tr><th>Market</th><th>Rise %</th><th>Fall %</th><th>Last</th><th>1m trend</th></tr></thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="note">Click a market for detail. Rise = tick higher than the previous tick, Fall = lower. Equal ticks are excluded from the %. Arrows beside Rise/Fall % show the change vs 1 minute ago (▲ increasing, ▼ decreasing, ▬ flat). 1m trend = UP / DOWN / SIDE from 1-minute candles (EMA20 vs EMA50 + slope), with how many minutes it has lasted.</div>
+  </section>
+
+  <section class="grid2">
+    <div class="panel">
+      <h2 id="title">—</h2>
+      <svg id="cdl" viewBox="0 0 440 160" preserveAspectRatio="none" style="height:170px"></svg>
+      <div id="ctab"></div>
+      <div class="note">Last 10 closed 1-minute candles plus the one still forming (dashed, marked LIVE). Rise % / Fall % per candle = share of up-ticks vs down-ticks inside that minute.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Latest ticks (newest first)</h2>
+      <div class="stream" id="stream"></div>
+    </div>
+
+    <div class="panel">
+      <h2 id="ttitle">1-minute trend</h2>
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap">
+        <span id="tbadge" class="tb S tbig">–</span>
+        <div class="meta">
+          <span>EMA20 <b id="te20">–</b></span>
+          <span>EMA50 <b id="te50">–</b></span>
+          <span>Slope <b id="tslope">–</b></span>
+          <span>Lasted <b id="trun">–</b></span>
+          <span>1m candles <b id="tn">–</b></span>
+        </div>
+      </div>
+      <svg id="tspark" viewBox="0 0 400 90" preserveAspectRatio="none"></svg>
+      <div class="note">Last 40 one-minute closes (white) with EMA20 (blue) and EMA50 (amber). UP = EMA20 above EMA50 and rising; DOWN = EMA20 below EMA50 and falling; SIDE = flat or mixed. The newest candle is still forming, so the state can flip near the end of a minute.</div>
+    </div>
+
+    <div class="panel">
+      <h2>Rolling rise % (50-tick window, last 250 ticks)</h2>
+      <svg id="spark" viewBox="0 0 400 90" preserveAspectRatio="none"></svg>
+      <div class="note">Dashed line = 50%. Synthetic indices are designed to be unbiased, so expect noise around 50% — treat deviations with statistical caution (at 250 ticks, ±6% is ordinary variation).</div>
+    </div>
+  </section>
+</main>
+
+<script>
+const GROUPS = [
+  ["Volatility", [["R_10","Vol 10"],["R_25","Vol 25"],["R_50","Vol 50"],["R_75","Vol 75"],["R_100","Vol 100"],
+                  ["1HZ10V","Vol 10 (1s)"],["1HZ25V","Vol 25 (1s)"],["1HZ50V","Vol 50 (1s)"],["1HZ75V","Vol 75 (1s)"],["1HZ100V","Vol 100 (1s)"]]]
+];
+const SYMS = GROUPS.flatMap(g => g[1]);
+const MAXN = 5000;
+const px = {}, tm = {}, cd = {}, cdLoaded = {}, bad = {};
+SYMS.forEach(([s]) => { px[s] = []; tm[s] = []; cd[s] = []; });
+const DEADBAND = 0.3;     // % points: smaller changes vs 1 min ago show as flat (▬)
+const SLOPE_MIN = 0.08;   // EMA20 slope in ATR per minute below which the 1m trend is SIDE
+let sel = "R_10", ws, dirty = false;
+const $ = id => document.getElementById(id);
+
+function stats(sym, n, end) {
+  const e = end == null ? px[sym].length : end;
+  const a = px[sym].slice(Math.max(0, e - (n + 1)), e), dirs = [];
+  let r = 0, f = 0, q = 0;
+  for (let i = 1; i < a.length; i++) {
+    const d = a[i] > a[i - 1] ? 1 : a[i] < a[i - 1] ? -1 : 0;
+    dirs.push(d); d > 0 ? r++ : d < 0 ? f++ : q++;
+  }
+  return { dirs, r, f, q, n: r + f };
+}
+
+// ---- change in Rise/Fall % versus 1 minute ago ----
+function riseTrend(sym, n) {
+  const a = px[sym], t = tm[sym];
+  if (a.length < 2 || t.length !== a.length) return null;
+  const cutoff = t[t.length - 1] - 60;
+  let lo = 0, hi = t.length;                       // lo = number of ticks at or before (now - 60s)
+  while (lo < hi) { const m = (lo + hi) >> 1; if (t[m] <= cutoff) lo = m + 1; else hi = m; }
+  const nEff = Math.min(n, lo - 1);                // earlier window may be shorter if history is short
+  if (nEff < 30) return null;
+  const now = stats(sym, n), prev = stats(sym, nEff, lo);
+  if (!now.n || !prev.n) return null;
+  const d = 100 * now.r / now.n - 100 * prev.r / prev.n;
+  return { d, state: d > DEADBAND ? "up" : d < -DEADBAND ? "dn" : "flat" };
+}
+function arr(state, d) {
+  const c = state === "up" ? "up" : state === "dn" ? "dn" : "M", g = state === "up" ? "▲" : state === "dn" ? "▼" : "▬";
+  return `<span class="${c}">${g}<span class="dl">${(d >= 0 ? "+" : "") + d.toFixed(1)}</span></span>`;
+}
+const flip = st => st === "up" ? "dn" : st === "dn" ? "up" : "flat";
+
+// ---- 1-minute candle trend ----
+const tcache = {};
+function bucketTicks(a, t) {           // fallback: build 1m candles from tick history
+  const out = [];
+  if (t.length !== a.length) return out;
+  for (let i = 0; i < a.length; i++) {
+    const k = Math.floor(t[i] / 60) * 60, last = out[out.length - 1];
+    if (last && last.t === k) { if (a[i] > last.h) last.h = a[i]; if (a[i] < last.l) last.l = a[i]; last.c = a[i]; }
+    else out.push({ t: k, o: a[i], h: a[i], l: a[i], c: a[i] });
+  }
+  return out.slice(-300);
+}
+function upCandle(s, ep, q) {          // keep the forming 1m candle live from each tick
+  const k = Math.floor(ep / 60) * 60, c = cd[s] || (cd[s] = []), last = c[c.length - 1];
+  if (last && last.t === k) { if (q > last.h) last.h = q; if (q < last.l) last.l = q; last.c = q; }
+  else if (!last || k > last.t) { c.push({ t: k, o: q, h: q, l: q, c: q }); if (c.length > 300) c.shift(); }
+}
+function trend1m(sym) {
+  const c = cd[sym];
+  if (!c || !c.length) return null;
+  const last = c[c.length - 1], key = c.length + ":" + last.t + ":" + last.c + ":" + last.h + ":" + last.l;
+  const k = tcache[sym]; if (k && k.key === key) return k.v;
+  const v = calcTrend(c); tcache[sym] = { key, v }; return v;
+}
+function calcTrend(cds) {
+  const H = cds.map(x => x.h), L = cds.map(x => x.l), C = cds.map(x => x.c);
+  const n = C.length;
+  if (n < 56) return { warm: true, n };
+  const k20 = 2 / 21, k50 = 2 / 51, e20 = [C[0]], e50 = [C[0]], tr = [H[0] - L[0]];
+  for (let i = 1; i < n; i++) {
+    e20.push(C[i] * k20 + e20[i - 1] * (1 - k20));
+    e50.push(C[i] * k50 + e50[i - 1] * (1 - k50));
+    tr.push(Math.max(H[i] - L[i], Math.abs(H[i] - C[i - 1]), Math.abs(L[i] - C[i - 1])));
+  }
+  const cls = i => {
+    let s = 0; for (let j = i - 13; j <= i; j++) s += tr[j];
+    const atr = s / 14 || 1e-9, slope = (e20[i] - e20[i - 3]) / 3 / atr;
+    const st = e20[i] > e50[i] && slope > SLOPE_MIN ? "U" : e20[i] < e50[i] && slope < -SLOPE_MIN ? "D" : "S";
+    return { st, slope };
+  };
+  const cur = cls(n - 1); let run = 1;
+  for (let i = n - 2; i >= 50 && cls(i).st === cur.st; i--) run++;
+  return { st: cur.st, slope: cur.slope, e20: e20[n - 1], e50: e50[n - 1], run, n,
+           C: C.slice(-40), E20: e20.slice(-40), E50: e50.slice(-40) };
+}
+function badge(t1) {
+  if (!t1) return '<span class="M">–</span>';
+  if (t1.warm) return `<span class="M" title="needs ~56 one-minute candles (have ${t1.n})">warming</span>`;
+  return `<span class="tb ${t1.st}">${{U:"UP",D:"DOWN",S:"SIDE"}[t1.st]}</span> <span class="M">${t1.run}m</span>`;
+}
+
+const ENDPOINTS = [
+  "wss://api.derivws.com/trading/v1/options/ws/public",
+  "wss://ws.derivws.com/websockets/v3?app_id=1089",
+  "wss://ws.binaryws.com/websockets/v3?app_id=1089"
+];
+let ei = 0, gotData = false, watchdog, pingTimer, stallTimer, retryTimer, lastMsg = 0, retries = 0, drops = 0;
+function connect() {
+  clearTimeout(retryTimer);
+  if (!navigator.onLine) { setStatus(false, "internet offline – waiting for connection…"); retryTimer = setTimeout(connect, 2000); return; }
+  const url = ENDPOINTS[ei % ENDPOINTS.length], host = new URL(url).host;
+  setStatus(false, "connecting to " + host + "…");
+  gotData = false;
+  const sock = ws = new WebSocket(url);
+  const send = o => { if (sock.readyState === 1) sock.send(JSON.stringify(o)); };
+  sock.onopen = () => {
+    if (sock !== ws) return;
+    setStatus(true, "connected – loading ticks…");
+    lastMsg = Date.now();
+    // requests are staggered a little so the server's rate limit is not hit by a burst of 20
+    SYMS.forEach(([s], i) => setTimeout(() => send({
+      ticks_history: s, count: MAXN, end: "latest", style: "ticks", subscribe: 1, req_id: i + 1
+    }), i * 120));
+    // 1-minute candles requested directly (120 = ~2 h) so the 1m trend is ready immediately
+    SYMS.forEach(([s], i) => setTimeout(() => send({
+      ticks_history: s, count: 120, end: "latest", style: "candles", granularity: 60, req_id: 100 + i
+    }), 60 + i * 120));
+    clearInterval(pingTimer); pingTimer = setInterval(() => send({ ping: 1 }), 25000);   // keep-alive
+    clearInterval(stallTimer);
+    stallTimer = setInterval(() => {                                                    // silent connection = dead connection
+      if (gotData && Date.now() - lastMsg > 20000) { setStatus(false, "feed stalled – reconnecting…"); sock.close(); }
+    }, 5000);
+    clearTimeout(watchdog);
+    watchdog = setTimeout(() => { if (!gotData) { setStatus(false, "no data received – trying next server…"); sock.close(); } }, 12000);
+  };
+  sock.onmessage = m => {
+    if (sock !== ws) return;
+    lastMsg = Date.now();
+    const r = JSON.parse(m.data);
+    if (r.error) {
+      if (r.echo_req && r.echo_req.ping) return;
+      if (r.req_id >= 100) return; // candle request failed: trend falls back to candles built from ticks
+      const s = r.req_id && SYMS[r.req_id - 1] ? SYMS[r.req_id - 1][0] : null;
+      if (s) { bad[s] = r.error.message || r.error.code; dirty = true; }
+      else setStatus(false, "API error: " + (r.error.message || r.error.code));
+      return;
+    }
+    if (r.history) {
+      const s = (r.echo_req && r.echo_req.ticks_history) || (SYMS[(r.req_id || 0) - 1] || [])[0];
+      if (!px[s]) return;
+      px[s] = r.history.prices.slice(); tm[s] = (r.history.times || []).map(Number); delete bad[s];
+      if (!cdLoaded[s]) cd[s] = bucketTicks(px[s], tm[s]);
+    } else if (r.candles) {
+      const s = r.echo_req && r.echo_req.ticks_history;
+      if (!px[s]) return;
+      cd[s] = r.candles.map(c => ({ t: +c.epoch, o: +c.open, h: +c.high, l: +c.low, c: +c.close })); cdLoaded[s] = true;
+    } else if (r.tick) {
+      const t = r.tick, s = t.symbol || t.underlying_symbol;
+      if (!px[s]) return;
+      px[s].push(t.quote); tm[s].push(Number(t.epoch));
+      if (px[s].length > MAXN + 1) { px[s].shift(); tm[s].shift(); }
+      upCandle(s, Number(t.epoch), t.quote);
+    } else return;
+    if (!gotData) { gotData = true; retries = 0; setStatus(true, "LIVE · " + host + (drops ? " · reconnects: " + drops : "")); }
+    dirty = true;
+  };
+  sock.onclose = e => {
+    clearTimeout(watchdog); clearInterval(pingTimer); clearInterval(stallTimer);
+    if (sock !== ws) return;
+    if (gotData) drops++;
+    retries++;
+    if (!gotData) ei++;                       // switch server only if this one never delivered data
+    const wait = Math.min(15000, 1500 * retries);
+    const why = navigator.onLine ? "code " + e.code + (e.reason ? " – " + e.reason : "") : "internet offline";
+    setStatus(false, `disconnected (${why}) – retry in ${Math.round(wait / 1000)}s · reconnects: ${drops}`);
+    retryTimer = setTimeout(connect, wait);
+  };
+  sock.onerror = () => { try { sock.close(); } catch (e) {} };
+}
+addEventListener("offline", () => setStatus(false, "internet offline – will reconnect automatically"));
+addEventListener("online", () => { if (!ws || ws.readyState > 1) { clearTimeout(retryTimer); connect(); } });
+function setStatus(on, txt) { $("dot").className = "dot" + (on ? " on" : ""); $("status").textContent = txt; }
+
+function renderTable(n) {
+  let h = "";
+  for (const [g, list] of GROUPS) {
+    h += `<tr class="grp"><td colspan="5">${g}</td></tr>`;
+    for (const [s, name] of list) {
+      const st = stats(s, n), rp = st.n ? 100 * st.r / st.n : 0, fp = st.n ? 100 - rp : 0, a = px[s];
+      const arrow = a.length > 1 ? (a[a.length - 1] > a[a.length - 2] ? "▲" : a[a.length - 1] < a[a.length - 2] ? "▼" : "=") : "–";
+      const cls = arrow === "▲" ? "R" : arrow === "▼" ? "F" : "M";
+      const rtd = bad[s] ? null : riseTrend(s, n), t1 = bad[s] ? null : trend1m(s);
+      h += `<tr class="row ${s === sel ? "sel" : ""}" data-s="${s}">
+        <td>${name}<div class="mini"><i style="width:${rp}%;background:var(--r)"></i><i style="width:${fp}%;background:var(--f)"></i></div></td>
+        ${bad[s] ? `<td class="M" colspan="4" title="${bad[s]}">n/a</td>` :
+        `<td class="R">${st.n ? rp.toFixed(1) : "–"} ${rtd ? arr(rtd.state, rtd.d) : ""}</td><td class="F">${st.n ? fp.toFixed(1) : "–"} ${rtd ? arr(flip(rtd.state), -rtd.d) : ""}</td><td class="${cls}">${arrow}</td><td>${badge(t1)}</td>`}</tr>`;
+    }
+  }
+  $("rows").innerHTML = h;
+  document.querySelectorAll("tr.row").forEach(r => r.onclick = () => { sel = r.dataset.s; dirty = true; });
+}
+
+function candleRF(sym, startT) {         // up/down tick counts inside each 1-minute bucket
+  const a = px[sym], t = tm[sym], out = {};
+  if (t.length !== a.length) return out;
+  for (let i = a.length - 1; i > 0 && t[i] >= startT; i--) {
+    const k = Math.floor(t[i] / 60) * 60, o = out[k] || (out[k] = { r: 0, f: 0 });
+    if (a[i] > a[i - 1]) o.r++; else if (a[i] < a[i - 1]) o.f++;
+  }
+  return out;
+}
+function renderCandles() {
+  const c = (cd[sel] || []).slice(-11), svg = $("cdl"), tab = $("ctab");
+  if (!c.length) { svg.innerHTML = ""; tab.innerHTML = '<div class="note">Waiting for candle data…</div>'; return; }
+  const ts = tm[sel], lastT = ts.length ? ts[ts.length - 1] : c[c.length - 1].t, formingT = Math.floor(lastT / 60) * 60;
+  const rf = candleRF(sel, c[0].t);
+  const mn = Math.min(...c.map(x => x.l)), mx = Math.max(...c.map(x => x.h)), rg = (mx - mn) || 1;
+  const Y = v => (8 + (mx - v) / rg * 144).toFixed(1), sw = 440 / c.length, bw = Math.min(28, sw * 0.55), ne = 'vector-effect="non-scaling-stroke"';
+  let g = "";
+  c.forEach((x, i) => {
+    const o = x.o == null ? x.c : x.o, up = x.c >= o, col = up ? "#18d58b" : "#f0465a", cx = i * sw + sw / 2;
+    const live = i === c.length - 1 && x.t === formingT, da = live ? ' stroke-dasharray="3 2"' : "";
+    const yo = +Y(o), yc = +Y(x.c);
+    g += `<line x1="${cx}" x2="${cx}" y1="${Y(x.h)}" y2="${Y(x.l)}" stroke="${col}" stroke-width="1.5"${da} ${ne}/>`;
+    g += `<rect x="${(cx - bw / 2).toFixed(1)}" y="${Math.min(yo, yc)}" width="${bw.toFixed(1)}" height="${Math.max(1.5, Math.abs(yo - yc))}" fill="${col}" fill-opacity="${live ? 0.25 : 0.9}" stroke="${col}" stroke-width="1.5"${da} ${ne}/>`;
+  });
+  const lp = c[c.length - 1].c;
+  g += `<line x1="0" x2="440" y1="${Y(lp)}" y2="${Y(lp)}" stroke="#7d8ba3" stroke-width="1" stroke-dasharray="2 4" ${ne}/>`;
+  svg.innerHTML = g;
+
+  const dec = Math.min(5, (String(lp).split(".")[1] || "").length || 2), f = v => v.toFixed(dec);
+  let h = '<table><thead><tr><th>Candle</th><th>Open</th><th>Close</th><th>Change</th><th>Rise %</th><th>Fall %</th></tr></thead><tbody>';
+  for (let i = c.length - 1; i >= 0; i--) {
+    const x = c[i], o0 = x.o == null ? x.c : x.o, live = i === c.length - 1 && x.t === formingT;
+    const q = rf[x.t] || { r: 0, f: 0 }, nn = q.r + q.f, ch = x.c - o0, cls = ch > 0 ? "R" : ch < 0 ? "F" : "M";
+    const tt = new Date(x.t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    h += `<tr${live ? ' class="sel"' : ""}><td>${tt}${live ? ` <span class="up">LIVE · ${lastT - x.t}s</span>` : ""}</td><td>${f(o0)}</td><td>${f(x.c)}</td>` +
+         `<td class="${cls}">${ch > 0 ? "▲" : ch < 0 ? "▼" : "▬"} ${(ch >= 0 ? "+" : "") + f(ch)}</td>` +
+         `<td class="R">${nn ? (100 * q.r / nn).toFixed(1) : "–"}</td><td class="F">${nn ? (100 * q.f / nn).toFixed(1) : "–"}</td></tr>`;
+  }
+  tab.innerHTML = h + "</tbody></table>";
+}
+
+function renderDetail(n) {
+  const st = stats(sel, n), name = SYMS.find(x => x[0] === sel)[1];
+  const rp = st.n ? 100 * st.r / st.n : 0, fp = st.n ? 100 - rp : 0;
+  $("title").textContent = `${name} · last 10 candles + forming (1 min)`;
+  renderCandles();
+
+  const t1 = trend1m(sel);
+  $("ttitle").textContent = `${name} · 1-minute trend`;
+  const tb = $("tbadge");
+  if (!t1) { tb.className = "tb S tbig"; tb.textContent = "–"; }
+  else if (t1.warm) { tb.className = "tb S tbig"; tb.textContent = "WARMING UP"; $("tn").textContent = t1.n + " / 56"; }
+  else {
+    tb.className = "tb tbig " + t1.st;
+    tb.textContent = t1.st === "U" ? "▲ UPTREND" : t1.st === "D" ? "▼ DOWNTREND" : "▬ SIDEWAYS";
+    $("te20").textContent = t1.e20.toFixed(3); $("te50").textContent = t1.e50.toFixed(3);
+    $("tslope").textContent = (t1.slope >= 0 ? "+" : "") + t1.slope.toFixed(2) + " ATR/min";
+    $("trun").textContent = t1.run + " min"; $("tn").textContent = t1.n;
+    const all = t1.C.concat(t1.E20, t1.E50), mn = Math.min(...all), mx = Math.max(...all), rg = (mx - mn) || 1;
+    const line = (arr2, col, w) => `<polyline points="${arr2.map((v, i) => (i / (arr2.length - 1) * 400).toFixed(1) + "," + (86 - (v - mn) / rg * 82).toFixed(1)).join(" ")}" fill="none" stroke="${col}" stroke-width="${w}" vector-effect="non-scaling-stroke"/>`;
+    $("tspark").innerHTML = line(t1.C, "#d7e0ee", 1.2) + line(t1.E20, "#4da3ff", 1.6) + line(t1.E50, "#f5a623", 1.6);
+  }
+
+  $("stream").innerHTML = st.dirs.slice(-40).reverse().map(x =>
+    `<div class="chip ${x > 0 ? "R" : x < 0 ? "F" : "M"}">${x > 0 ? "▲" : x < 0 ? "▼" : "="}</div>`).join("");
+
+  const W = 50, all = stats(sel, 250 + W).dirs.filter(x => x !== 0), pts = [];
+  for (let i = W; i <= all.length; i++) {
+    let r = 0; for (let j = i - W; j < i; j++) if (all[j] > 0) r++;
+    pts.push(r / W * 100);
+  }
+  if (pts.length > 1) {
+    const lo = 20, hi = 80, y = v => 90 - ((Math.min(hi, Math.max(lo, v)) - lo) / (hi - lo)) * 90;
+    const line = pts.map((v, i) => `${(i / (pts.length - 1) * 400).toFixed(1)},${y(v).toFixed(1)}`).join(" ");
+    $("spark").innerHTML = `<line x1="0" x2="400" y1="${y(50)}" y2="${y(50)}" stroke="#7d8ba3" stroke-dasharray="4 4"/>
+      <polyline points="${line}" fill="none" stroke="#4da3ff" stroke-width="1.5" vector-effect="non-scaling-stroke"/>`;
+  }
+}
+
+function loop() {
+  if (dirty) { dirty = false; const n = +$("win").value; renderTable(n); renderDetail(n); }
+  requestAnimationFrame(loop);
+}
+$("win").onchange = () => dirty = true;
+connect(); loop();
+</script>
+</body>
+</html>

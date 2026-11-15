@@ -148,6 +148,9 @@ Multi-filter bot: requires MACD histogram flip, DI bias alignment, BB%B threshol
 ### Rise/Fall Autobot (`rfaPageInit`)
 Scans active volatility indices using rolling 50-tick Rise/Fall percentages and closed 1-minute market-control bias. Trades one market cycle at a time with per-cycle profit and consecutive-loss limits, session-wide net profit/loss limits, and Martingale after losses.
 
+### Rise/Fall Dashboard (`rise-fall-dashboard.html`)
+Read-only tick and candle dashboard, loaded in an isolated frame when selected and unloaded when leaving. Its sample percentages exclude unchanged ticks and its 1-minute trend includes the forming candle.
+
 ### ADX Bot (`adxPageInit`)
 Fires when ADX > threshold and +DI is rising. Configurable stake and cooldown.
 

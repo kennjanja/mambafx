@@ -743,6 +743,7 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     <button id="navNjanja" onclick="showPage('njanja')">🏛 Njanja Analysis</button>
     <button id="navBazu" onclick="showPage('bazu')">👑 BAZU Rise/Fall</button>
     <button id="navRfaBot" onclick="showPage('rfabot')">📊 Rise/Fall Autobot</button>
+    <button id="navRiseFallDashboard" onclick="showPage('risefalldashboard')">📈 Rise/Fall Dashboard</button>
     <button id="navMsdExplorer" onclick="showPage('msdexplorer')">🔬 Database Explorer</button>
     <button id="navMsdFeatures" onclick="showPage('msdfeatures')">📶 Feature Completeness</button>
     <button id="navMsdEvents" onclick="showPage('msdevents')">📋 Positive Event Browser</button>
@@ -2717,6 +2718,10 @@ table.an-table tbody tr:last-child td{border-bottom:none}
 <div class="bz-pane" id="bzp-calib"><div id="bzCalib"></div></div>
 <div class="bz-pane" id="bzp-signal"><div id="bzSignalLog"></div></div>
   <div class="bz-pane" id="bzp-dist"><div id="bzDist"></div></div>
+</div>
+
+<div id="page-risefalldashboard" class="page">
+  <iframe id="riseFallDashboardFrame" title="Rise/Fall market dashboard" sandbox="allow-scripts" style="width:100%;height:calc(100vh - 100px);min-height:650px;border:0;border-radius:10px"></iframe>
 </div>
 
 <div id="page-rfabot" class="page">
@@ -26779,13 +26784,18 @@ function startTfTimers(){
 }
 
 function showPage(which){
-  const pages = { accounts:"page-accounts", live:"page-live", candles:"page-candles", engine:"page-engine", grid:"page-grid", analysis:"page-analysis", features:"page-features", predbot:"page-predbot", oubot:"page-oubot", tracker:"page-tracker", digits:"page-digits", diag:"page-diag", charts:"page-charts", adxbot:"page-adxbot", aggression:"page-aggression", mtf:"page-mtf", njanja:"page-njanja", rfabot:"page-rfabot", tradesignal:"page-tradesignal", predhistory:"page-predhistory", beastmode:"page-beastmode", sossow:"page-sossow", bazu:"page-bazu", msdexplorer:"page-msdexplorer", msdfeatures:"page-msdfeatures", msdevents:"page-msdevents", msdinspector:"page-msdinspector", msddistribution:"page-msddistribution", msdcorrelation:"page-msdcorrelation", msdsearch:"page-msdsearch", msdexperiment:"page-msdexperiment", msdknowledge:"page-msdknowledge", msdvalidation:"page-msdvalidation", msdworkbench:"page-msdworkbench", msdphase8:"page-msdphase8", msdphase9:"page-msdphase9", msdphase11:"page-msdphase11", msdphase11validation:"page-msdphase11validation" };
-  const navs  = { accounts:"navAccounts", live:"navLive",  candles:"navCandles", engine:"navEngine", grid:"navGrid", analysis:"navAnalysis", features:"navFeatures", predbot:"navPredBot", oubot:"navOuBot", tracker:"navTracker", digits:"navDigits", diag:"navDiag", charts:"navCharts", adxbot:"navAdxBot", aggression:"navAggression", mtf:"navMtf", njanja:"navNjanja", rfabot:"navRfaBot", tradesignal:"navTradeSignal", predhistory:"navPredHistory", beastmode:"navBeastMode", sossow:"navSosSow", bazu:"navBazu", msdexplorer:"navMsdExplorer", msdfeatures:"navMsdFeatures", msdevents:"navMsdEvents", msdinspector:"navMsdInspector", msddistribution:"navMsdDistribution", msdcorrelation:"navMsdCorrelation", msdsearch:"navMsdSearch", msdexperiment:"navMsdExperiment", msdknowledge:"navMsdKnowledge", msdvalidation:"navMsdValidation", msdworkbench:"navMsdWorkbench", msdphase8:"navMsdPhase8", msdphase9:"navMsdPhase9", msdphase11:"navMsdPhase11", msdphase11validation:"navMsdPhase11Validation" };
+  const pages = { risefalldashboard:"page-risefalldashboard", accounts:"page-accounts", live:"page-live", candles:"page-candles", engine:"page-engine", grid:"page-grid", analysis:"page-analysis", features:"page-features", predbot:"page-predbot", oubot:"page-oubot", tracker:"page-tracker", digits:"page-digits", diag:"page-diag", charts:"page-charts", adxbot:"page-adxbot", aggression:"page-aggression", mtf:"page-mtf", njanja:"page-njanja", rfabot:"page-rfabot", tradesignal:"page-tradesignal", predhistory:"page-predhistory", beastmode:"page-beastmode", sossow:"page-sossow", bazu:"page-bazu", msdexplorer:"page-msdexplorer", msdfeatures:"page-msdfeatures", msdevents:"page-msdevents", msdinspector:"page-msdinspector", msddistribution:"page-msddistribution", msdcorrelation:"page-msdcorrelation", msdsearch:"page-msdsearch", msdexperiment:"page-msdexperiment", msdknowledge:"page-msdknowledge", msdvalidation:"page-msdvalidation", msdworkbench:"page-msdworkbench", msdphase8:"page-msdphase8", msdphase9:"page-msdphase9", msdphase11:"page-msdphase11", msdphase11validation:"page-msdphase11validation" };
+  const navs  = { risefalldashboard:"navRiseFallDashboard", accounts:"navAccounts", live:"navLive",  candles:"navCandles", engine:"navEngine", grid:"navGrid", analysis:"navAnalysis", features:"navFeatures", predbot:"navPredBot", oubot:"navOuBot", tracker:"navTracker", digits:"navDigits", diag:"navDiag", charts:"navCharts", adxbot:"navAdxBot", aggression:"navAggression", mtf:"navMtf", njanja:"navNjanja", rfabot:"navRfaBot", tradesignal:"navTradeSignal", predhistory:"navPredHistory", beastmode:"navBeastMode", sossow:"navSosSow", bazu:"navBazu", msdexplorer:"navMsdExplorer", msdfeatures:"navMsdFeatures", msdevents:"navMsdEvents", msdinspector:"navMsdInspector", msddistribution:"navMsdDistribution", msdcorrelation:"navMsdCorrelation", msdsearch:"navMsdSearch", msdexperiment:"navMsdExperiment", msdknowledge:"navMsdKnowledge", msdvalidation:"navMsdValidation", msdworkbench:"navMsdWorkbench", msdphase8:"navMsdPhase8", msdphase9:"navMsdPhase9", msdphase11:"navMsdPhase11", msdphase11validation:"navMsdPhase11Validation" };
   window.__mfxCurrentPage = which;
   Object.keys(pages).forEach(k => {
     document.getElementById(pages[k]).classList.toggle("active", k===which);
     const nav = document.getElementById(navs[k]); if (nav) nav.classList.toggle("active", k===which);
   });
+  const dashboardFrame = document.getElementById("riseFallDashboardFrame");
+  if (dashboardFrame) {
+    if (which === "risefalldashboard" && !dashboardFrame.hasAttribute("src")) dashboardFrame.src = "rise-fall-dashboard.html";
+    else if (which !== "risefalldashboard" && dashboardFrame.hasAttribute("src")) dashboardFrame.removeAttribute("src");
+  }
   if ((which === "bazu" || which === "candles" || which === "beastmode") && typeof window.bazuPageInit === "function"){ window.bazuPageInit(); } // candles shows the live Bazu signal card
   else if (typeof window.bazuPageLeave === "function"){ window.bazuPageLeave(); }
   const moduleSwitches = window.mfxModuleSwitches;
