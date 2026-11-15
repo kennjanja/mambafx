@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { SequenceLedger } from "../../src/super-mathes/data.js";
-import { frequencyDistribution, rankDistribution, sequenceDiagnostics, UNIFORM } from "../../src/super-mathes/models.js";
+import { frequencyDistribution, rankDistribution, sequenceDiagnostics, transitionDistribution, UNIFORM } from "../../src/super-mathes/models.js";
 import { createResearchPrediction, markUnscorable, observePrediction, recurrenceProbabilities } from "../../src/super-mathes/recurrence.js";
 import { walkForward } from "../../src/super-mathes/validation.js";
 
@@ -60,6 +60,9 @@ test("the original prediction remains frozen through each possible recurrence po
     }
     assert.equal(r.appearancePosition, position);
     assert.equal(r.status, position === 1 ? "Immediate Hit" : `Appeared Within ${position} Observations`);
+    for (let n = position + 1; n <= 5; n++) r = observePrediction(r, { source: "a", epoch: 100 + n, digit: 2 });
+    assert.equal(r.appearancePosition, position);
+    assert.equal(r.observations.length, 5);
     assert.throws(() => observePrediction(r, { source: "a", epoch: 200, digit: 2 }), /finalized/);
     assert.throws(() => { r.prediction.probabilities[2] = 1; }, TypeError);
   }
@@ -91,6 +94,16 @@ test("walk-forward scores only the chronological training prefix", () => {
   assert.ok(Number.isFinite(before.brier) && Number.isFinite(before.logLoss));
 });
 
+test("Markov research model uses only observed transitions and is evaluated before each update", () => {
+  const sequence = Array.from({ length: 60 }, (_, i) => i % 2);
+  const expected = transitionDistribution(sequence.slice(0, 20));
+  assert.ok(expected[0] > expected[1]);
+  const first = walkForward(sequence, { warmup: 20, model: "markov" });
+  const changedFuture = walkForward([...sequence.slice(0, 40), ...Array(20).fill(9)], { warmup: 20, model: "markov" });
+  assert.deepEqual(first.rows[0].candidate, expected);
+  assert.deepEqual(first.rows.slice(0, 20), changedFuture.rows.slice(0, 20));
+  assert.equal(first.status, "Under Validation");
+});
 test("walk-forward benchmark detects a strong planted frequency bias without promoting the model", () => {
   let state = 1234567;
   const random = () => { state = (Math.imul(state, 1664525) + 1013904223) >>> 0; return state / 2 ** 32; };

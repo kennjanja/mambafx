@@ -1,4 +1,4 @@
-import { extractDigit } from "../ldpe/engine.js";
+import { extractDigit } from "./math.js";
 
 // Each ledger represents one explicitly identified digit-generating source.
 export class SequenceLedger {
