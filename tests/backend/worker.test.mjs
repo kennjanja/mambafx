@@ -54,6 +54,15 @@ test('GET / and /health respond', async () => {
   assert.equal((await call(env, '/health')).status, 200);
 });
 
+test('root serves the Deriv verification meta tag when configured', async () => {
+  const token = 'a'.repeat(64);
+  const response = await call(mkEnv({ DERIV_SITE_VERIFICATION: token }), '/');
+  assert.match(response.headers.get('Content-Type'), /^text\/html/);
+  assert.match(await response.text(), new RegExp(`<meta name="deriv-site-verification" content="${token}">`));
+  const fallback = await call(mkEnv({ DERIV_SITE_VERIFICATION: 'invalid"><script>' }), '/');
+  assert.deepEqual(await fallback.json(), { name: 'mambafx-backend', status: 'ok' });
+});
+
 test('/health reports missing config names without values', async () => {
   const r = await call(mkEnv({ CLIENT_ID: undefined }), '/health');
   assert.equal(r.status, 503);

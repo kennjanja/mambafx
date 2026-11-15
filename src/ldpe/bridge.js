@@ -2,7 +2,7 @@
 // It owns no WebSocket. ALL LDPE orders go through exec.js's Executor; the page's digPlaceTrade
 // refuses source "ldpe", so no second execution path exists.
 import { Ldpe, DEFAULTS, entropyBits } from "./engine.js";
-import { Executor } from "./exec.js";
+import { Executor } from "./exec.js?v=2";
 import { CycleManager } from "./cycle.js";
 import { StateStore, snapshotEngine, restoreEngine } from "./persist.js";
 
@@ -165,6 +165,7 @@ const api = {
 
   // Called whenever the page (re)subscribes to a symbol's ticks: hold live ticks until history arrives.
   beginHold(symbol, ms = 6000) {
+    if (window.PDT) window.PDT.interrupt("Tick feed interrupted; settle open orders before restarting.");
     engine.beginHold(symbol);
     clearTimeout(releaseTimers[symbol]);
     releaseTimers[symbol] = setTimeout(() => { if (engine.isHolding(symbol)) { engine.releaseHold(symbol); api.render(); } }, ms);
@@ -179,7 +180,7 @@ const api = {
     saveState(true); api.render();
     return r;
   },
-  discontinuity(symbol) { engine.markDiscontinuity(symbol); },
+  discontinuity(symbol) { if (window.PDT) window.PDT.interrupt("Tick feed interrupted; settle open orders before restarting."); engine.markDiscontinuity(symbol); },
 
   // Automatic trading: only through the executor, only on a TRADE decision, only while Auto is armed
   // and the Stop switch is off. Cooldown and stop-after-N are the user's own settings (Auto panel).
@@ -198,10 +199,11 @@ const api = {
   // Trading socket events forwarded by the page.
   stakeCounts: (contractId) => cycles.countsForStake(contractId) && (!window.GAPRES || window.GAPRES.countsForStake(contractId)),
   onContractUpdate(c) { return executor.onContractUpdate(c); },
-  onDisconnect() { executor.onDisconnect(); },
+  onDisconnect() { if (window.PDT) window.PDT.interrupt("Connection lost; reconcile open orders before restarting."); executor.onDisconnect(); },
   ownsOrder(orderId) { return executor.orders.has(orderId); },
 
   setSetting(key, val) {
+    if (key === "k" && window.PDT) window.PDT.interrupt("Forecast duration changed; settle open orders before restarting.");
     settings[key] = val; save(LS_CFG, settings);
     if (key === "k") { const d = $("digDuration"); if (d) d.value = settings.k; }
     if (key !== "stake" && key !== "executionMode") rebuild();
@@ -211,6 +213,7 @@ const api = {
   // Demo | Real: selects the account LDPE trades on, through the page's existing account flow.
   // Never falls back to the other account: a failure is shown as the actual error.
   async setAccountType(type) {
+    if (window.PDT) window.PDT.interrupt("Account selection changed; settle open orders before restarting.");
     const t = type === "real" ? "real" : "demo";
     settings.accountType = t; save(LS_CFG, settings);
     executor.setAccountType(t);
@@ -226,6 +229,7 @@ const api = {
 
   // Stop switch: no automatic trades while stopped; forecasts keep being generated and scored.
   setStopped(b) {
+    if (b && window.PDT) window.PDT.interrupt("LDPE automatic trading stopped.");
     executor.setStopped(b); settings.stopped = !!b; save(LS_CFG, settings);
     execMsg = executor.stopped ? "Automatic trading stopped. Forecasts continue." : "Automatic trading re-armed.";
     api.render();

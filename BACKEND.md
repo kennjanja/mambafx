@@ -46,6 +46,11 @@ file locally will not let login complete.
 
 ## What this Worker exposes
 
+For Deriv domain verification, set the `DERIV_SITE_VERIFICATION` Worker
+secret to the 64-character value from Deriv's HTML meta tag. When set, the
+Worker's root URL serves an HTML page containing that tag instead of the
+JSON status response; `/health` remains available for health checks.
+
 | Route                  | Method | Purpose                                            |
 |-------------------------|--------|-----------------------------------------------------|
 | `/api/token`             | POST   | Exchange `{code, code_verifier}` for an access token |

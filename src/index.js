@@ -236,6 +236,11 @@ export default {
     if (method === "OPTIONS") return new Response(null, { status: 204, headers: corsHeaders(env, request) });
 
     if (path === "/" && method === "GET") {
+      if (typeof env.DERIV_SITE_VERIFICATION === "string" && /^[a-f0-9]{64}$/.test(env.DERIV_SITE_VERIFICATION)) {
+        return new Response(`<!doctype html><html><head><meta name="deriv-site-verification" content="${env.DERIV_SITE_VERIFICATION}"></head><body>MambaFX backend is running.</body></html>`, {
+          headers: { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-store", ...corsHeaders(env, request) },
+        });
+      }
       return json(env, request, { name: "mambafx-backend", status: "ok" });
     }
     if (path === "/health" && method === "GET") {
