@@ -2721,6 +2721,24 @@ table.an-table tbody tr:last-child td{border-bottom:none}
 </div>
 
 <div id="page-risefalldashboard" class="page">
+  <div class="grid-card" style="margin:12px 0">
+    <h3>Dashboard automatic trading — strict preset</h3>
+    <div class="gc-sub">Connect an account on Trading Grid first. Scans the dashboard markets for a 100-change signal and closed 1-minute EMA trend. This is a separate trading session from the Rise/Fall Autobot.</div>
+    <div style="display:flex;flex-wrap:wrap;gap:12px;margin:12px 0">
+      <label>Stake <input id="rfdStake" type="number" min="0.35" step="0.01" value="1"></label>
+      <label>Martingale multiplier <input id="rfdMultiplier" type="number" min="1" max="10" step="0.1" value="2"></label>
+      <label>Market take profit <input id="rfdMarketTP" type="number" min="0.01" step="0.01"></label>
+      <label>Market stop loss <input id="rfdMarketSL" type="number" min="0.01" step="0.01"></label>
+      <label>Overall take profit <input id="rfdOverallTP" type="number" min="0.01" step="0.01"></label>
+      <label>Overall stop loss <input id="rfdOverallSL" type="number" min="0.01" step="0.01"></label>
+    </div>
+    <button class="gc-btn" id="rfdToggle" onclick="window.MFXDashboardAuto.toggle()">Start dashboard bot</button>
+    <button class="gc-btn" onclick="window.MFXDashboardAuto.reset()">Reset session</button>
+    <button class="gc-btn" onclick="window.MFXDashboardAuto.recover()">Reconcile open trade</button>
+    <div id="rfdStatus" class="gc-sub" role="status">Stopped.</div>
+    <div id="rfdSummary" class="gc-sub"></div>
+    <div class="gc-sub">Limits are checked on settlement and can be exceeded. Martingale increases exposure rapidly. An interrupted or unconfirmed buy must be reconciled before restarting.</div>
+  </div>
   <iframe id="riseFallDashboardFrame" title="Rise/Fall market dashboard" sandbox="allow-scripts" style="width:100%;height:calc(100vh - 100px);min-height:650px;border:0;border-radius:10px"></iframe>
 </div>
 
@@ -29512,6 +29530,7 @@ async function gridConnect(){
     console.warn('[grid] WebSocket closed', { code: ev && ev.code, reason: ev && ev.reason, clean: ev && ev.wasClean });
     gridClearRecoveryRequests();
     gridConnecting = false; gridAuthed = false;
+    if (window.MFXDashboardAuto) window.MFXDashboardAuto.interrupted();
     const unresolvedBuys = rfaTrades.filter(t => t.mode === 'reversal' && t.buySubmitted && String(t.id).startsWith('pending-'));
     unresolvedBuys.forEach(t => { t.status = 'buy outcome unknown — awaiting account reconciliation'; });
     if (unresolvedBuys.length) rfaReversal.running = false;
@@ -29553,6 +29572,7 @@ function gridWsSubscribeAndInit(acctId){
     : /^VR/i.test(acctId);
   gridCurrency  = (meta && meta.currency) || gridCurrency;
   gridRecoverRfaContracts(acctId);
+  if (window.MFXDashboardAuto) window.MFXDashboardAuto.recover(true);
 
   try { localStorage.setItem(ACCTID_KEY, acctId); } catch(_){}
 
@@ -29613,6 +29633,7 @@ async function gridLogout(){
 }
 
 function gridDisconnect(){
+  if (window.MFXDashboardAuto) window.MFXDashboardAuto.interrupted();
   gridWantConn = false; gridRetryN = 0;
   gridConnectionGeneration++;
   gridClearRecoveryRequests();
@@ -29652,6 +29673,7 @@ function gridHandleMsg(msg){
       if (b){
         gridBalance  = Number(b.balance);
         gridCurrency = b.currency || gridCurrency;
+        if (window.MFXDashboardAuto) window.MFXDashboardAuto.noteBalance(gridLoginId, gridBalance);
         gridSet("gridBal", gridBalance.toFixed(2) + " " + gridCurrency);
         const curEl = $("gridCurrency"); if (curEl) curEl.value = gridCurrency;
         // Update accounts page live balance for the connected account
@@ -29685,6 +29707,7 @@ function gridHandleMsg(msg){
         cb(c, null);
         break;
       }
+      if (c && window.MFXDashboardAuto && window.MFXDashboardAuto.handleContract(c)) break;
       if (c && c.contract_id) gridUpdateContract(c);
       break;
     }
@@ -34291,6 +34314,7 @@ try {
   </div>
 </div>
 
+<script src="src/trading/dashboardAuto.js"></script>
 <script type="module" src="src/bazu/page.js?v=34"></script>
 <script type="module" src="src/analysis/tradeSignalPage.js?v=27"></script>
 <script type="module" src="src/analysis/predictionHistoryPage.js?v=8"></script>

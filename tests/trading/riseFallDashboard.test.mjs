@@ -12,6 +12,27 @@ test('dashboard is separately navigable and sandboxed from trading credentials',
   assert.doesNotMatch(dashboard, /<script[^>]+src=/i);
   assert.match(dashboard, /ticks_history/);
   assert.doesNotMatch(dashboard, /\bproposal\s*:|\bbuy\s*:/);
+  assert.doesNotMatch(dashboard, /id="ctab"|<th>Candle<\/th>/);
+  assert.match(dashboard, /id="cdl"/);
+  assert.match(dashboard, /<option selected>100<\/option>/);
+});
+
+test('dashboard trend excludes the forming candle and refuses stale candle history', () => {
+  const start = dashboard.indexOf('const tcache = {}');
+  const end = dashboard.indexOf('function badge(', start);
+  assert.ok(start >= 0 && end > start);
+  const ctx = vm.createContext({cd: {}, tm: {}, SLOPE_MIN: 0.08});
+  vm.runInContext(dashboard.slice(start, end), ctx);
+  const candles = Array.from({length: 57}, (_, i) => ({
+    t: i * 60, h: i + 2, l: i, c: i + 1,
+  }));
+  ctx.cd.A = candles;
+  ctx.tm.A = [56 * 60 + 30];
+  assert.equal(vm.runInContext('trend1m("A").st', ctx), 'U');
+  ctx.cd.A[56] = {t: 56 * 60, h: 1000, l: -1000, c: -1000};
+  assert.equal(vm.runInContext('trend1m("A").st', ctx), 'U');
+  ctx.tm.A = [60 * 60];
+  assert.equal(vm.runInContext('trend1m("A")', ctx), null);
 });
 
 test('opening loads the dashboard once; leaving unloads its live feed', () => {

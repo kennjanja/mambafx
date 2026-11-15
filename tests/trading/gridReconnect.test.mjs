@@ -118,3 +118,12 @@ test('reconciliation errors remain visible and do not clear open contracts', () 
   assert.equal(h.run("rfaOpenContracts['123'].status"), 'open');
   assert.ok(h.diagnostics.some(x => x && x.includes('unavailable')));
 });
+
+test('dashboard contracts route to their independent handler before generic settlement', () => {
+  const h = harness();
+  const handled = [];
+  h.ctx.window.MFXDashboardAuto = {handleContract: c => { handled.push(c.contract_id); return true; }};
+  h.run("gridHandleMsg({msg_type:'proposal_open_contract',proposal_open_contract:{contract_id:456,is_sold:1}})");
+  assert.deepEqual(handled, [456]);
+  assert.equal(h.updates.length, 0);
+});

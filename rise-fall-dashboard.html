@@ -63,7 +63,7 @@ svg{width:100%;height:90px;display:block}
     <span><span id="dot" class="dot"></span><span id="status">connecting…</span></span>
     <label>Sample window
       <select id="win">
-        <option>50</option><option>100</option><option selected>250</option>
+        <option>50</option><option selected>100</option><option>250</option>
         <option>500</option><option>1000</option><option>5000</option>
       </select>
     </label>
@@ -76,15 +76,13 @@ svg{width:100%;height:90px;display:block}
       <thead><tr><th>Market</th><th>Rise %</th><th>Fall %</th><th>Last</th><th>1m trend</th></tr></thead>
       <tbody id="rows"></tbody>
     </table>
-    <div class="note">Click a market for detail. Rise = tick higher than the previous tick, Fall = lower. Equal ticks are excluded from the %. Arrows beside Rise/Fall % show the change vs 1 minute ago (▲ increasing, ▼ decreasing, ▬ flat). 1m trend = UP / DOWN / SIDE from 1-minute candles (EMA20 vs EMA50 + slope), with how many minutes it has lasted.</div>
+    <div class="note">Click a market for detail. Rise = tick higher than the previous tick, Fall = lower. Equal ticks are excluded from the %. Arrows beside Rise/Fall % show the change vs 1 minute ago (▲ increasing, ▼ decreasing, ▬ flat). 1m trend uses closed 1-minute candles (EMA20 vs EMA50 + slope).</div>
   </section>
 
   <section class="grid2">
     <div class="panel">
       <h2 id="title">—</h2>
       <svg id="cdl" viewBox="0 0 440 160" preserveAspectRatio="none" style="height:170px"></svg>
-      <div id="ctab"></div>
-      <div class="note">Last 10 closed 1-minute candles plus the one still forming (dashed, marked LIVE). Rise % / Fall % per candle = share of up-ticks vs down-ticks inside that minute.</div>
     </div>
 
     <div class="panel">
@@ -105,7 +103,7 @@ svg{width:100%;height:90px;display:block}
         </div>
       </div>
       <svg id="tspark" viewBox="0 0 400 90" preserveAspectRatio="none"></svg>
-      <div class="note">Last 40 one-minute closes (white) with EMA20 (blue) and EMA50 (amber). UP = EMA20 above EMA50 and rising; DOWN = EMA20 below EMA50 and falling; SIDE = flat or mixed. The newest candle is still forming, so the state can flip near the end of a minute.</div>
+      <div class="note">Last 40 closed one-minute candles (white) with EMA20 (blue) and EMA50 (amber). UP = EMA20 above EMA50 and rising; DOWN = EMA20 below EMA50 and falling; SIDE = flat or mixed.</div>
     </div>
 
     <div class="panel">
@@ -179,8 +177,12 @@ function upCandle(s, ep, q) {          // keep the forming 1m candle live from e
   else if (!last || k > last.t) { c.push({ t: k, o: q, h: q, l: q, c: q }); if (c.length > 300) c.shift(); }
 }
 function trend1m(sym) {
-  const c = cd[sym];
+  const times = tm[sym];
+  if (!times || !times.length) return null;
+  const now = times[times.length - 1];
+  const c = (cd[sym] || []).filter(x => x.t + 60 <= now);
   if (!c || !c.length) return null;
+  if (now - (c[c.length - 1].t + 60) > 120) return null;
   const last = c[c.length - 1], key = c.length + ":" + last.t + ":" + last.c + ":" + last.h + ":" + last.l;
   const k = tcache[sym]; if (k && k.key === key) return k.v;
   const v = calcTrend(c); tcache[sym] = { key, v }; return v;
@@ -313,20 +315,10 @@ function renderTable(n) {
   document.querySelectorAll("tr.row").forEach(r => r.onclick = () => { sel = r.dataset.s; dirty = true; });
 }
 
-function candleRF(sym, startT) {         // up/down tick counts inside each 1-minute bucket
-  const a = px[sym], t = tm[sym], out = {};
-  if (t.length !== a.length) return out;
-  for (let i = a.length - 1; i > 0 && t[i] >= startT; i--) {
-    const k = Math.floor(t[i] / 60) * 60, o = out[k] || (out[k] = { r: 0, f: 0 });
-    if (a[i] > a[i - 1]) o.r++; else if (a[i] < a[i - 1]) o.f++;
-  }
-  return out;
-}
 function renderCandles() {
-  const c = (cd[sel] || []).slice(-11), svg = $("cdl"), tab = $("ctab");
-  if (!c.length) { svg.innerHTML = ""; tab.innerHTML = '<div class="note">Waiting for candle data…</div>'; return; }
+  const c = (cd[sel] || []).slice(-11), svg = $("cdl");
+  if (!c.length) { svg.innerHTML = ""; return; }
   const ts = tm[sel], lastT = ts.length ? ts[ts.length - 1] : c[c.length - 1].t, formingT = Math.floor(lastT / 60) * 60;
-  const rf = candleRF(sel, c[0].t);
   const mn = Math.min(...c.map(x => x.l)), mx = Math.max(...c.map(x => x.h)), rg = (mx - mn) || 1;
   const Y = v => (8 + (mx - v) / rg * 144).toFixed(1), sw = 440 / c.length, bw = Math.min(28, sw * 0.55), ne = 'vector-effect="non-scaling-stroke"';
   let g = "";
@@ -341,17 +333,6 @@ function renderCandles() {
   g += `<line x1="0" x2="440" y1="${Y(lp)}" y2="${Y(lp)}" stroke="#7d8ba3" stroke-width="1" stroke-dasharray="2 4" ${ne}/>`;
   svg.innerHTML = g;
 
-  const dec = Math.min(5, (String(lp).split(".")[1] || "").length || 2), f = v => v.toFixed(dec);
-  let h = '<table><thead><tr><th>Candle</th><th>Open</th><th>Close</th><th>Change</th><th>Rise %</th><th>Fall %</th></tr></thead><tbody>';
-  for (let i = c.length - 1; i >= 0; i--) {
-    const x = c[i], o0 = x.o == null ? x.c : x.o, live = i === c.length - 1 && x.t === formingT;
-    const q = rf[x.t] || { r: 0, f: 0 }, nn = q.r + q.f, ch = x.c - o0, cls = ch > 0 ? "R" : ch < 0 ? "F" : "M";
-    const tt = new Date(x.t * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    h += `<tr${live ? ' class="sel"' : ""}><td>${tt}${live ? ` <span class="up">LIVE · ${lastT - x.t}s</span>` : ""}</td><td>${f(o0)}</td><td>${f(x.c)}</td>` +
-         `<td class="${cls}">${ch > 0 ? "▲" : ch < 0 ? "▼" : "▬"} ${(ch >= 0 ? "+" : "") + f(ch)}</td>` +
-         `<td class="R">${nn ? (100 * q.r / nn).toFixed(1) : "–"}</td><td class="F">${nn ? (100 * q.f / nn).toFixed(1) : "–"}</td></tr>`;
-  }
-  tab.innerHTML = h + "</tbody></table>";
 }
 
 function renderDetail(n) {
