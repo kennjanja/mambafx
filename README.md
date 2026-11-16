@@ -30,8 +30,16 @@ No npm install required. Server uses Node.js built-in modules only.
 
 ### Production
 
-- **Frontend**: hosted on GitHub Pages (`https://kenkin1122-ctrl.github.io/mambafx/`)
+- **Frontend**: hosted on GitHub Pages (`https://kennjanja.github.io/mambafx/`)
 - **Backend**: Cloudflare Worker (`https://mambafx-backend.kenkin1122.workers.dev`)
+
+Open the frontend in a current Android Chrome or Windows desktop browser. On a
+phone, use the page menu below the market selector; wide tables and tab bars can
+be scrolled sideways. The floating bots start collapsed on small screens.
+Trading runs in the browser, not as a background service: screen locking,
+switching apps, battery saving, or losing connectivity can suspend trading and
+settlement updates. Keep the page open and check the account and contracts
+after reconnecting.
 
 ---
 
