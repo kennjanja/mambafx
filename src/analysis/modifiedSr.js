@@ -58,7 +58,7 @@ export function aggregateCandles(source, sourceSeconds, kind, now, { includeForm
   return result;
 }
 
-function frameAnalysis(input, endOf, now, price) {
+function frameAnalysis(input, endOf, now) {
   const candles = sanitize(input).candles.filter(c => endOf(c.epoch) <= now);
   if (candles.length < 5) return null;
   const atr = atrSeries(candles).at(-1);
@@ -69,8 +69,8 @@ function frameAnalysis(input, endOf, now, price) {
   }));
   return {
     atr,
-    support: evidence.filter(p => p.type === 'low' && p.price <= price),
-    resistance: evidence.filter(p => p.type === 'high' && p.price >= price),
+    support: evidence.filter(p => p.type === 'low'),
+    resistance: evidence.filter(p => p.type === 'high'),
   };
 }
 
@@ -107,7 +107,7 @@ export function computeModifiedSr(data, now, currentPrice) {
   const analyses = {};
   for (const g of frames) {
     const kind = g === 2592000 ? 'month' : g === 604800 ? 'week' : g;
-    analyses[g] = frameAnalysis(data[g] || [], epoch => periodEnd(epoch, kind), now, currentPrice);
+    analyses[g] = frameAnalysis(data[g] || [], epoch => periodEnd(epoch, kind), now);
   }
   const missing = frames.filter(g => !analyses[g] ||
     (SR_GROUPS.some(group => group.frames[0] === g) && !(analyses[g].atr > 0)));

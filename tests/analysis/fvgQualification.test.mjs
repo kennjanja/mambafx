@@ -73,13 +73,17 @@ test('swing position waits for the producing swing to confirm and mirrors by dir
   assert.equal(fvgSwingPosition(-1, 10, 100, bear, 13).zone, 'equilibrium');
 });
 
-test('chart labels do not present incomplete-candle observations as confirmed', () => {
+test('FVG chart labels omit quality explanations while retaining the zone label', () => {
   const zone = { id: 1, kind: 'FVG', dir: 1, status: 'active', fill: 0, bottom: 1, top: 3, mid: 2,
-    createdIndex: 1, confirmedIndex: 2, fvgQuality: { tier: 'premium', qualified: true } };
+    createdIndex: 1, confirmedIndex: 2, fvgQuality: { tier: 'basic', qualified: false } };
   const geometry = { start: 0, count: 10, lo: 0, hi: 4, padL: 0, chartRight: 100, xAt: (i) => i * 10, clampY: (p) => p * 10 };
-  assert.match(renderZones([zone], geometry, { asOfIndex: 1 }), /forming/);
-  const options = { asOfIndex: 2, fvgCorrections: [{ zoneId: 1, confirmedIndex: 3, deep: true }] };
-  assert.match(renderZones([zone], geometry, options), /awaiting touch/);
-  assert.doesNotMatch(renderZones([zone], geometry, options), / deep/);
-  assert.match(renderZones([zone], geometry, { ...options, asOfIndex: 3 }), / deep/);
+  for (const asOfIndex of [1, 2, 5]) {
+    const svg = renderZones([zone], geometry, { asOfIndex, fvgPositions: [{ zoneId: 1, confirmedIndex: 2, zone: 'discount' }] });
+    assert.match(svg, />FVG\+<\/text>/);
+    assert.doesNotMatch(svg, /basic|formation|touch|discount|forming/);
+  }
+  const touched = renderZones([{ ...zone, kind: 'IFVG', testCount: 1 }], geometry,
+    { asOfIndex: 5, fvgCorrections: [{ zoneId: 1, confirmedIndex: 3, deep: true }] });
+  assert.match(touched, />IFVG\+ ×1<\/text>/);
+  assert.doesNotMatch(touched, /basic|formation|touch|deep/);
 });
