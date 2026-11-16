@@ -1,9 +1,9 @@
-import { createLiveResearch } from "./live.js?v=3";
+import { createLiveResearch } from "./live.js?v=4";
 import { attachDashboard } from "./dashboard.js?v=3";
-import { coordinateResearch } from "./coordination.js?v=3";
-import { attachTradingDashboard } from "./tradingDashboard.js?v=4";
+import { coordinateResearch } from "./coordination.js?v=4";
+import { attachTradingDashboard } from "./tradingDashboard.js?v=9";
 import { createDerivRequest, readAccountBalance } from "./derivRequest.js?v=1";
-import { createTradingRuntime } from "./tradingRuntime.js?v=3";
+import { createTradingRuntime } from "./tradingRuntime.js?v=8";
 
 function runValidation(observations, options) {
   return new Promise((resolve, reject) => {

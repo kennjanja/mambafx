@@ -8,9 +8,10 @@ export function coordinateResearch(service, {
   report = error => console.error("[super-mathes coordination]", error),
 } = {}) {
   const status = { state: "starting", role: "waiting", activeSource: null, lastError: null,
-    lastObservationAt: null, pendingUpdates: 0, segment: null };
+    lastObservationAt: null, pendingUpdates: 0, segment: null, lastSequence: null, lastEpoch: null };
   let owned = false, stopped = false, release, heartbeatAt = 0;
   let interruptions = 0;
+  const observationListeners = new Set();
   if (!locks || !Channel) {
     status.state = "failed";
     status.lastError = "Web Locks and BroadcastChannel are required for safe collection";
@@ -32,7 +33,9 @@ export function coordinateResearch(service, {
     status.state = service.status.state;
     status.activeSource = interruptions ? null : service.status.activeSource;
     status.lastError = service.status.lastError;
-    channel.postMessage({ type: "status", state: status.state, activeSource: status.activeSource, lastError: status.lastError });
+    channel.postMessage({ type: "status", state: status.state, activeSource: status.activeSource, lastError: status.lastError,
+      lastObservationAt: status.lastObservationAt, segment: status.segment,
+      lastSequence: status.lastSequence, lastEpoch: status.lastEpoch });
   };
   channel.onmessage = event => {
     if (event.data?.type === "hello") { broadcast(); return; }
@@ -42,6 +45,10 @@ export function coordinateResearch(service, {
       status.role = "follower";
       status.activeSource = event.data.activeSource;
       status.lastError = event.data.lastError;
+      status.lastObservationAt = event.data.lastObservationAt ?? null;
+      status.segment = event.data.segment ?? null;
+      status.lastSequence = event.data.lastSequence ?? null;
+      status.lastEpoch = event.data.lastEpoch ?? null;
     }
   };
   channel.postMessage({ type: "hello" });
@@ -83,6 +90,10 @@ export function coordinateResearch(service, {
       owned = false;
       status.role = "stopped";
       status.activeSource = null;
+      status.lastObservationAt = null;
+      status.segment = null;
+      status.lastSequence = null;
+      status.lastEpoch = null;
       try { await service.interrupt("Collector closed"); }
       finally { if (release) release(); }
     }
@@ -93,12 +104,28 @@ export function coordinateResearch(service, {
     ...service, status,
     ingest: (...args) => {
       if (!owned) return Promise.resolve({ ignored: true });
-      status.lastObservationAt = now();
       status.pendingUpdates++;
       return Promise.resolve(service.ingest(...args)).then(result => {
-        status.segment = result.duplicate ? null : result.observation.segment;
+        if (result.duplicate) {
+          status.activeSource = null;
+          status.lastObservationAt = null;
+          status.segment = null;
+          status.lastSequence = null;
+          status.lastEpoch = null;
+        } else {
+          status.segment = result.observation.segment;
+          status.lastSequence = result.observation.sequence;
+          status.lastEpoch = result.observation.epoch;
+          status.lastObservationAt = result.observation.receivedAt ?? now();
+        }
         return result;
-      }).finally(() => { status.pendingUpdates--; broadcast(); });
+      }).finally(() => { status.pendingUpdates--; broadcast(); }).then(result => {
+        if (!result.duplicate) for (const listener of observationListeners) {
+          try { Promise.resolve(listener(result.observation)).catch(report); }
+          catch (error) { report(error); }
+        }
+        return result;
+      });
     },
     interrupt: (...args) => {
       if (!owned) return Promise.resolve();
@@ -106,7 +133,14 @@ export function coordinateResearch(service, {
       status.activeSource = null;
       status.lastObservationAt = null;
       status.segment = null;
+      status.lastSequence = null;
+      status.lastEpoch = null;
       return Promise.resolve(service.interrupt(...args)).finally(() => { interruptions--; broadcast(); });
+    },
+    subscribeObservations(listener) {
+      if (typeof listener !== "function") throw new Error("Observation listener must be a function");
+      observationListeners.add(listener);
+      return () => observationListeners.delete(listener);
     },
     createPrediction: leaderOnly("createPrediction"),
     createModelPrediction: leaderOnly("createModelPrediction"),

@@ -45,3 +45,15 @@ test("unconfirmed purchases are shown without inventing a payout or profit", () 
   assert.match(formatTradingHistory(state), /payout unknown/);
   assert.match(formatTradingHistory(state), /outcome and payout unknown/);
 });
+
+test("live trading state shows both overlapping contracts and their separate attempts", () => {
+  const state = { accountingScale: 8, accountId: "VRTC1", reason: "Running",
+    session: { pnl: 0, currency: "USD" }, cycle: { id: "p1", digit: 3, attempts: 2, staked: 300000000, pnl: 0 },
+    orders: [
+      { cycleId: "p1", digit: 3, stake: 100000000, contractId: "11", phase: "open" },
+      { cycleId: "p1", digit: 3, stake: 200000000, contractId: "12", phase: "open" },
+    ], history: [] };
+  const formatted = formatTradingState({ owned: true, running: true, state });
+  assert.match(formatted, /Attempt 1 \| digit 3 \| stake 1 \| contract 11 \| open/);
+  assert.match(formatted, /Attempt 2 \| digit 3 \| stake 2 \| contract 12 \| open/);
+});

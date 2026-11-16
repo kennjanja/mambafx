@@ -42,7 +42,8 @@ test("Deriv Digit Matches proposal, purchase and confirmed settlement use the or
   assert.deepEqual(sent[3], { buy: "proposal", price: 1 });
   await assert.rejects(adapter.buy("proposal", 100), /authorization or original proposal/);
   const order = { source, digit: 3, stake: 100, currency: "USD", transactionId: "456" };
-  assert.deepEqual(await adapter.contract("123", order), { contractId: "123", status: "won", profit: 800, payout: 900, settledAt: 1700000000000 });
+  assert.deepEqual(await adapter.contract("123", order), { contractId: "123", status: "won", profit: 800,
+    payout: 900, settledAt: 1700000000000, transactionId: "456" });
   await assert.rejects(adapter.contract("123", { ...order, digit: 4 }), /do not match/);
   await assert.rejects(adapter.contract("123", { ...order, transactionId: "999" }), /do not match/);
 });
@@ -98,4 +99,57 @@ test("server time is requested only when explicitly needed", async () => {
   assert.equal(sent.length, 0);
   assert.equal(await adapter.serverTime(), 1700000000000);
   assert.deepEqual(sent, [{ payload: { time: 1 }, type: "time" }]);
+});
+
+test("lost purchase responses recover only a uniquely verified original contract", async () => {
+  const state = { connected: true, accountId: "VRTC1", currency: "USD", isVirtual: true,
+    connectionGeneration: 1, tradeAuthorized: true };
+  const source = JSON.stringify(["deriv-public", "public", "R_100", 2]);
+  const sent = [], now = 1700000005000;
+  const request = async (payload, type) => {
+    sent.push(payload);
+    if (type === "portfolio") return { contracts: [{
+      contract_id: 123, transaction_id: 456, contract_type: "DIGITMATCH", currency: "USD",
+      underlying_symbol: "R_100", buy_price: 1, purchase_time: 1700000000,
+    }] };
+    if (type === "statement") return { transactions: [{
+      action_type: "buy", contract_id: 123, transaction_id: 456,
+      transaction_time: 1700000000, amount: -1,
+    }] };
+    return { contract_id: 123, contract_type: "DIGITMATCH", currency: "USD", underlying_symbol: "R_100",
+      barrier: "3", buy_price: "1.00", transaction_ids: { buy: 456 }, is_sold: 0, status: "open" };
+  };
+  const adapter = createDerivExecution({ request, account: () => state, precision: 2, now: () => now });
+  const order = { accountId: "VRTC1", currency: "USD", source, digit: 3, stake: 100,
+    purchaseStartedAt: 1700000000000 };
+  assert.deepEqual(await adapter.recover(order), {
+    status: "found", contract: { contractId: "123", status: "open", transactionId: "456" }, transactionId: "456",
+  });
+  assert.equal(sent.filter(row => row.proposal_open_contract).length, 1);
+  assert.deepEqual(sent[0], { portfolio: 1 });
+  assert.deepEqual(sent[1], { statement: 1, action_type: "buy", date_from: 1699999997,
+    date_to: 1700000008, description: 1, limit: 999 });
+  assert.deepEqual(await adapter.recover(order, ["123"]), { status: "not_found" });
+});
+
+test("recovery leaves multiple verified candidates unresolved", async () => {
+  const state = { connected: true, accountId: "VRTC1", currency: "USD", isVirtual: true,
+    connectionGeneration: 1, tradeAuthorized: true };
+  const source = JSON.stringify(["deriv-public", "public", "R_100", 2]);
+  const request = async (_payload, type) => {
+    if (type === "portfolio") return { contracts: [
+      { contract_id: 123, transaction_id: 456, contract_type: "DIGITMATCH", currency: "USD",
+        underlying_symbol: "R_100", buy_price: 1, purchase_time: 1700000000 },
+      { contract_id: 124, transaction_id: 457, contract_type: "DIGITMATCH", currency: "USD",
+        underlying_symbol: "R_100", buy_price: 1, purchase_time: 1700000000 },
+    ] };
+    if (type === "statement") return { transactions: [] };
+    const id = Number(_payload.contract_id);
+    return { contract_id: id, contract_type: "DIGITMATCH", currency: "USD", underlying_symbol: "R_100",
+      barrier: "3", buy_price: 1, transaction_ids: { buy: id + 333 }, is_sold: 0, status: "open" };
+  };
+  const adapter = createDerivExecution({ request, account: () => state, precision: 2, now: () => 1700000005000 });
+  const order = { accountId: "VRTC1", currency: "USD", source, digit: 3, stake: 100,
+    purchaseStartedAt: 1700000000000 };
+  assert.deepEqual(await adapter.recover(order), { status: "ambiguous" });
 });

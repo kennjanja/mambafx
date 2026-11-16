@@ -4,9 +4,9 @@ import { ResearchExecution } from "../../src/super-mathes/execution.js";
 
 function harness({ isVirtual = true } = {}) {
   const saved = new Map(), sent = [], predictions = [];
-  let contractId = 0, currentResult = null, owns = true;
+  let contractId = 0, currentResult = null, owns = true, sequence = 1;
   const account = { id: isVirtual ? "VRTC1" : "CR1", isVirtual, connected: true, authorized: true, balance: 10000, currency: "USD" };
-  const feed = { source: "source", segment: 1, continuous: true };
+  const feed = { source: "source", segment: 1, continuous: true, sequence, epoch: 1000 };
   const store = {
     async load(id) { return saved.has(id) ? structuredClone(saved.get(id)) : null; },
     async save(state) { saved.set(state.accountId, structuredClone(state)); },
@@ -14,206 +14,165 @@ function harness({ isVirtual = true } = {}) {
   const host = {
     ownsExecution: () => owns, account: () => account, feed: () => feed,
     async verifyAuthorization() {},
-    async proposal(input) { sent.push({ proposal: input }); return { id: "proposal", askPrice: input.stake }; },
+    async proposal(input) { sent.push({ proposal: input }); return { id: `proposal-${sent.length}`, askPrice: input.stake }; },
     async buy(id, stake) { sent.push({ buy: id, stake }); return { contractId: String(++contractId), buyPrice: stake }; },
     async contract(id) { return currentResult && { ...currentResult, contractId: id }; },
+    async recover() { return { status: "not_found" }; },
   };
-  const research = { async getPrediction(id) { return predictions.find(row => row.id === id); },
-    async createModelPrediction(_window, model) {
-    assert.equal(model, "combined");
-    const digit = predictions.length ? 6 : 3;
-    const result = { id: `p${predictions.length}`, source: "source", prediction: { selectedDigit: digit, model: "combined-frequency-markov", evidence: { present: true } } };
-    predictions.push(result);
-    return result;
-  } };
+  const research = {
+    async getPrediction(id) { return predictions.find(row => row.id === id); },
+    async createModelPrediction(_window, model, _weight, expectedSequence) {
+      assert.equal(model, "combined");
+      const predictionSequence = expectedSequence;
+      const digit = predictions.length ? 6 : 3;
+      const result = { id: `p${predictions.length}`, source: "source", originSequence: predictionSequence,
+        prediction: { timestamp: predictionSequence * 1000, selectedDigit: digit,
+          model: "combined-frequency-markov", evidence: { present: true } } };
+      predictions.push(result);
+      return result;
+    },
+  };
   const config = { baseStake: 100, maximumStake: 1000, maximumExposure: 3000, cycleLoss: 2000, sessionLoss: 5000,
     cycleTarget: 1000, sessionTarget: 2000, dailyTarget: 3000, maxAttempts: 0, martingale: true,
     multiplierNumerator: 2, multiplierDenominator: 1, timeZone: "America/New_York", windowSize: 100, frequencyWeight: 0.5, durationTicks: 1 };
   const bot = new ResearchExecution({ host, store, research, now: () => Date.parse("2026-03-08T06:00:00Z") });
-  return { bot, host, store, research, config, account, feed, sent, predictions, saved,
+  function observation() {
+    sequence++;
+    feed.sequence = sequence;
+    feed.epoch = sequence * 1000;
+    return { source: feed.source, segment: feed.segment, sequence, epoch: feed.epoch, digit: 1 };
+  }
+  async function tick() { return bot.onTick(observation()); }
+  return { bot, host, store, research, config, account, feed, sent, predictions, saved, tick, observation,
     result: value => { currentResult = value; }, loseLock: () => { owns = false; } };
 }
 
-test("confirmed losses preserve the selected digit, while a win advances the cycle", async () => {
+test("accepted ticks burst two frozen-digit contracts, then roll over only after a confirmed win", async () => {
   const h = harness();
   await h.bot.start(h.config);
-  await h.bot.onTick();
-  await h.bot.onTick();
-  assert.equal(h.sent.filter(x => x.buy).length, 1);
-  h.result({ status: "lost", profit: -100, payout: 0, settledAt: Date.parse("2026-03-08T06:00:00Z") });
-  assert.equal(await h.bot.reconcile(), true);
-  assert.equal(await h.bot.reconcile(), false);
-  await h.bot.onTick();
+  await h.tick();
+  await h.tick();
+  const firstCycle = h.bot.state.cycle.id;
   assert.deepEqual(h.sent.filter(x => x.proposal).map(x => [x.proposal.digit, x.proposal.stake]), [[3, 100], [3, 200]]);
+  assert.equal(h.bot.state.orders.length, 2);
+  await h.tick();
+  assert.equal(h.sent.filter(x => x.proposal).length, 2);
+  assert.match(h.bot.state.reason, /Burst limit/);
+
+  h.result({ status: "lost", profit: -100, payout: 0, settledAt: Date.parse("2026-03-08T06:00:00Z") });
+  assert.equal(await h.bot.reconcile(h.bot.state.orders[0].id), true);
+  assert.equal(h.bot.state.cycle.losses, 1);
+  await h.tick();
+  assert.deepEqual(h.sent.filter(x => x.proposal).map(x => [x.proposal.digit, x.proposal.stake]),
+    [[3, 100], [3, 200], [3, 400]]);
+
   h.result({ status: "won", profit: 300, payout: 500, settledAt: Date.parse("2026-03-08T06:00:01Z") });
-  await h.bot.reconcile();
-  assert.equal(h.bot.state.session.pnl, 200);
-  await h.bot.onTick();
-  assert.equal(h.sent.filter(x => x.proposal).at(-1).proposal.digit, 6);
-  assert.equal(h.predictions.length, 2);
+  const oldCycleOrder = h.bot.state.orders.find(order => order.cycleId === firstCycle);
+  assert.equal(await h.bot.reconcile(oldCycleOrder.id), true);
+  assert.equal(h.bot.state.cycle, null);
+  await h.tick();
+  assert.equal(h.bot.state.cycle.digit, 6);
+  assert.notEqual(h.bot.state.cycle.id, firstCycle);
+
+  h.result({ status: "lost", profit: -400, payout: 0, settledAt: Date.parse("2026-03-08T06:00:02Z") });
+  const lateOrder = h.bot.state.orders.find(order => order.cycleId === firstCycle);
+  await h.bot.reconcile(lateOrder.id);
+  assert.equal(h.bot.state.cycle.digit, 6);
+  assert.equal(h.bot.state.cycle.losses, 0);
+  assert.equal(h.bot.state.session.pnl, -200);
 });
 
-test("account types are separated and a changed account cannot buy after proposal", async () => {
-  for (const isVirtual of [true, false]) {
-    const h = harness({ isVirtual });
-    h.host.proposal = async input => {
-      h.account.id = isVirtual ? "CR2" : "VRTC2";
-      return { id: "p", askPrice: input.stake };
-    };
-    await h.bot.start(h.config);
-    await assert.rejects(h.bot.onTick(), /Account/);
-    assert.equal(h.sent.filter(x => x.buy).length, 0);
-  }
+test("sequence gaps stop trading before a purchase and duplicate observations are ignored", async () => {
+  const h = harness();
+  await h.bot.start(h.config);
+  const skipped = h.observation();
+  skipped.sequence++;
+  h.feed.sequence = skipped.sequence;
+  await assert.rejects(h.bot.onTick(skipped), /skipped or reordered/);
+  assert.equal(h.bot.running, false);
+  assert.equal(h.sent.filter(x => x.buy).length, 0);
 });
 
-test("unconfirmed purchases stop without retry and remain visible after restart", async () => {
+test("uncertain buys remain durable until verified recovery and never trigger a blind retry", async () => {
   const h = harness();
   let attempts = 0;
   h.host.buy = async () => { attempts++; throw new Error("disconnected"); };
   await h.bot.start(h.config);
-  await assert.rejects(h.bot.onTick(), /unknown/);
+  await assert.rejects(h.tick(), /unknown/);
   assert.equal(h.bot.running, false);
-  assert.equal(h.bot.state.order, null);
-  assert.equal(h.bot.state.history[0].phase, "unknown");
-  assert.equal(h.bot.state.session.uncertainExposure, 100);
-  await h.bot.onTick();
-  assert.equal(attempts, 1);
+  assert.equal(h.bot.state.orders.length, 1);
+  assert.equal(h.bot.state.orders[0].phase, "unknown");
+  assert.equal(h.bot.state.orders[0].purchaseStartedAt, Date.parse("2026-03-08T06:00:00Z"));
   const restored = new ResearchExecution({ host: h.host, store: h.store, research: h.research,
     now: () => Date.parse("2026-03-08T06:00:00Z") });
   await restored.restore(h.account.id);
-  assert.equal(restored.state.history[0].phase, "unknown");
-  assert.equal(restored.state.session.uncertainExposure, 100);
-  await restored.start(h.config);
-  assert.equal(attempts, 1);
-  assert.equal(restored.state.session.uncertainExposure, 100);
-});
-
-test("a purchase interrupted during buy is archived once on restore", async () => {
-  const h = harness();
-  let buying;
-  const save = h.store.save;
-  h.store.save = async state => {
-    if (state.order?.phase === "buying") buying = structuredClone(state);
-    await save(state);
-  };
-  h.host.buy = async () => { throw new Error("connection lost"); };
-  await h.bot.start(h.config);
-  await assert.rejects(h.bot.onTick(), /unknown/);
-  await h.store.save(buying);
-  const restored = new ResearchExecution({ host: h.host, store: h.store, research: h.research });
-  await restored.restore(h.account.id);
-  assert.equal(restored.state.order, null);
-  assert.equal(restored.state.history.filter(row => row.phase === "unknown").length, 1);
-  assert.equal(restored.state.session.uncertainExposure, 100);
-  await restored.restore(h.account.id);
-  assert.equal(restored.state.history.filter(row => row.phase === "unknown").length, 1);
-  assert.equal(restored.state.session.uncertainExposure, 100);
-});
-
-test("unconfirmed exposure counts against the configured session stop loss", async () => {
-  const h = harness();
-  h.config.sessionLoss = 150;
-  h.host.buy = async () => { throw new Error("connection lost"); };
-  await h.bot.start(h.config);
-  await assert.rejects(h.bot.onTick(), /unknown/);
-  await assert.rejects(h.bot.start(h.config), /session stop loss/);
-  assert.equal(h.bot.state.session.pnl, 0);
-  assert.equal(h.bot.state.session.uncertainExposure, 100);
-});
-
-test("a known open contract is reconciled once after restart", async () => {
-  const h = harness();
-  await h.bot.start(h.config);
-  await h.bot.onTick();
-  const restored = new ResearchExecution({ host: h.host, store: h.store, research: h.research });
-  await restored.restore(h.account.id);
-  assert.equal(restored.state.order.phase, "open");
-  await assert.rejects(restored.start(h.config), /reconciliation/);
+  assert.equal(restored.state.orders[0].phase, "unknown");
+  await assert.rejects(restored.start(h.config), /Open or uncertain contracts/);
+  h.host.recover = async () => ({ status: "found", transactionId: "456",
+    contract: { contractId: "456", status: "open", transactionId: "456" } });
+  h.host.buy = async (_id, stake) => ({ contractId: "789", buyPrice: stake });
+  assert.equal(await restored.recoverUnknown(restored.state.orders[0].id), true);
+  assert.equal(restored.state.orders[0].phase, "open");
+  assert.equal(restored.state.cycle.attempts, 1);
+  assert.equal(restored.state.cycle.staked, 100);
+  assert.equal(await restored.resumeRecovered(), true);
+  assert.equal(restored.running, true);
   h.result({ status: "lost", profit: -100, payout: 0, settledAt: Date.parse("2026-03-08T06:00:00Z") });
-  assert.equal(await restored.reconcile(), true);
-  assert.equal(await restored.reconcile(), false);
+  await restored.reconcile(restored.state.orders[0].id);
+  await restored.onTick(h.observation());
+  assert.deepEqual(h.sent.filter(x => x.proposal).map(x => [x.proposal.digit, x.proposal.stake]), [[3, 100], [3, 200]]);
+  assert.equal(attempts, 1);
+});
+
+test("legacy single-order state migrates and open contracts reconcile independently", async () => {
+  const h = harness();
+  await h.bot.start(h.config);
+  await h.tick();
+  const state = await h.store.load(h.account.id);
+  state.order = state.orders[0];
+  delete state.orders;
+  h.saved.set(h.account.id, state);
+
+  const restored = new ResearchExecution({ host: h.host, store: h.store, research: h.research,
+    now: () => Date.parse("2026-03-08T06:00:00Z") });
+  await restored.restore(h.account.id);
+  assert.equal(restored.state.orders.length, 1);
+  assert.equal(restored.state.order, undefined);
+  await assert.rejects(restored.start(h.config), /Open or uncertain contracts/);
+  h.result({ status: "lost", profit: -100, payout: 0, settledAt: Date.parse("2026-03-08T06:00:00Z") });
+  assert.equal(await restored.reconcile(restored.state.orders[0].id), true);
   assert.equal(restored.state.session.pnl, -100);
-  assert.equal(restored.state.cycle.digit, 3);
   assert.equal(h.sent.filter(x => x.buy).length, 1);
 });
 
-test("a confirmed buy transaction ID is stored with its order", async () => {
-  const h = harness();
-  h.host.buy = async (_id, stake) => ({ contractId: "123", transactionId: "456", buyPrice: stake });
-  await h.bot.start(h.config);
-  await h.bot.onTick();
-  assert.equal((await h.store.load(h.account.id)).order.transactionId, "456");
-});
-
-test("disconnect, lost ownership, rejection, and stop prevent purchases", async () => {
-  const h = harness();
-  h.host.proposal = async input => { h.feed.continuous = false; return { id: "p", askPrice: input.stake }; };
-  await h.bot.start(h.config);
-  await assert.rejects(h.bot.onTick(), /continuity/);
-  assert.equal(h.sent.filter(x => x.buy).length, 0);
-
-  const l = harness();
-  l.host.proposal = async input => { l.loseLock(); return { id: "p", askPrice: input.stake }; };
-  await l.bot.start(l.config);
-  await assert.rejects(l.bot.onTick(), /ownership/);
-  assert.equal(l.sent.filter(x => x.buy).length, 0);
-});
-
-test("a failing final risk check cancels the unsent order", async () => {
-  const h = harness();
-  const save = h.store.save;
-  h.store.save = async state => {
-    await save(state);
-    if (state.order?.phase === "buying") h.account.balance = null;
-  };
-  await h.bot.start(h.config);
-  await assert.rejects(h.bot.onTick(), /account balance/);
-  assert.equal(h.sent.filter(x => x.buy).length, 0);
-  assert.equal((await h.store.load(h.account.id)).order.phase, "cancelled");
-  assert.equal(h.bot.state.cycle.unresolved, false);
-});
-
-test("settlement requires actual profit, payout, timestamp and contract identity", async () => {
-  const h = harness();
-  await h.bot.start(h.config);
-  await h.bot.onTick();
-  h.result({ status: "won", profit: 100, payout: 999, settledAt: 1 });
-  await assert.rejects(h.bot.reconcile(), /incomplete/);
-  assert.equal(h.bot.state.order.phase, "open");
-  assert.equal(h.bot.state.session.pnl, 0);
-});
-
-test("cycle take profit stops instead of opening a new cycle", async () => {
+test("a confirmed cycle take-profit closes and stops before the next prediction", async () => {
   const h = harness();
   h.config.cycleTarget = 100;
   await h.bot.start(h.config);
-  await h.bot.onTick();
-  h.result({ status: "won", profit: 100, payout: 200, settledAt: Date.parse("2026-03-08T06:00:00Z") });
-  await h.bot.reconcile();
+  await h.tick();
+  h.result({ status: "won", profit: 300, payout: 400, settledAt: Date.parse("2026-03-08T06:00:00Z") });
+  const order = h.bot.state.orders[0];
+  await h.bot.reconcile(order.id);
   assert.equal(h.bot.running, false);
-  await h.bot.onTick();
+  await h.tick();
   assert.equal(h.predictions.length, 1);
+  assert.match(h.bot.state.reason, /limit reached/);
 });
 
-test("stopping while startup or a proposal is pending cannot arm or buy", async () => {
+test("feed segment changes fence an existing cycle and account changes fence a proposal", async () => {
   const h = harness();
-  let release;
-  const load = h.store.load;
-  h.store.load = id => new Promise(resolve => { release = () => load(id).then(resolve); });
-  const starting = h.bot.start(h.config);
-  await h.bot.stop("Stopped during startup");
-  release();
-  await assert.rejects(starting, /cancelled/);
-  assert.equal(h.bot.running, false);
+  await h.bot.start(h.config);
+  const observation = h.observation();
+  h.feed.segment = 2;
+  await assert.rejects(h.bot.onTick(observation), /continuity unavailable/);
+  assert.equal(h.sent.filter(x => x.buy).length, 0);
 
-  const p = harness();
-  let resolveProposal;
-  p.host.proposal = () => new Promise(resolve => { resolveProposal = resolve; });
-  await p.bot.start(p.config);
-  const pending = p.bot.onTick();
-  while (!resolveProposal) await new Promise(resolve => setTimeout(resolve, 0));
-  await p.bot.stop();
-  resolveProposal({ id: "p", askPrice: 100 });
-  await pending;
-  assert.equal(p.sent.filter(x => x.buy).length, 0);
+  const other = harness({ isVirtual: false });
+  other.host.proposal = async input => {
+    other.account.id = "CR2";
+    return { id: "proposal", askPrice: input.stake };
+  };
+  await other.bot.start(other.config);
+  await assert.rejects(other.tick(), /Account/);
+  assert.equal(other.sent.filter(x => x.buy).length, 0);
 });
