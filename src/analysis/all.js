@@ -12,4 +12,4 @@ export function analyzeAll(candles, opts = {}) {
 }
 export function analyzeLv(candles, opts = {}) { return analyzeLevels(candles, opts); }
 export function analyzePat(candles, opts = {}) { return analyzePatterns(candles, opts); }
-export { renderZones, renderStructure, renderLiquidity, visibleZones, renderCandlePatterns, renderChartPatterns, renderWyckoff, renderRegime, renderLevels } from './render.js?v=fvg2';
+export { renderZones, renderStructure, renderLiquidity, visibleZones, renderCandlePatterns, renderChartPatterns, renderWyckoff, renderRegime, renderLevels } from './render.js?v=fvg3';

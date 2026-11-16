@@ -26,6 +26,16 @@ test('all 15 frames create Sure support and resistance without duplicate group l
   assert.equal(result.resistance[0].price, 110);
 });
 
+test('confirmed support and resistance confluences survive price crossing either level', () => {
+  const input = data();
+  const initial = computeModifiedSr(input, now, 100);
+  for (const price of [80, 90, 110, 120]) {
+    const crossed = computeModifiedSr(input, now, price);
+    assert.deepEqual(crossed.support, initial.support);
+    assert.deepEqual(crossed.resistance, initial.resistance);
+  }
+});
+
 test('a missing frame blocks its group and Sure, but not other groups', () => {
   const input = data(); input[2700] = [];
   const result = computeModifiedSr(input, now, 100);

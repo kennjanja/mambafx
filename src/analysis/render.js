@@ -43,15 +43,7 @@ export function renderZones(zones, g, opts = {}) {
       const ym = g.clampY(z.mid);
       s += `<line x1="${x0.toFixed(1)}" y1="${ym.toFixed(1)}" x2="${x1.toFixed(1)}" y2="${ym.toFixed(1)}" stroke="rgba(${rgb},0.35)" stroke-width="0.5" stroke-dasharray="1,2"/>`;
     }
-    const quality = z.fvgQuality;
-    const asOf = Number.isInteger(opts.asOfIndex) ? opts.asOfIndex : Infinity;
-    const correction = (opts.fvgCorrections || []).find((item) => item.zoneId === z.id && item.confirmedIndex <= asOf);
-    const position = (opts.fvgPositions || []).find((item) => item.zoneId === z.id && item.confirmedIndex <= asOf);
-    const touchText = correction ? (correction.deep ? ' deep' : ' touched')
-      : Number.isInteger(opts.asOfIndex) && opts.asOfIndex >= z.confirmedIndex + 3 ? ' no timely touch' : ' awaiting touch';
-    const detail = quality ? z.confirmedIndex > asOf ? ' forming'
-      : ` ${quality.tier} ${quality.qualified ? 'formation pass' : 'formation fail'}${touchText}${position ? ` ${position.zone}` : ''}` : '';
-    const tag = `${label}${detail}${z.testCount ? ' ×' + z.testCount : ''}${dead ? ' ' + z.status : ''}`;
+    const tag = `${label}${z.testCount ? ' ×' + z.testCount : ''}${dead ? ' ' + z.status : ''}`;
     s += `<text x="${(x0 + 2).toFixed(1)}" y="${(yt + 7).toFixed(1)}" fill="rgba(${rgb},0.95)" font-size="6.5" font-family="monospace">${tag}</text></g>`;
   }
   return s;
