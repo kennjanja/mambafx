@@ -1,17 +1,17 @@
-import { ResearchExecution } from "./execution.js?v=3";
+import { ResearchExecution } from "./execution.js?v=7";
 import { openExecutionStore } from "./executionStorage.js?v=2";
 import { createExecutionOwnership } from "./executionOwnership.js?v=1";
-import { createDerivExecution, toMinor } from "./derivExecution.js?v=1";
+import { createDerivExecution, toMinor } from "./derivExecution.js?v=4";
 import { createDerivRequest, readAccountBalance } from "./derivRequest.js?v=1";
 
 export const ACCOUNTING_SCALE = 8;
-const UNRESOLVED = new Set(["open"]);
+const UNRESOLVED = new Set(["open", "buying", "unknown"]);
 
 export function createTradingRuntime({ connection, research, fetchSession, fetchAccounts, sessionKey,
   ownership = createExecutionOwnership(), openStore = openExecutionStore,
   monotonic = () => performance.now(), wallTime = Date.now }) {
   const request = createDerivRequest(connection);
-  let database, controller, accountId, connectionGeneration, authorization;
+  let database, controller, accountId, connectionGeneration, authorization, unsubscribeObservations;
   let serverTime, serverMeasuredAt, tail = Promise.resolve(), ticking = false;
   let lastError = null, disposed = false, controlVersion = 0;
 
@@ -28,7 +28,7 @@ export function createTradingRuntime({ connection, research, fetchSession, fetch
       monotonic() >= authorization.at;
     return { ...a, tradeAuthorized: authorized };
   }
-  const broker = createDerivExecution({ request, account: currentAccount, precision: ACCOUNTING_SCALE });
+  const broker = createDerivExecution({ request, account: currentAccount, precision: ACCOUNTING_SCALE, now: clock });
   function clock() {
     const elapsed = Math.floor(monotonic() - serverMeasuredAt);
     if (!Number.isSafeInteger(serverTime) || !Number.isSafeInteger(elapsed) || elapsed < 0 || elapsed > 60000) {
@@ -45,9 +45,12 @@ export function createTradingRuntime({ connection, research, fetchSession, fetch
   function feed() {
     const s = research.status;
     const age = wallTime() - s.lastObservationAt;
-    return { source: s.activeSource, segment: s.segment, continuous: s.role === "collector" && s.state === "ready" &&
-      s.pendingUpdates === 0 && Number.isSafeInteger(s.segment) && s.segment > 0 &&
-      Number.isFinite(age) && age >= 0 && age < 15000 && !!s.activeSource };
+    return { source: s.activeSource, segment: s.segment, sequence: s.lastSequence, epoch: s.lastEpoch,
+      continuous: s.role === "collector" && s.state === "ready" &&
+        Number.isSafeInteger(s.segment) && s.segment > 0 &&
+        Number.isSafeInteger(s.lastSequence) && s.lastSequence > 0 &&
+        Number.isSafeInteger(s.lastEpoch) && s.lastEpoch >= 0 &&
+        Number.isFinite(age) && age >= 0 && age < 15000 && !!s.activeSource };
   }
   async function refreshAuthorization(force = false) {
     if (controller?.running && authorization && sessionKey() !== authorization.sessionKey) {
@@ -82,6 +85,9 @@ export function createTradingRuntime({ connection, research, fetchSession, fetch
     serverTime = await broker.serverTime();
     serverMeasuredAt = monotonic();
   }
+  async function ensureClock() {
+    if (!Number.isFinite(serverMeasuredAt) || monotonic() - serverMeasuredAt > 30000) await refreshClock();
+  }
   function checkedStore(db) {
     return {
       async load(id) {
@@ -100,6 +106,8 @@ export function createTradingRuntime({ connection, research, fetchSession, fetch
       controller = null;
       accountId = null;
       authorization = null;
+      if (unsubscribeObservations) unsubscribeObservations();
+      unsubscribeObservations = null;
     });
   }
   async function prepare() {
@@ -111,7 +119,8 @@ export function createTradingRuntime({ connection, research, fetchSession, fetch
     }
     if (controller && accountId === selected.accountId) return;
     if (controller) {
-      if (UNRESOLVED.has(controller.state?.order?.phase)) throw new Error("Reconnect the original account to reconcile its order");
+      if (["open", "buying", "unknown"].includes(controller.state?.order?.phase)) throw new Error("Reconnect the original account to reconcile its order");
+      if (controller.state?.orders?.some(order => ["open", "buying", "unknown"].includes(order.phase))) throw new Error("Reconnect the original account to reconcile its contracts");
       await controller.stop("Account changed");
       await release();
     }
@@ -122,7 +131,8 @@ export function createTradingRuntime({ connection, research, fetchSession, fetch
       if (entries.some(row => row.accountingScale !== ACCOUNTING_SCALE)) {
         throw new Error("Execution history has an incompatible accounting scale");
       }
-      if (entries.some(row => row.accountId !== selected.accountId && UNRESOLVED.has(row.order?.phase))) {
+      if (entries.some(row => row.accountId !== selected.accountId &&
+          (UNRESOLVED.has(row.order?.phase) || row.orders?.some(order => UNRESOLVED.has(order.phase))))) {
         throw new Error("Reconnect the account with an unresolved order");
       }
       const current = connection.account();
@@ -132,8 +142,27 @@ export function createTradingRuntime({ connection, research, fetchSession, fetch
       connectionGeneration = selected.connectionGeneration;
       controller = new ResearchExecution({ store: checkedStore(database), research, now: clock,
         host: { ...broker, ownsExecution: () => ownership.owns(), account, feed,
+          stakeQuantum: 10 ** (ACCOUNTING_SCALE - 2),
           verifyAuthorization: () => refreshAuthorization(true) } });
       await controller.restore(accountId);
+      if (typeof research.subscribeObservations === "function") {
+        unsubscribeObservations = research.subscribeObservations(observation => enqueue(async () => {
+          if (!controller?.running || disposed) return;
+          try {
+            if (!await checkConnection()) return;
+            await refreshAuthorization();
+            await ensureClock();
+            await controller.onTick(observation);
+            lastError = null;
+          } catch (error) {
+            lastError = error.message;
+            if (controller?.running) await controller.stop(error.message);
+            throw error;
+          }
+        }).catch(error => {
+          lastError = error.message;
+        }));
+      }
     } catch (error) {
       await release();
       throw error;
@@ -158,13 +187,23 @@ export function createTradingRuntime({ connection, research, fetchSession, fetch
     }
     await prepare();
     if (!await checkConnection()) return;
-    if (!controller.running && controller.state?.order?.phase !== "open") return;
+    const unresolved = controller.state?.orders?.filter(order => order.phase === "unknown") || [];
+    const openOrders = controller.state?.orders?.filter(order => order.phase === "open") ||
+      (controller.state?.order?.phase === "open" ? [controller.state.order] : []);
+    if (!controller.running && !openOrders.length && !unresolved.length) return;
     await refreshAuthorization();
-    await refreshClock();
-    if (controller.state?.order?.phase === "open") await controller.reconcile();
+    await ensureClock();
+    const recoveredIds = new Set();
+    for (const order of unresolved) {
+      if (await controller.recoverUnknown(order.id)) recoveredIds.add(order.id);
+    }
+    if (controller.state?.resumeAfterRecovery) await controller.resumeRecovered();
+    const currentOpenOrders = controller.state?.orders?.filter(order => order.phase === "open") || [];
+    for (const order of currentOpenOrders) {
+      if (!recoveredIds.has(order.id)) await controller.reconcile(order.id);
+    }
     if (controller.running) {
       await research.checkStale();
-      await controller.onTick();
     }
   }
   function verifySelection(expected) {
@@ -189,6 +228,11 @@ export function createTradingRuntime({ connection, research, fetchSession, fetch
         await readAccountBalance(request, connection.account);
         await refreshClock();
         await research.checkStale();
+        const unresolved = controller.state?.orders?.filter(order => order.phase === "unknown") || [];
+        for (const order of unresolved) await controller.recoverUnknown(order.id);
+        if (controller.state?.orders?.some(order => order.phase === "unknown")) {
+          throw new Error("Purchase remains unresolved; the buy will not be resent while Deriv account records are incomplete");
+        }
         verifySelection(selection);
         if (version !== controlVersion || disposed) throw new Error("Start cancelled");
         await controller.start(config);
@@ -240,11 +284,11 @@ export function createTradingRuntime({ connection, research, fetchSession, fetch
     },
     dispose() {
       controlVersion++;
-      controller?.requestStop();
+      controller?.requestStop(true);
       disposed = true;
       return enqueue(async () => {
-        if (controller) await controller.stop(controller.state?.order?.phase === "open" ?
-          "Page closed; reconcile the open contract before restarting" : "Page closed; trading stopped");
+        if (controller) await controller.stop(controller.state?.orders?.some(order => ["open", "unknown"].includes(order.phase)) ?
+          "Page closed; reconcile the existing Deriv contract before restarting" : "Page closed; trading stopped", true);
         await release();
       });
     },

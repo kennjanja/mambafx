@@ -1,5 +1,5 @@
 import { createResearchPrediction } from "./recurrence.js?v=3";
-import { openResearchStore } from "./storage.js?v=3";
+import { openResearchStore } from "./storage.js?v=4";
 import { combinedPrediction, frequencyDistribution, rankDistribution, transitionDistribution } from "./models.js?v=3";
 import { walkForward } from "./validation.js";
 import { independentValidation } from "./independentValidation.js?v=3";
@@ -152,31 +152,34 @@ export function createLiveResearch({ openStore = openResearchStore, report = err
         return store.createPrediction({ ...frozen, hazards: frozen.recurrence.hazards }, expectedSequence, createdAt);
       });
     },
-    createModelPrediction(windowSize = 1000, model = "frequency", frequencyWeight = 0.5) {
+    createModelPrediction(windowSize = 1000, model = "frequency", frequencyWeight = 0.5, expectedSequence) {
       if (!Number.isInteger(windowSize) || windowSize < 20 || windowSize > 10000) throw new Error("Window must be between 20 and 10000");
       if (!["frequency", "markov", "combined"].includes(model)) throw new Error("Invalid research model");
       return enqueue(async store => {
         try { await stopStale(store); } catch (error) { fatalError(error); throw error; }
-        const source = activeSource, token = arrival;
+        const source = activeSource;
         if (!source) throw new Error("No active feed");
         const state = await store.getSource(source);
-        const rows = await store.list("observations", source, windowSize);
-        const digits = rows.filter(row => row.segment === state.segment && row.sequence <= state.lastSeq).reverse().map(row => row.digit);
+        const sequence = expectedSequence ?? state.lastSeq;
+        const rows = await store.listObservationsThrough(source, sequence, windowSize);
+        const origin = rows.find(row => row.sequence === sequence && row.segment === state.segment);
+        if (!state.connected || !origin) throw new Error("Prediction origin is stale or the feed is interrupted");
+        const digits = rows.filter(row => row.segment === origin.segment && row.sequence <= sequence).reverse().map(row => row.digit);
         if (digits.length < 20) throw new Error("At least 20 consecutive observations are required");
         const evidence = model === "combined" ? combinedPrediction(digits, { frequencyWeight }) : undefined;
         const probabilities = evidence ? evidence.probabilities : model === "frequency" ? frequencyDistribution(digits) : transitionDistribution(digits);
         const ranking = rankDistribution(probabilities);
         if (ranking[0].probability === ranking[1].probability) throw new Error("Top digits are tied; no digit selected");
-        if (arrival !== token || activeSource !== source) throw new Error("Feed advanced while preparing prediction; try again");
+        if (activeSource !== source) throw new Error("Prediction source is no longer active");
         const selectedDigit = ranking[0].digit;
         const input = {
-          id: crypto.randomUUID(), source, timestamp: state.lastEpoch, selectedDigit, probabilities,
+          id: crypto.randomUUID(), source, timestamp: origin.epoch, selectedDigit, probabilities,
           hazards: Array(5).fill(probabilities[selectedDigit]),
           model: model === "frequency" ? "smoothed-frequency" : model === "markov" ? "smoothed-first-order-markov" : "combined-frequency-markov",
           assumptions: `Research only; ${digits.length} consecutive observations, alpha=1; constant independent-draw hazard assumed, not established.`,
           ...(evidence ? { evidence } : {}),
         };
-        return store.createPrediction(input, state.lastSeq, Date.now());
+        return store.createPrediction(input, sequence, Date.now(), { allowDelayed: true });
       });
     },
     benchmark(windowSize = 1000, warmup = 100, model = "frequency") {

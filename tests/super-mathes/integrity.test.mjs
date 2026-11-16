@@ -89,16 +89,38 @@ test("prediction creation itself detects a stale feed even if the timer is delay
   } finally { fake.teardown(); }
 });
 
+test("a delayed model prediction is pinned to its accepted sequence and catches up lifecycle observations", async () => {
+  const fake = installFakeIndexedDB();
+  try {
+    const live = createLiveResearch({ report: () => {} });
+    for (let epoch = 1; epoch <= 22; epoch++) await live.ingest(tick(epoch));
+    const record = await live.createModelPrediction(20, "combined", 0.5, 20);
+    assert.equal(record.originSequence, 20);
+    assert.equal(record.prediction.timestamp, 20);
+    assert.deepEqual(record.observations.map(row => row.sequence), [21, 22]);
+    await live.ingest(tick(23));
+    assert.equal((await live.getPrediction(record.id)).observations.at(-1).sequence, 23);
+  } finally { fake.teardown(); }
+});
+
 test("concurrent tabs elect one collector and safely hand over pending predictions", async () => {
   const fake = installFakeIndexedDB(), locks = new TestLocks();
   const options = { locks, Channel: TestChannel, heartbeatMs: 20, report: () => {} };
   const first = coordinateResearch(createLiveResearch({ autoRecover: false, report: () => {} }), options);
   const second = coordinateResearch(createLiveResearch({ autoRecover: false, report: () => {} }), options);
+  const accepted = [];
+  first.subscribeObservations(observation => accepted.push(observation));
   try {
     await waitFor(() => first.status.role === "collector" && second.status.role === "follower");
     await Promise.all([first.ingest(tick(1)), second.ingest(tick(1))]);
     assert.equal((await first.getSource(source)).lastSeq, 1);
     assert.equal(first.status.segment, 1);
+    assert.equal(first.status.lastSequence, 1);
+    assert.equal(accepted.length, 1);
+    assert.equal(accepted[0].sequence, 1);
+    await first.ingest(tick(1));
+    assert.equal(accepted.length, 1);
+    assert.equal(first.status.lastSequence, null);
     const interrupted = first.interrupt("Feed disconnected");
     assert.equal(first.status.activeSource, null);
     assert.equal(first.status.segment, null);

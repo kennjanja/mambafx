@@ -608,6 +608,11 @@ class FakeIDBFactory {
       let aborted = false;
       const upgradeTransaction = {
         abort() { aborted = true; },
+        objectStore(name) {
+          const store = rec.stores.get(name);
+          if (!store) throw new Error(`FakeUpgradeTransaction: no object store "${name}"`);
+          return store;
+        },
       };
 
       rec.version = targetVersion;

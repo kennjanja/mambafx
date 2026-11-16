@@ -1,5 +1,5 @@
-import { toMajor, toMinor } from "./derivExecution.js?v=1";
-import { ACCOUNTING_SCALE } from "./tradingRuntime.js?v=2";
+import { toMajor, toMinor } from "./derivExecution.js?v=4";
+import { ACCOUNTING_SCALE } from "./tradingRuntime.js?v=8";
 
 function text(value) {
   return value == null ? "—" : String(value);
@@ -21,12 +21,14 @@ export function formatPrediction(records) {
 
 export function tradingConfig(values) {
   const amount = key => toMinor(values[key], ACCOUNTING_SCALE);
+  const baseStake = amount("baseStake");
+  if (baseStake % 10 ** (ACCOUNTING_SCALE - 2) !== 0) throw new Error("Base stake must have no more than two decimal places");
   const multiplier = toMinor(values.multiplier, 4);
   const steps = Number(values.maxSteps), durationTicks = Number(values.durationTicks);
   const windowSize = Number(values.windowSize), frequencyWeight = Number(values.frequencyWeight);
   if (!Number.isSafeInteger(steps) || steps < 0 || steps > 1000) throw new Error("Invalid maximum Martingale steps");
   return {
-    baseStake: amount("baseStake"), maximumStake: amount("maximumStake"), maximumExposure: amount("maximumExposure"),
+    baseStake, maximumStake: amount("maximumStake"), maximumExposure: amount("maximumExposure"),
     cycleLoss: amount("stopLoss"), sessionLoss: amount("stopLoss"), cycleTarget: amount("takeProfit"),
     sessionTarget: amount("takeProfit"), dailyTarget: amount("takeProfit"),
     maxAttempts: values.martingale ? steps + 1 : 0, martingale: values.martingale,
@@ -40,15 +42,24 @@ export function formatTradingState(snapshot) {
   if (!state) return snapshot?.error || "No execution history for the selected account.";
   if (state.accountingScale !== ACCOUNTING_SCALE) return "Execution history has an incompatible accounting scale.";
   const money = n => toMajor(n, ACCOUNTING_SCALE);
-  const cycle = state.cycle, order = state.order;
+  const cycle = state.cycle, orders = state.orders || (state.order ? [state.order] : []);
+  const unresolvedExposure = (state.session.uncertainExposure ?? 0) +
+    orders.filter(order => order.phase === "unknown").reduce((sum, order) => sum + order.stake, 0);
   const wins = state.history.filter(row => row.result?.status === "won").length;
   const losses = state.history.filter(row => row.result?.status === "lost").length;
+  const activeOrders = orders.length ? orders.map((order, index) => {
+    const ownerCycle = cycle?.id === order.cycleId ? cycle :
+      state.closedCycles?.find(item => item.id === order.cycleId);
+    const cycleOrders = orders.filter(item => item.cycleId === order.cycleId);
+    const attempt = Math.max(1, (ownerCycle?.attempts || 0) - cycleOrders.length + cycleOrders.indexOf(order) + 1);
+    return `Attempt ${attempt} | digit ${order.digit} | stake ${money(order.stake)} | contract ${text(order.contractId)} | ${order.phase}`;
+  }).join("\n") : "No open or pending contracts.";
   return `${snapshot.owned ? (snapshot.running ? "Running" : "Stopped") : "Last saved state; another tab may own execution"} — ${state.reason}` +
     `${snapshot.error ? ` | ${snapshot.error}` : ""}\nAccount: ${state.accountId}\n` +
-    `Digit: ${text(cycle?.digit)} | Attempts: ${cycle?.attempts ?? 0} | Stake: ${order ? money(order.stake) : "—"}\n` +
-    `Contract: ${text(order?.contractId)} | Status: ${text(order?.phase)}\n` +
+    `Cycle digit: ${text(cycle?.digit)} | Confirmed attempts: ${cycle?.attempts ?? 0} | Cycle stake: ${cycle ? money(cycle.staked) : "—"}\n` +
+    `Active contracts:\n${activeOrders}\n` +
     `Confirmed wins: ${wins} | losses: ${losses} | Cycle P/L: ${cycle ? money(cycle.pnl) : "—"} | Confirmed session P/L: ${money(state.session.pnl)} ${state.session.currency}` +
-    `\nUnconfirmed purchase exposure: ${money(state.session.uncertainExposure ?? 0)} ${state.session.currency}`;
+    `\nUnconfirmed purchase exposure: ${money(unresolvedExposure)} ${state.session.currency}`;
 }
 
 export function formatTradingHistory(state) {
@@ -91,11 +102,11 @@ export function attachTradingDashboard(service, accountStatus, refreshBalance, r
     <h3>Cycle prediction (or latest combined research prediction)</h3><pre data-field="prediction">Waiting for a combined prediction.</pre>
     <h3>Trading settings</h3>
     <p>Contract type: Digit Matches. The selected digit remains fixed until a confirmed win or the cycle is closed.</p>
-    <p>If a purchase response is lost, trading stops without retry or recovery. Starting again can create an additional contract; unconfirmed stake counts against the session stop loss.</p>
+    <p>If a purchase response is lost, trading pauses while the original Demo or Real account is checked for the contract. The bot never blindly resends an ambiguous buy; it resumes only after a unique contract is verified.</p>
     <p>Daily targets reset at midnight in Africa/Nairobi.</p>
     <form class="sm-trading-form" data-form="settings">
       <label>Duration (ticks) <input name="durationTicks" type="number" min="1" max="10" value="1" required></label>
-      <label>Base stake <input name="baseStake" type="number" min="0.00000001" step="any" value="1" required></label>
+      <label>Base stake <input name="baseStake" type="number" min="0.01" step="0.01" value="1" required></label>
       <label>Maximum stake <input name="maximumStake" type="number" min="0.00000001" step="any" value="1" required></label>
       <label>Maximum cycle exposure <input name="maximumExposure" type="number" min="0.00000001" step="any" value="1" required></label>
       <label>Stop loss <input name="stopLoss" type="number" min="0.00000001" step="any" value="1" required></label>

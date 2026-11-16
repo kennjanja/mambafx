@@ -73,7 +73,7 @@ async function discontinue(tx, state, reason, at = Date.now()) {
 
 export async function openResearchStore({ indexedDB = globalThis.indexedDB, name = "super-mathes-v1" } = {}) {
   if (!indexedDB) throw new Error("IndexedDB is unavailable");
-  const open = indexedDB.open(name, 2);
+  const open = indexedDB.open(name, 3);
   open.onupgradeneeded = event => {
     const db = event.target.result;
     if (event.oldVersion < 1) {
@@ -91,6 +91,9 @@ export async function openResearchStore({ indexedDB = globalThis.indexedDB, name
     if (event.oldVersion < 2) {
       const intervals = db.createObjectStore("intervals", { keyPath: "id" });
       intervals.createIndex("history", ["source", "detectedAt", "id"]);
+    }
+    if (event.oldVersion < 3) {
+      event.target.transaction.objectStore("observations").createIndex("sequence", ["source", "sequence"]);
     }
   };
   const db = await request(open);
@@ -165,7 +168,7 @@ export class ResearchStore {
     });
   }
 
-  createPrediction(input, expectedSequence, createdAt = Date.now()) {
+  createPrediction(input, expectedSequence, createdAt = Date.now(), { allowDelayed = false } = {}) {
     const record = createResearchPrediction(input);
     if (!Number.isSafeInteger(expectedSequence) || expectedSequence < 1 ||
         !Number.isSafeInteger(createdAt) || createdAt < 0) throw new Error("Invalid prediction origin");
@@ -175,14 +178,59 @@ export class ResearchStore {
         request(sources.get(record.prediction.source)), request(predictions.get(record.prediction.id)),
       ]);
       if (existing) throw new Error("Prediction id already exists");
-      if (!state || !state.connected || state.lastSeq !== expectedSequence || state.lastEpoch !== record.prediction.timestamp) {
+      const observations = tx.objectStore("observations");
+      const origin = await request(observations.get([record.prediction.source, record.prediction.timestamp]));
+      if (!state || !state.connected || (allowDelayed ? state.lastSeq < expectedSequence : state.lastSeq !== expectedSequence) || !origin ||
+          origin.sequence !== expectedSequence || origin.segment !== state.segment) {
         throw new Error("Prediction origin is stale or the feed is interrupted");
       }
-      const row = { ...record, id: record.prediction.id, source: record.prediction.source, originSequence: expectedSequence, createdAt };
-      predictions.add(row);
-      sources.put({ ...state, pending: [...state.pending, row.id] });
-      return row;
+      const row = { ...record, id: record.prediction.id, source: record.prediction.source,
+        originSequence: expectedSequence, createdAt };
+      const later = await new Promise((resolve, reject) => {
+        const found = [], cursor = observations.index("sequence").openCursor(
+          IDBKeyRange.bound([origin.source, expectedSequence], [origin.source, Number.MAX_SAFE_INTEGER], true), "next");
+        cursor.onerror = () => reject(cursor.error || new Error("IndexedDB observation cursor failed"));
+        cursor.onsuccess = () => {
+          try {
+            const current = cursor.result;
+            if (!current || current.value.source !== origin.source || found.length === 5) return resolve(found);
+            if (current.value.sequence > expectedSequence) found.push(current.value);
+            if (found.length === 5) return resolve(found);
+            current.continue();
+          } catch (error) { reject(error); }
+        };
+      });
+      let updated = row;
+      for (const observation of later) {
+        if (observation.sequence !== expectedSequence + updated.observations.length + 1 ||
+            observation.segment !== origin.segment) {
+          updated = { ...updated, ...markUnscorable(restoreRecord(updated)), interruptionReason: "Prediction creation was delayed across an uncertain interval" };
+          break;
+        }
+        updated = { ...updated, ...observePrediction(restoreRecord(updated), observation) };
+      }
+      predictions.add(updated);
+      if (pending(updated)) sources.put({ ...state, pending: [...state.pending, row.id] });
+      return updated;
     });
+  }
+
+  listObservationsThrough(source, sequence, limit) {
+    if (typeof source !== "string" || !source || !Number.isSafeInteger(sequence) || sequence < 1 ||
+        !Number.isInteger(limit) || limit < 1 || limit > 10000) throw new Error("Invalid observation query");
+    return transaction(this.db, "readonly", tx => new Promise((resolve, reject) => {
+      const rows = [], cursor = tx.objectStore("observations").index("sequence")
+        .openCursor(IDBKeyRange.bound([source, 1], [source, sequence]), "prev");
+      cursor.onerror = () => reject(cursor.error || new Error("IndexedDB cursor failed"));
+      cursor.onsuccess = () => {
+        try {
+          const current = cursor.result;
+          if (!current || rows.length === limit) return resolve(rows);
+          rows.push(current.value);
+          current.continue();
+        } catch (error) { reject(error); }
+      };
+    }));
   }
 
   interrupt(source, reason) {

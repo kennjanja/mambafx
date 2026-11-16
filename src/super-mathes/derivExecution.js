@@ -43,7 +43,7 @@ function sourceSymbol(source) {
 }
 
 // The scale is for exact ledger arithmetic, not a claim about currency precision.
-export function createDerivExecution({ request, account, precision }) {
+export function createDerivExecution({ request, account, precision, now = Date.now }) {
   if (typeof request !== "function" || typeof account !== "function") throw new Error("Deriv transport is required");
   precisionValue(precision);
   const proposals = new Map();
@@ -61,10 +61,98 @@ export function createDerivExecution({ request, account, precision }) {
       current.isVirtual === expected.isVirtual && current.connectionGeneration === expected.generation &&
       current.currency === currency;
   }
+  async function contract(contractId, order) {
+    if (!/^[1-9]\d*$/.test(contractId) || !Number.isSafeInteger(Number(contractId)) || !order) throw new Error("Invalid contract identity");
+    const result = await request({ proposal_open_contract: 1, contract_id: Number(contractId) }, "proposal_open_contract");
+    if (String(result.contract_id) !== contractId || result.contract_type !== "DIGITMATCH" ||
+        result.currency !== order.currency || result.underlying_symbol !== sourceSymbol(order.source) ||
+        String(result.barrier) !== String(order.digit) || toMinor(result.buy_price, precision) !== order.stake ||
+        (order.transactionId !== undefined && String(result.transaction_ids?.buy) !== order.transactionId)) {
+      throw new Error("Contract details do not match the recorded purchase");
+    }
+    const rawTransactionId = result.transaction_ids?.buy;
+    const transactionId = rawTransactionId == null ? undefined : String(rawTransactionId);
+    if (transactionId !== undefined && (!/^[1-9]\d*$/.test(transactionId) || !Number.isSafeInteger(Number(transactionId)))) {
+      throw new Error("Contract transaction identity is invalid");
+    }
+    if (result.is_sold === 0 && result.status === "open") {
+      return { contractId, status: "open", ...(transactionId === undefined ? {} : { transactionId }) };
+    }
+    if (result.is_sold !== 1 || !["won", "lost"].includes(result.status)) {
+      throw new Error("Contract status is incomplete or requires manual reconciliation");
+    }
+    const epoch = result.date_settlement ?? result.sell_time;
+    if (!Number.isSafeInteger(epoch) || epoch < 0 || !Number.isSafeInteger(epoch * 1000)) throw new Error("Contract settlement time is unavailable");
+    return { contractId, status: result.status, profit: toMinor(result.profit, precision),
+      payout: toMinor(result.sell_price, precision), settledAt: epoch * 1000,
+      ...(transactionId === undefined ? {} : { transactionId }) };
+  }
+  async function recover(order, knownContractIds = []) {
+    const original = identity(), current = account();
+    if (current.tradeAuthorized !== true || order?.accountId !== original.accountId ||
+        order.currency !== current.currency || !Number.isSafeInteger(order.purchaseStartedAt) ||
+        order.purchaseStartedAt < 0 || !Number.isSafeInteger(now()) || now() < order.purchaseStartedAt) {
+      throw new Error("Purchase recovery requires the original authorized account and timestamp");
+    }
+    const symbol = sourceSymbol(order.source);
+    const started = Math.floor(order.purchaseStartedAt / 1000);
+    const currentTime = Math.floor(now() / 1000);
+    const dateFrom = Math.max(0, started - 3), dateTo = currentTime + 3;
+    const [portfolio, statement] = await Promise.all([
+      request({ portfolio: 1 }, "portfolio"),
+      request({ statement: 1, action_type: "buy", date_from: dateFrom, date_to: dateTo, description: 1, limit: 999 }, "statement"),
+    ]);
+    if (!sameAccount(original, order.currency) || !Array.isArray(portfolio.contracts) ||
+        !Array.isArray(statement.transactions)) throw new Error("Deriv purchase recovery response is incomplete");
+    const excluded = new Set(knownContractIds.map(String));
+    const candidates = new Map();
+    function addCandidate(id, transactionId) {
+      const contractId = String(id);
+      if (!/^[1-9]\d*$/.test(contractId) || !Number.isSafeInteger(Number(contractId)) || excluded.has(contractId)) return;
+      const previous = candidates.get(contractId);
+      if (previous?.transactionId && transactionId && previous.transactionId !== String(transactionId)) {
+        throw new Error("Deriv recovery returned conflicting transaction identities");
+      }
+      candidates.set(contractId, { contractId, transactionId: transactionId ? String(transactionId) : previous?.transactionId });
+    }
+    for (const item of portfolio.contracts) {
+      const purchaseTime = Number(item.purchase_time ?? item.date_start);
+      if (item.contract_type === "DIGITMATCH" && item.currency === order.currency &&
+          item.underlying_symbol === symbol && toMinor(item.buy_price, precision) === order.stake &&
+          Number.isSafeInteger(purchaseTime) && purchaseTime >= dateFrom && purchaseTime <= dateTo) {
+        addCandidate(item.contract_id, item.transaction_id);
+      }
+    }
+    for (const item of statement.transactions) {
+      const contractId = Number(item.contract_id), transactionId = Number(item.transaction_id);
+      const transactionTime = Number(item.transaction_time);
+      if (item.action_type !== "buy" || item.contract_id == null ||
+          !Number.isSafeInteger(contractId) || contractId <= 0 || !Number.isSafeInteger(transactionId) || transactionId <= 0 ||
+          !Number.isSafeInteger(transactionTime) || transactionTime < dateFrom || transactionTime > dateTo ||
+          Math.abs(toMinor(item.amount, precision)) !== order.stake) continue;
+      addCandidate(contractId, transactionId);
+    }
+    const matches = [];
+    for (const candidate of candidates.values()) {
+      let verified;
+      try {
+        verified = await contract(candidate.contractId, { ...order, transactionId: candidate.transactionId });
+      } catch (error) {
+        if (error.message === "Contract details do not match the recorded purchase") continue;
+        throw error;
+      }
+      matches.push({ contract: verified, transactionId: verified.transactionId || candidate.transactionId });
+    }
+    if (!sameAccount(original, order.currency)) throw new Error("Account changed during purchase recovery");
+    if (!matches.length) return { status: "not_found" };
+    if (matches.length !== 1) return { status: "ambiguous" };
+    return { status: "found", ...matches[0] };
+  }
   return {
     async proposal({ source, digit, stake, durationTicks }) {
       if (!Number.isInteger(digit) || digit < 0 || digit > 9 || !Number.isInteger(durationTicks) ||
-          durationTicks < 1 || durationTicks > 10 || !Number.isSafeInteger(stake) || stake <= 0) throw new Error("Invalid contract parameters");
+          durationTicks < 1 || durationTicks > 10 || !Number.isSafeInteger(stake) || stake <= 0 ||
+          stake % (10 ** Math.max(precision - 2, 0)) !== 0) throw new Error("Invalid contract parameters");
       const original = identity(), symbol = sourceSymbol(source);
       const balance = await readAccountBalance(request, account);
       if (!sameAccount(original, balance.currency)) throw new Error("Account changed while preparing proposal");
@@ -99,23 +187,7 @@ export function createDerivExecution({ request, account, precision }) {
       if (!Number.isSafeInteger(epoch) || epoch < 0 || !Number.isSafeInteger(epoch * 1000)) throw new Error("Invalid server time");
       return epoch * 1000;
     },
-    async contract(contractId, order) {
-      if (!/^[1-9]\d*$/.test(contractId) || !Number.isSafeInteger(Number(contractId)) || !order) throw new Error("Invalid contract identity");
-      const result = await request({ proposal_open_contract: 1, contract_id: Number(contractId) }, "proposal_open_contract");
-      if (String(result.contract_id) !== contractId || result.contract_type !== "DIGITMATCH" ||
-          result.currency !== order.currency || result.underlying_symbol !== sourceSymbol(order.source) ||
-          String(result.barrier) !== String(order.digit) || toMinor(result.buy_price, precision) !== order.stake ||
-          (order.transactionId !== undefined && String(result.transaction_ids?.buy) !== order.transactionId)) {
-        throw new Error("Contract details do not match the recorded purchase");
-      }
-      if (result.is_sold === 0 && result.status === "open") return { contractId, status: "open" };
-      if (result.is_sold !== 1 || !["won", "lost"].includes(result.status)) {
-        throw new Error("Contract status is incomplete or requires manual reconciliation");
-      }
-      const epoch = result.date_settlement ?? result.sell_time;
-      if (!Number.isSafeInteger(epoch) || epoch < 0 || !Number.isSafeInteger(epoch * 1000)) throw new Error("Contract settlement time is unavailable");
-      return { contractId, status: result.status, profit: toMinor(result.profit, precision),
-        payout: toMinor(result.sell_price, precision), settledAt: epoch * 1000 };
-    },
+    contract,
+    recover,
   };
 }
