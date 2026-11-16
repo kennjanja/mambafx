@@ -76,7 +76,13 @@
     bot.classList.toggle('minimised', on);
     minBtn.textContent = on ? '▣' : '⟨⟩';
     minBtn.title = on ? 'Restore' : 'Double-click header or click to minimise';
+    clampMobilePosition();
     savePos();
+  }
+  function clampMobilePosition(){
+    if(!window.matchMedia('(max-width: 700px)').matches) return;
+    if(bot.style.left) bot.style.left=Math.max(0,Math.min(parseFloat(bot.style.left)||0,window.innerWidth-bot.offsetWidth))+'px';
+    if(bot.style.top) bot.style.top=Math.max(0,Math.min(parseFloat(bot.style.top)||0,window.innerHeight-bot.offsetHeight))+'px';
   }
   minBtn.addEventListener('click', e=>{ e.stopPropagation(); setMin(!bot.classList.contains('minimised')); });
   head.addEventListener('dblclick', ()=> setMin(!bot.classList.contains('minimised')));
@@ -93,7 +99,7 @@
   document.addEventListener('mousemove', e=>{
     if(!dragging) return;
     const nav=document.querySelector('.pagenav');
-    const minY=nav?(nav.getBoundingClientRect().bottom+8):0;
+    const minY=nav?Math.max(0,Math.min(nav.getBoundingClientRect().bottom+8,window.innerHeight-bot.offsetHeight)):0;
     const x=Math.max(0,Math.min(e.clientX-ox, window.innerWidth-bot.offsetWidth));
     const y=Math.max(minY,Math.min(e.clientY-oy, window.innerHeight-bot.offsetHeight));
     bot.style.left=x+'px'; bot.style.top=y+'px';
@@ -112,7 +118,7 @@
     if(!dragging) return;
     const t=e.touches[0];
     const nav=document.querySelector('.pagenav');
-    const minY=nav?(nav.getBoundingClientRect().bottom+8):0;
+    const minY=nav?Math.max(0,Math.min(nav.getBoundingClientRect().bottom+8,window.innerHeight-bot.offsetHeight)):0;
     const x=Math.max(0,Math.min(t.clientX-ox, window.innerWidth-bot.offsetWidth));
     const y=Math.max(minY,Math.min(t.clientY-oy, window.innerHeight-bot.offsetHeight));
     bot.style.left=x+'px'; bot.style.top=y+'px';
@@ -516,6 +522,9 @@
 
   /* ── init ────────────────────────────────────────────────────── */
   loadPos();
+  if(window.matchMedia('(max-width: 700px)').matches) setMin(true);
+  clampMobilePosition();
+  window.addEventListener('resize',clampMobilePosition);
   // Populate the market selector from the app's own MARKETS constant
   (function initMarketSel(){
     const sel = document.getElementById('mfxMarketSel');

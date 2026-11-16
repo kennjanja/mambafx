@@ -72,7 +72,13 @@
   function setMin(on){
     bot.classList.toggle('minimised',on);
     minB.textContent=on?'▣':'⟨⟩';
+    clampMobilePosition();
     savePos();
+  }
+  function clampMobilePosition(){
+    if(!window.matchMedia('(max-width: 700px)').matches) return;
+    if(bot.style.left) bot.style.left=Math.max(0,Math.min(parseFloat(bot.style.left)||0,window.innerWidth-bot.offsetWidth))+'px';
+    if(bot.style.top) bot.style.top=Math.max(0,Math.min(parseFloat(bot.style.top)||0,window.innerHeight-bot.offsetHeight))+'px';
   }
   minB.addEventListener('click',e=>{e.stopPropagation();setMin(!bot.classList.contains('minimised'));});
   // Double-click anywhere on the bot (header, body, or the collapsed pill) toggles it, except on form controls
@@ -94,7 +100,7 @@
   document.addEventListener('mousemove',e=>{
     if(!dragging)return;
     const nav=document.querySelector('.pagenav');
-    const minY=nav?(nav.getBoundingClientRect().bottom+8):0;
+    const minY=nav?Math.max(0,Math.min(nav.getBoundingClientRect().bottom+8,window.innerHeight-bot.offsetHeight)):0;
     bot.style.left=Math.max(0,Math.min(e.clientX-ox,window.innerWidth-bot.offsetWidth))+'px';
     bot.style.top=Math.max(minY,Math.min(e.clientY-oy,window.innerHeight-bot.offsetHeight))+'px';
   });
@@ -112,7 +118,7 @@
     if(!dragging)return;
     const t=e.touches[0];
     const nav=document.querySelector('.pagenav');
-    const minY=nav?(nav.getBoundingClientRect().bottom+8):0;
+    const minY=nav?Math.max(0,Math.min(nav.getBoundingClientRect().bottom+8,window.innerHeight-bot.offsetHeight)):0;
     bot.style.left=Math.max(0,Math.min(t.clientX-ox,window.innerWidth-bot.offsetWidth))+'px';
     bot.style.top=Math.max(minY,Math.min(t.clientY-oy,window.innerHeight-bot.offsetHeight))+'px';
   },{passive:true});
@@ -404,6 +410,8 @@
   /* ── init ─────────────────────────────────────────────────── */
   loadPos();
   setMin(true);
+  clampMobilePosition();
+  window.addEventListener('resize',clampMobilePosition);
   setInterval(dabRefresh,300);
   dabRefresh();
   dabOnContractChange(); // set initial labels

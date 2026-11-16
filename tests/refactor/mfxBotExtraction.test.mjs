@@ -33,7 +33,7 @@ function readIndexHtml() {
 
 test('index.html references src/ui/widgets/mfxBot.js as an ES module (not an inline script)', () => {
   const html = readIndexHtml();
-  assert.match(html, /<script type="module" src="src\/ui\/widgets\/mfxBot\.js"><\/script>/);
+  assert.match(html, /<script type="module" src="src\/ui\/widgets\/mfxBot\.js(?:\?v=\d+)?"><\/script>/);
 });
 
 test('index.html no longer contains the old inline mfxBot code (window.mfxQuickTrade body moved out)', () => {
@@ -44,7 +44,7 @@ test('index.html no longer contains the old inline mfxBot code (window.mfxQuickT
 test('every identifier mfxBot.js needs has a live window.* accessor bridge in index.html, defined BEFORE the module reference', () => {
   const html = readIndexHtml();
   const bridgeIdx = html.indexOf('FUTURE PROJECT Phase 1b -- live window.* accessor bridge');
-  const moduleIdx = html.indexOf('<script type="module" src="src/ui/widgets/mfxBot.js">');
+  const moduleIdx = html.indexOf('<script type="module" src="src/ui/widgets/mfxBot.js');
   assert.ok(bridgeIdx >= 0, 'the bridge block must exist');
   assert.ok(moduleIdx >= 0, 'the module reference must exist');
   assert.ok(bridgeIdx < moduleIdx, 'the bridge must be defined before mfxBot.js is loaded, or the widget would read undefined values on its first tick');

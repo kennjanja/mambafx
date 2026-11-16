@@ -134,6 +134,7 @@ footer{text-align:center;color:var(--muted);font-size:11px;margin-top:22px;line-
 }
 .pagenav button:hover{color:var(--text);border-color:#2a3650}
 .pagenav button.active{background:linear-gradient(180deg,#1a2740,#141d2e);color:var(--accent);border-color:var(--accent)}
+.mobile-nav-toggle{display:none}
 .page{display:none}
 .page.active{display:block}
 .module-settings-button{background:var(--panel);border:1px solid var(--line);border-radius:999px;padding:8px 12px;color:var(--text);font-family:inherit;font-size:12px;font-weight:600;cursor:pointer}
@@ -669,6 +670,34 @@ table.an-table tbody tr:last-child td{border-bottom:none}
 .uo-sl{background:rgba(239,68,68,.15);border:1px solid #ef4444;color:#ef4444}
 .uo-hit{color:#a855f7;font-weight:800}
 .dig-digit-btn.gap-active { animation: gapBlink 1s ease-in-out infinite; border-color:#a855f7; }
+@media(max-width:700px){
+  body{padding:12px 10px 100px}
+  header{gap:12px;margin-bottom:14px}
+  .title-block,.controls,.page.active{min-width:0;width:100%}
+  .title-block .eyebrow{letter-spacing:.14em;line-height:1.5}
+  .title-block h1{font-size:clamp(22px,6vw,32px);line-height:1.15}
+  .controls{gap:8px}
+  .market-pick{max-width:100%;min-width:0}
+  .market-pick select{min-width:0;max-width:100%;font-size:16px}
+  .mobile-nav-toggle{display:flex;width:100%;min-height:44px;align-items:center;justify-content:space-between;gap:8px;margin-bottom:10px;padding:10px 14px;border:1px solid var(--accent);border-radius:10px;background:var(--panel);color:var(--text);font-family:inherit;font-size:14px;font-weight:600;cursor:pointer}
+  .pagenav{display:none;max-height:50vh;overflow-y:auto;overscroll-behavior:contain;padding:2px;margin-bottom:14px}
+  .pagenav.mobile-open{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(150px,100%),1fr))}
+  .pagenav button{min-height:44px;text-align:left;padding:9px 10px}
+  .page.active{max-width:100%;overflow-x:auto}
+  .page pre{max-width:100%;overflow-x:auto}
+  .page input:not([type=checkbox]):not([type=radio]),.page select,.page textarea{font-size:16px;max-width:100%}
+  .gc-btn{min-height:44px}
+  #ldpeCard details,#sigMonitorBody,#bzTabs{max-width:100%;overflow-x:auto}
+  #acctPanelsGrid{grid-template-columns:repeat(auto-fill,minmax(min(320px,100%),1fr)) !important}
+  .grid-top{grid-template-columns:minmax(0,1fr)}
+  .grid-top > *{min-width:0}
+  .gc-acct,.manual-trade,.grid-pl-split{grid-template-columns:repeat(auto-fit,minmax(min(130px,100%),1fr))}
+  body #mfxBot,body #dabBot{bottom:8px;max-width:calc(100vw - 16px);max-height:calc(100vh - 16px);overflow-y:auto}
+  body #mfxBot{right:8px}
+  body #dabBot{left:8px}
+  body #mfxBot.minimised,body #dabBot.minimised{width:min(155px,calc(50vw - 12px))}
+  .mfx-min,.dab-min{min-width:36px;min-height:36px}
+}
 </style>
 <link rel="stylesheet" href="src/bazu/bazu.css">
 <script src="src/modules/moduleSwitches.js?v=1"></script>
@@ -726,7 +755,10 @@ table.an-table tbody tr:last-child td{border-bottom:none}
     </details>
   </section>
 
-  <nav class="pagenav">
+  <button class="mobile-nav-toggle" id="mobileNavToggle" type="button" aria-expanded="false" aria-controls="pageNavigation" onclick="toggleMobileNavigation()">
+    <span id="mobileNavLabel">📈 Live Tracker</span><span aria-hidden="true">☰</span>
+  </button>
+  <nav class="pagenav" id="pageNavigation" aria-label="Pages">
     <button id="navAccounts" onclick="showPage('accounts')">👤 Accounts</button>
     <button id="navLive" class="active" onclick="showPage('live')">📈 Live Tracker</button>
     <button id="navCandles" onclick="showPage('candles')">🕯️ Candle Charts</button>
@@ -26965,6 +26997,12 @@ function startTfTimers(){
   tfTimerInterval = setInterval(update, 1000);
 }
 
+function toggleMobileNavigation(){
+  const nav = document.getElementById("pageNavigation");
+  const open = nav.classList.toggle("mobile-open");
+  document.getElementById("mobileNavToggle").setAttribute("aria-expanded", String(open));
+}
+
 function showPage(which){
   const pages = { supermathes:"page-supermathes", risefalldashboard:"page-risefalldashboard", accounts:"page-accounts", live:"page-live", candles:"page-candles", engine:"page-engine", grid:"page-grid", analysis:"page-analysis", features:"page-features", predbot:"page-predbot", oubot:"page-oubot", tracker:"page-tracker", digits:"page-digits", diag:"page-diag", charts:"page-charts", adxbot:"page-adxbot", aggression:"page-aggression", mtf:"page-mtf", njanja:"page-njanja", rfabot:"page-rfabot", tradesignal:"page-tradesignal", predhistory:"page-predhistory", beastmode:"page-beastmode", sossow:"page-sossow", bazu:"page-bazu", msdexplorer:"page-msdexplorer", msdfeatures:"page-msdfeatures", msdevents:"page-msdevents", msdinspector:"page-msdinspector", msddistribution:"page-msddistribution", msdcorrelation:"page-msdcorrelation", msdsearch:"page-msdsearch", msdexperiment:"page-msdexperiment", msdknowledge:"page-msdknowledge", msdvalidation:"page-msdvalidation", msdworkbench:"page-msdworkbench", msdphase8:"page-msdphase8", msdphase9:"page-msdphase9", msdphase11:"page-msdphase11", msdphase11validation:"page-msdphase11validation" };
   const navs  = { supermathes:"navSuperMathes", risefalldashboard:"navRiseFallDashboard", accounts:"navAccounts", live:"navLive",  candles:"navCandles", engine:"navEngine", grid:"navGrid", analysis:"navAnalysis", features:"navFeatures", predbot:"navPredBot", oubot:"navOuBot", tracker:"navTracker", digits:"navDigits", diag:"navDiag", charts:"navCharts", adxbot:"navAdxBot", aggression:"navAggression", mtf:"navMtf", njanja:"navNjanja", rfabot:"navRfaBot", tradesignal:"navTradeSignal", predhistory:"navPredHistory", beastmode:"navBeastMode", sossow:"navSosSow", bazu:"navBazu", msdexplorer:"navMsdExplorer", msdfeatures:"navMsdFeatures", msdevents:"navMsdEvents", msdinspector:"navMsdInspector", msddistribution:"navMsdDistribution", msdcorrelation:"navMsdCorrelation", msdsearch:"navMsdSearch", msdexperiment:"navMsdExperiment", msdknowledge:"navMsdKnowledge", msdvalidation:"navMsdValidation", msdworkbench:"navMsdWorkbench", msdphase8:"navMsdPhase8", msdphase9:"navMsdPhase9", msdphase11:"navMsdPhase11", msdphase11validation:"navMsdPhase11Validation" };
@@ -26973,6 +27011,10 @@ function showPage(which){
     document.getElementById(pages[k]).classList.toggle("active", k===which);
     const nav = document.getElementById(navs[k]); if (nav) nav.classList.toggle("active", k===which);
   });
+  const activeNav = document.getElementById(navs[which]);
+  if (activeNav) document.getElementById("mobileNavLabel").textContent = activeNav.textContent;
+  document.getElementById("pageNavigation").classList.remove("mobile-open");
+  document.getElementById("mobileNavToggle").setAttribute("aria-expanded", "false");
   const dashboardFrame = document.getElementById("riseFallDashboardFrame");
   if (dashboardFrame) {
     if (which === "risefalldashboard" && !dashboardFrame.hasAttribute("src")) dashboardFrame.src = "rise-fall-dashboard.html";
@@ -34583,7 +34625,7 @@ try {
 <script type="module" src="src/trading/gridSessionAuth.js?v=14"></script>
 <script type="module" src="src/trading/aggressionBot.js"></script>
 <script type="module" src="src/features/featureEngineering.js"></script>
-<script type="module" src="src/ui/widgets/mfxBot.js"></script>
+<script type="module" src="src/ui/widgets/mfxBot.js?v=2"></script>
 
 <!-- ══════════════════════════════════════════════════════════════════
      DERIV AUTO BOT — dark-themed, instant-fire, no analysis,
@@ -34839,7 +34881,7 @@ try {
   </div>
 </div>
 
-<script type="module" src="src/ui/widgets/dabBot.js"></script>
+<script type="module" src="src/ui/widgets/dabBot.js?v=2"></script>
 
 <script type="module" src="mtf/src/index.js"></script>
 <script>
